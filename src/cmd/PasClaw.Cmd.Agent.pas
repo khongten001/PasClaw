@@ -27,7 +27,8 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
-  PasClaw.Tools.ToolLoop;
+  PasClaw.Tools.ToolLoop,
+  PasClaw.MCP.Bridge;
 
 type
   TAgentArgs = record
@@ -39,6 +40,7 @@ type
     MaxTokens:     Integer;
     MaxIterations: Integer;
     NoTools:       Boolean;
+    NoMCP:         Boolean;
   end;
 
   TLoopHandlers = class
@@ -75,6 +77,7 @@ begin
   Result.MaxTokens     := 4096;
   Result.MaxIterations := 8;
   Result.NoTools       := False;
+  Result.NoMCP         := False;
 end;
 
 function ParseArgs(const Argv: array of string; var A: TAgentArgs): Boolean;
@@ -98,6 +101,7 @@ begin
     if Argv[i] = '--max-tokens'     then begin if i = High(Argv) then Exit(False); A.MaxTokens     := StrToIntDef(Argv[i + 1], A.MaxTokens);     Inc(i, 2); Continue; end;
     if Argv[i] = '--max-iterations' then begin if i = High(Argv) then Exit(False); A.MaxIterations := StrToIntDef(Argv[i + 1], A.MaxIterations); Inc(i, 2); Continue; end;
     if Argv[i] = '--no-tools' then begin A.NoTools := True; Inc(i); Continue; end;
+    if Argv[i] = '--no-mcp'   then begin A.NoMCP   := True; Inc(i); Continue; end;
     Inc(i);
   end;
 end;
@@ -121,6 +125,14 @@ begin
   Result := TToolRegistry.Create;
   RegisterFSTools(Result);
   RegisterShellTool(Result);
+end;
+
+function ConnectMCP(Cfg: TConfig; Reg: TToolRegistry; NoMCP: Boolean): TMCPClientList;
+begin
+  SetLength(Result, 0);
+  if NoMCP then Exit;
+  if Reg = nil then Exit;
+  Result := ConnectMCPServers(Cfg, Reg);
 end;
 
 function BuildLoopConfig(Provider: ILLMProvider; Reg: TToolRegistry;
@@ -150,6 +162,7 @@ var
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
   Model: string;
+  MCPClients: TMCPClientList;
 begin
   if not PickProvider(Cfg, A, Provider, Err) then
   begin
@@ -161,6 +174,7 @@ begin
 
   Reg := nil;
   if not A.NoTools then Reg := NewBuiltinRegistry;
+  MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Handlers := TLoopHandlers.Create;
   try
     SetLength(Msgs, 1);
@@ -180,6 +194,7 @@ begin
         Ansi.Reset);
   finally
     Handlers.Free;
+    FreeMCPClients(MCPClients);
     Reg.Free;
   end;
 end;
@@ -198,6 +213,7 @@ var
   Offline: Boolean;
   i: Integer;
   Names: TStringArray;
+  MCPClients: TMCPClientList;
 begin
   Offline := not PickProvider(Cfg, A, Provider, Err);
   if Offline then
@@ -207,6 +223,7 @@ begin
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
   Reg := nil;
   if not A.NoTools then Reg := NewBuiltinRegistry;
+  MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Handlers := TLoopHandlers.Create;
   try
     SetLength(Msgs, 0);
@@ -258,6 +275,7 @@ begin
     end;
   finally
     Handlers.Free;
+    FreeMCPClients(MCPClients);
     Reg.Free;
   end;
 end;

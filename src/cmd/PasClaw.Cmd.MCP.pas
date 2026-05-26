@@ -10,7 +10,10 @@ function Cmd_MCP_Run(const Argv: array of string): Integer;
 implementation
 
 uses
-  SysUtils, PasClaw.Config, PasClaw.CliUI;
+  SysUtils,
+  PasClaw.Config, PasClaw.CliUI,
+  PasClaw.MCP.Types,
+  PasClaw.MCP.StdioClient;
 
 procedure Help;
 begin
@@ -19,7 +22,7 @@ begin
   WriteLn('  remove <name>             delete an MCP server entry');
   WriteLn('  list                      list configured servers');
   WriteLn('  show <name>               show one server in detail');
-  WriteLn('  test <name>               probe an MCP server');
+  WriteLn('  test <name>               probe a server: initialize + tools/list');
   WriteLn('  edit                      open config in $EDITOR');
 end;
 
@@ -123,10 +126,49 @@ begin
 end;
 
 function DoTest(const Argv: array of string): Integer;
+var
+  Cfg: TConfig;
+  i, j: Integer;
+  Client: TMCPStdioClient;
+  Tools: TMCPToolArray;
+  Err: string;
 begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
-  WriteLn('(test ', Argv[1], ': Phase 4 will spawn the configured cmd and run MCP initialize)');
-  Result := 0;
+  Cfg := LoadConfig;
+  try
+    for i := 0 to High(Cfg.MCPServers) do
+      if SameText(Cfg.MCPServers[i].Name, Argv[1]) then
+      begin
+        WriteLn('Spawning ', Cfg.MCPServers[i].Cmd, ' ', Cfg.MCPServers[i].Args, '...');
+        Client := TMCPStdioClient.Create(Cfg.MCPServers[i].Name,
+                                         Cfg.MCPServers[i].Cmd,
+                                         Cfg.MCPServers[i].Args);
+        try
+          if not Client.Connect(5000, Err) then
+          begin
+            WriteLn(Ansi.Red, '✗ ', Err, Ansi.Reset);
+            Exit(1);
+          end;
+          WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'initialize OK');
+          WriteLn('  server: ', Client.ServerInfo.Name, ' ', Client.ServerInfo.Version);
+          if Client.ListTools(Tools, Err) then
+          begin
+            WriteLn('  tools (', Length(Tools), '):');
+            for j := 0 to High(Tools) do
+              WriteLn('    - ', Tools[j].Name, '  ', Tools[j].Description);
+          end
+          else
+            WriteLn(Ansi.Yellow, '  tools/list failed: ', Err, Ansi.Reset);
+        finally
+          Client.Free;
+        end;
+        Exit(0);
+      end;
+    WriteLn('no such MCP server: ', Argv[1]);
+    Result := 1;
+  finally
+    Cfg.Free;
+  end;
 end;
 
 function DoEdit(const Argv: array of string): Integer;
