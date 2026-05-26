@@ -18,6 +18,10 @@ program PasClaw;
 {$APPTYPE CONSOLE}
 
 uses
+  {$IFDEF UNIX}
+  cthreads,            { FPC: pull in pthreads so Indy can use TThread }
+  cmem,
+  {$ENDIF}
   SysUtils,
   PasClaw.CliUI,
   PasClaw.Logger,
