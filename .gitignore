@@ -1,5 +1,6 @@
 build/
 vendor/
+src/pkg/gateway/webui.res
 *.o
 *.ppu
 *.compiled

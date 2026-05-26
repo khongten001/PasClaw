@@ -61,7 +61,8 @@ uses
   fpjson, jsonparser,
   PasClaw.Logger,
   PasClaw.Providers.Types,
-  PasClaw.Tools.ToolLoop;
+  PasClaw.Tools.ToolLoop,
+  PasClaw.Gateway.WebUI;
 
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
 begin
@@ -116,12 +117,30 @@ begin
   FStopFlag.WaitFor(INFINITE);
 end;
 
+procedure WriteBodyStream(AResp: TIdHTTPResponseInfo; const Body: string);
+var
+  Strm: TMemoryStream;
+  Bytes: TBytes;
+begin
+  { Indy's ContentText writer on FPC + UTF-8 doesn't always flush a body
+    correctly. ContentStream is the reliable path: encode the string to bytes
+    ourselves, hand Indy a TMemoryStream sized in bytes, and let it stream. }
+  Bytes := TEncoding.UTF8.GetBytes(Body);
+  Strm := TMemoryStream.Create;
+  if Length(Bytes) > 0 then
+    Strm.WriteBuffer(Bytes[0], Length(Bytes));
+  Strm.Position := 0;
+  AResp.ContentStream     := Strm;
+  AResp.FreeContentStream := True;
+  AResp.ContentLength     := Strm.Size;
+end;
+
 procedure TGatewayServer.WriteJSON(AResp: TIdHTTPResponseInfo; Code: Integer; const Body: string);
 begin
   AResp.ResponseNo  := Code;
   AResp.ContentType := 'application/json; charset=utf-8';
   AResp.CharSet     := 'utf-8';
-  AResp.ContentText := Body;
+  WriteBodyStream(AResp, Body);
 end;
 
 procedure TGatewayServer.OnCommandGet(AContext: TIdContext;
@@ -140,6 +159,17 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/tools')   then HandleTools(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/chat')    then HandleChat(ARequest, AResponse)
     else if Doc = '/' then
+    begin
+      AResponse.ResponseNo  := 200;
+      AResponse.ContentType := 'text/html; charset=utf-8';
+      AResponse.CharSet     := 'utf-8';
+      { Hand Indy a raw byte stream loaded from the embedded resource — no
+        string encoding involved. }
+      AResponse.ContentStream     := WebUIStream;
+      AResponse.FreeContentStream := True;
+      AResponse.ContentLength     := AResponse.ContentStream.Size;
+    end
+    else if Doc = '/v1' then
       WriteJSON(AResponse, 200,
         '{"name":"pasclaw","routes":["/v1/health","/v1/version","/v1/status","/v1/tools","/v1/chat"]}')
     else

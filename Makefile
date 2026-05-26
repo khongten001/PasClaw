@@ -51,11 +51,19 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke print-version get-indy
+.PHONY: all clean run test smoke print-version get-indy webui-res
 
-all: $(BIN)
+# Compile the HTML resource into a .res that {$R webui.res} embeds.
+WEBUI_RES = src/pkg/gateway/webui.res
 
-$(BIN): | $(BUILDDIR) $(INDY_DIR)
+webui-res: $(WEBUI_RES)
+
+$(WEBUI_RES): src/pkg/gateway/webui.rc src/pkg/gateway/webui.html
+	cd src/pkg/gateway && fpcres -of res -o webui.res webui.rc
+
+all: $(WEBUI_RES) $(BIN)
+
+$(BIN): $(WEBUI_RES) | $(BUILDDIR) $(INDY_DIR)
 	@mkdir -p $(BUILDDIR)/lib
 	PASCLAW_VERSION='$(VERSION)' $(FPC) $(FPCFLAGS) src/pasclaw/PasClaw.dpr -o$(BIN)
 

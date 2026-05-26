@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>PasClaw</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{color-scheme:dark;
+        --bg:#0e1014;--fg:#e8e8e8;--mut:#7e858f;
+        --acc:#3e5db9;--acc2:#d54646}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.45 ui-monospace,Menlo,Consolas,monospace;
+       display:flex;flex-direction:column;height:100vh}
+  header{padding:.6rem 1rem;border-bottom:1px solid #222;
+         display:flex;align-items:center;gap:.6rem}
+  header .logo{font-weight:700;letter-spacing:.5px}
+  header .blue{color:var(--acc)}
+  header .red{color:var(--acc2)}
+  header .ver{color:var(--mut);font-size:12px;margin-left:auto}
+  #log{flex:1;overflow:auto;padding:1rem;
+       display:flex;flex-direction:column;gap:.6rem}
+  .row{display:flex;gap:.6rem;align-items:flex-start}
+  .role{flex-shrink:0;width:4.5rem;color:var(--mut);
+        text-transform:uppercase;font-size:11px;padding-top:.25rem}
+  .row.u .role{color:var(--acc)}
+  .row.a .role{color:#7ec48b}
+  .row.e .role{color:var(--acc2)}
+  .bub{white-space:pre-wrap;flex:1}
+  form{display:flex;gap:.5rem;padding:.75rem 1rem;
+       border-top:1px solid #222;background:#15171c}
+  textarea{flex:1;background:#0a0c10;color:var(--fg);
+           border:1px solid #2a2d34;border-radius:6px;
+           padding:.5rem;font:inherit;resize:none;
+           min-height:2.6rem;max-height:9rem}
+  button{background:var(--acc);color:#fff;border:0;
+         border-radius:6px;padding:.5rem 1rem;cursor:pointer}
+  button:disabled{opacity:.5;cursor:wait}
+  .dim{color:var(--mut)}
+</style>
+</head><body>
+<header>
+  <span class="logo">
+    <span class="blue">PAS</span><span class="red">CLAW</span>
+  </span>
+  <span id="meta" class="ver">loading...</span>
+</header>
+<div id="log"></div>
+<form id="f">
+  <textarea id="m" rows="2"
+            placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline)"></textarea>
+  <button id="b">Send</button>
+</form>
+<script>
+const log = document.getElementById("log");
+const meta = document.getElementById("meta");
+const f = document.getElementById("f");
+const m = document.getElementById("m");
+const b = document.getElementById("b");
+
+function add(role, text) {
+  const r = document.createElement("div");
+  r.className = "row " + role;
+  r.innerHTML = `<div class="role">${
+    role === "u" ? "you" : role === "a" ? "pasclaw" : "error"
+  }</div><div class="bub"></div>`;
+  r.querySelector(".bub").textContent = text;
+  log.appendChild(r);
+  log.scrollTop = log.scrollHeight;
+}
+
+fetch("/v1/status")
+  .then(r => r.json())
+  .then(s => {
+    meta.textContent =
+      `${s.default_provider}/${s.default_model} • ` +
+      `tools:${s.tools} • mcp:${s.mcp_servers}`;
+  })
+  .catch(_ => meta.textContent = "offline");
+
+m.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    f.requestSubmit();
+  }
+});
+
+f.addEventListener("submit", async e => {
+  e.preventDefault();
+  const msg = m.value.trim();
+  if (!msg) return;
+  add("u", msg);
+  m.value = "";
+  b.disabled = true;
+  try {
+    const r = await fetch("/v1/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: msg })
+    });
+    const j = await r.json();
+    if (r.ok) add("a", j.content || "(empty)");
+    else add("e", j.error || String(r.status));
+  } catch (err) {
+    add("e", String(err));
+  } finally {
+    b.disabled = false;
+    m.focus();
+  }
+});
+m.focus();
+</script>
+</body></html>

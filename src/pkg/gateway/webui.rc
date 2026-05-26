@@ -1,0 +1,9 @@
+/* PasClaw web UI resource definition.
+   Compiled into webui.res by `make webui.res` (uses fpcres on Linux/macOS
+   or brcc32 on Windows). Embedded via {$R webui.res} in
+   PasClaw.Gateway.WebUI.pas and loaded at runtime through TResourceStream.
+
+   Same .rc file works for both FPC's fpcres and Delphi's brcc32, so Delphi
+   users get the same single-file ship out of RAD Studio. */
+
+PASCLAW_WEBUI_HTML RCDATA "webui.html"
