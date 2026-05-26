@@ -10,7 +10,8 @@ function Cmd_Skills_Run(const Argv: array of string): Integer;
 implementation
 
 uses
-  SysUtils, PasClaw.Config, PasClaw.CliUI;
+  SysUtils, PasClaw.Config, PasClaw.CliUI, PasClaw.Utils,
+  PasClaw.Skills.Loader;
 
 procedure Help;
 begin
@@ -19,22 +20,19 @@ end;
 
 function DoList: Integer;
 var
-  Cfg: TConfig;
+  Specs: TSkillSpecArray;
   i: Integer;
 begin
-  Cfg := LoadConfig;
-  try
-    if Length(Cfg.Skills) = 0 then
-    begin
-      WriteLn('(no skills installed)');
-      Exit(0);
-    end;
-    for i := 0 to High(Cfg.Skills) do
-      WriteLn(Cfg.Skills[i].Name:18, '  ', Cfg.Skills[i].Source);
-    Result := 0;
-  finally
-    Cfg.Free;
+  Specs := LoadSkillManifests(GetHome);
+  if Length(Specs) = 0 then
+  begin
+    WriteLn('(no skills found at ', JoinPath(GetHome, 'workspace/skills'), ')');
+    Exit(0);
   end;
+  WriteLn(Ansi.Bold, 'name', Ansi.Reset, '              kind   description');
+  for i := 0 to High(Specs) do
+    WriteLn(Specs[i].Name:18, '  ', Specs[i].Kind:6, '  ', Specs[i].Description);
+  Result := 0;
 end;
 
 function DoInstall(const Argv: array of string): Integer;

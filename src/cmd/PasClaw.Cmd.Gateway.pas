@@ -27,6 +27,8 @@ uses
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
   PasClaw.MCP.Bridge,
+  PasClaw.Skills.Loader,
+  PasClaw.Cron.Scheduler,
   PasClaw.Gateway.Server,
   PasClaw.Channels.Telegram;
 
@@ -73,6 +75,8 @@ var
   MCPClients: TMCPClientList;
   Server: TGatewayServer;
   Telegram: TTelegramChannel;
+  Scheduler: TCronScheduler;
+  Skills: TSkillSpecArray;
 begin
   Cfg := LoadConfig;
   try
@@ -89,11 +93,22 @@ begin
       Reg := TToolRegistry.Create;
       RegisterFSTools(Reg);
       RegisterShellTool(Reg);
+      Skills := LoadSkillManifests(GetHome);
+      RegisterSkills(Reg, Skills);
+      if Length(Skills) > 0 then
+        LogInfo('gateway: loaded %d skill(s) from workspace/skills/', [Length(Skills)]);
     end;
 
     SetLength(MCPClients, 0);
     if (not Args.NoMCP) and (Reg <> nil) then
       MCPClients := ConnectMCPServers(Cfg, Reg);
+
+    Scheduler := nil;
+    if (Reg <> nil) and (Length(Cfg.Crons) > 0) then
+    begin
+      Scheduler := TCronScheduler.Create(Cfg, Reg);
+      Scheduler.Start;
+    end;
 
     Server := TGatewayServer.Create(Cfg, Provider, Reg);
     Telegram := nil;
@@ -125,6 +140,7 @@ begin
       if Telegram <> nil then Telegram.Free;
       Server.Stop;
       Server.Free;
+      if Scheduler <> nil then Scheduler.Free;
       FreeMCPClients(MCPClients);
       if Reg <> nil then Reg.Free;
     end;

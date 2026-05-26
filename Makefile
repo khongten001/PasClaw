@@ -28,6 +28,9 @@ UNIT_DIRS = \
 	src/pkg/mcp \
 	src/pkg/gateway \
 	src/pkg/channels \
+	src/pkg/cron \
+	src/pkg/skills \
+	src/pkg/memory \
 	src/cmd
 
 # Indy unit + include dirs (only used when building under FPC).

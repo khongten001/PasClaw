@@ -28,7 +28,8 @@ uses
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
   PasClaw.Tools.ToolLoop,
-  PasClaw.MCP.Bridge;
+  PasClaw.MCP.Bridge,
+  PasClaw.Skills.Loader;
 
 type
   TAgentArgs = record
@@ -121,10 +122,14 @@ begin
 end;
 
 function NewBuiltinRegistry: TToolRegistry;
+var
+  Skills: TSkillSpecArray;
 begin
   Result := TToolRegistry.Create;
   RegisterFSTools(Result);
   RegisterShellTool(Result);
+  Skills := LoadSkillManifests(GetHome);
+  RegisterSkills(Result, Skills);
 end;
 
 function ConnectMCP(Cfg: TConfig; Reg: TToolRegistry; NoMCP: Boolean): TMCPClientList;
