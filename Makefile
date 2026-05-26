@@ -13,6 +13,7 @@ UNIT_DIRS = \
 	src/pkg/config \
 	src/pkg/providers \
 	src/pkg/tokenizer \
+	src/pkg/tools \
 	src/cmd
 
 FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \

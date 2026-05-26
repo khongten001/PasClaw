@@ -47,6 +47,10 @@ type
     Schema:      string;   { JSON schema for parameters }
   end;
 
+  TToolDefinitionArray = array of TToolDefinition;
+  TMessageArray        = array of TMessage;
+  TToolCallArray       = array of TToolCall;
+
   TUsageInfo = record
     InputTokens:        Integer;
     OutputTokens:       Integer;
