@@ -32,7 +32,8 @@ uses
   PasClaw.Cmd.Skills,
   PasClaw.Cmd.Model,
   PasClaw.Cmd.Config_,
-  PasClaw.Cmd.Update;
+  PasClaw.Cmd.Update,
+  PasClaw.Cmd.Post;
 
 type
   TSubCmd = record
@@ -86,7 +87,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 13);
+  SetLength(Sub, 14);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant';
@@ -98,8 +99,9 @@ begin
   Sub[8]  := 'migrate      Migrate data from older versions';
   Sub[9]  := 'skills       Manage skill extensions';
   Sub[10] := 'model        View or switch the default model';
-  Sub[11] := 'update       Self-update PasClaw';
-  Sub[12] := 'version      Show version info';
+  Sub[11] := 'post         Send a one-shot message to a channel';
+  Sub[12] := 'update       Self-update PasClaw';
+  Sub[13] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -149,6 +151,7 @@ begin
     else if Cmd = 'migrate'  then Result := Cmd_Migrate_Run(ArgArr)
     else if Cmd = 'skills'   then Result := Cmd_Skills_Run(ArgArr)
     else if Cmd = 'model'    then Result := Cmd_Model_Run(ArgArr)
+    else if Cmd = 'post'     then Result := Cmd_Post_Run(ArgArr)
     else if Cmd = 'update'   then Result := Cmd_Update_Run(ArgArr)
     else if Cmd = 'version'  then Result := Cmd_Version_Run(ArgArr)
     else

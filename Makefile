@@ -21,6 +21,7 @@ UNIT_DIRS = \
 	src/pkg/utils \
 	src/pkg/logger \
 	src/pkg/config \
+	src/pkg/json \
 	src/pkg/providers \
 	src/pkg/tokenizer \
 	src/pkg/tools \
