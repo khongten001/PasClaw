@@ -57,12 +57,13 @@ src/
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| 1 | CLI skeleton, banner, config, command dispatch | done |
-| 2 | Anthropic + OpenAI HTTP clients, tokenizer | next |
-| 3 | Real agent loop with streaming + tool calls    | |
-| 4 | Gateway (fphttpserver), routing, channels      | |
-| 5 | MCP client (stdio + HTTP), cron scheduler      | |
-| 6 | Skills loader, memory store, evolution engine  | |
-| 7 | Self-update, web UI launcher, membench tool    | |
+| 1 | CLI skeleton, banner, config, command dispatch         | ✅ done |
+| 2 | Anthropic + OpenAI HTTP clients, tokenizer             | ✅ done |
+| 3 | Tool registry + built-in tools (fs/shell) + tool loop  | ✅ done |
+| 4 | MCP stdio client + bridge into tools registry          | ✅ done |
+| 5 | Gateway (fphttpserver), routing, channels (Telegram, Discord) | todo |
+| 6 | Cron scheduler, skills loader, memory store            | todo |
+| 7 | MCP over HTTP/SSE, streaming responses (true SSE)      | todo |
+| 8 | Self-update, web UI launcher, membench tool            | todo |
 
 License: MIT (see LICENSE).
