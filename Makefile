@@ -31,6 +31,9 @@ UNIT_DIRS = \
 	src/pkg/cron \
 	src/pkg/skills \
 	src/pkg/memory \
+	src/pkg/updater \
+	src/pkg/membench \
+	src/pkg/tui \
 	src/cmd
 
 # Indy unit + include dirs (only used when building under FPC).
@@ -97,16 +100,17 @@ print-version:
 smoke: $(BIN)
 	@PASCLAW_HOME=$$(mktemp -d) ; export PASCLAW_HOME ; \
 	echo "smoke: home=$$PASCLAW_HOME" ; \
-	NO_COLOR=1 $(BIN) version              >/dev/null && echo "  version  OK" ; \
-	NO_COLOR=1 $(BIN) --help               >/dev/null && echo "  help     OK" ; \
-	NO_COLOR=1 $(BIN) config reset         >/dev/null && echo "  config   OK" ; \
-	NO_COLOR=1 $(BIN) status               >/dev/null && echo "  status   OK" ; \
-	NO_COLOR=1 $(BIN) mcp list             >/dev/null && echo "  mcp      OK" ; \
-	NO_COLOR=1 $(BIN) cron list            >/dev/null && echo "  cron     OK" ; \
-	NO_COLOR=1 $(BIN) skills list          >/dev/null && echo "  skills   OK" ; \
-	NO_COLOR=1 $(BIN) model show           >/dev/null && echo "  model    OK" ; \
-	NO_COLOR=1 $(BIN) migrate              >/dev/null && echo "  migrate  OK" ; \
-	NO_COLOR=1 $(BIN) update               >/dev/null && echo "  update   OK" ; \
+	NO_COLOR=1 $(BIN) version                  >/dev/null && echo "  version   OK" ; \
+	NO_COLOR=1 $(BIN) --help                   >/dev/null && echo "  help      OK" ; \
+	NO_COLOR=1 $(BIN) config reset             >/dev/null && echo "  config    OK" ; \
+	NO_COLOR=1 $(BIN) status                   >/dev/null && echo "  status    OK" ; \
+	NO_COLOR=1 $(BIN) mcp list                 >/dev/null && echo "  mcp       OK" ; \
+	NO_COLOR=1 $(BIN) cron list                >/dev/null && echo "  cron      OK" ; \
+	NO_COLOR=1 $(BIN) skills list              >/dev/null && echo "  skills    OK" ; \
+	NO_COLOR=1 $(BIN) model show               >/dev/null && echo "  model     OK" ; \
+	NO_COLOR=1 $(BIN) migrate                  >/dev/null && echo "  migrate   OK" ; \
+	NO_COLOR=1 $(BIN) update --check           >/dev/null && echo "  update    OK" ; \
+	NO_COLOR=1 $(BIN) membench --records 100   >/dev/null && echo "  membench  OK" ; \
 	echo "smoke: all commands OK"
 
 test: smoke

@@ -33,7 +33,9 @@ uses
   PasClaw.Cmd.Model,
   PasClaw.Cmd.Config_,
   PasClaw.Cmd.Update,
-  PasClaw.Cmd.Post;
+  PasClaw.Cmd.Post,
+  PasClaw.Cmd.Membench,
+  PasClaw.Cmd.TUI;
 
 type
   TSubCmd = record
@@ -87,21 +89,23 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 14);
+  SetLength(Sub, 16);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
-  Sub[2]  := 'agent        Chat with the assistant';
-  Sub[3]  := 'auth         Authenticate with providers';
-  Sub[4]  := 'gateway      Start the gateway';
-  Sub[5]  := 'status       Show status';
-  Sub[6]  := 'cron         Manage scheduled tasks';
-  Sub[7]  := 'mcp          Manage MCP servers';
-  Sub[8]  := 'migrate      Migrate data from older versions';
-  Sub[9]  := 'skills       Manage skill extensions';
-  Sub[10] := 'model        View or switch the default model';
-  Sub[11] := 'post         Send a one-shot message to a channel';
-  Sub[12] := 'update       Self-update PasClaw';
-  Sub[13] := 'version      Show version info';
+  Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
+  Sub[3]  := 'tui          Chat in the full-screen TUI';
+  Sub[4]  := 'auth         Authenticate with providers';
+  Sub[5]  := 'gateway      Start the HTTP gateway + web UI';
+  Sub[6]  := 'status       Show status';
+  Sub[7]  := 'cron         Manage scheduled tasks';
+  Sub[8]  := 'mcp          Manage MCP servers';
+  Sub[9]  := 'migrate      Migrate data from older versions';
+  Sub[10] := 'skills       Manage skill extensions';
+  Sub[11] := 'model        View or switch the default model';
+  Sub[12] := 'post         Send a one-shot message to a channel';
+  Sub[13] := 'membench     Benchmark the memory log subsystem';
+  Sub[14] := 'update       Self-update PasClaw';
+  Sub[15] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -152,6 +156,8 @@ begin
     else if Cmd = 'skills'   then Result := Cmd_Skills_Run(ArgArr)
     else if Cmd = 'model'    then Result := Cmd_Model_Run(ArgArr)
     else if Cmd = 'post'     then Result := Cmd_Post_Run(ArgArr)
+    else if Cmd = 'membench' then Result := Cmd_Membench_Run(ArgArr)
+    else if Cmd = 'tui'      then Result := Cmd_TUI_Run(ArgArr)
     else if Cmd = 'update'   then Result := Cmd_Update_Run(ArgArr)
     else if Cmd = 'version'  then Result := Cmd_Version_Run(ArgArr)
     else

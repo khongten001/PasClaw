@@ -41,7 +41,8 @@ Studio so no vendoring is needed.
 pasclaw onboard                            # initialise ~/.pasclaw + config.json
 pasclaw agent -m "hello"                   # one-shot chat (real LLM)
 pasclaw agent                              # interactive chat with tools + MCP
-pasclaw gateway                            # HTTP API on 127.0.0.1:8088
+pasclaw tui                                # full-screen TUI chat
+pasclaw gateway                            # HTTP API + web UI on 127.0.0.1:8088
 pasclaw gateway --telegram --token <TOK>   # API + Telegram bot
 pasclaw gateway --addr 0.0.0.0 --port 8088
 pasclaw status
@@ -49,6 +50,9 @@ pasclaw mcp list | mcp add <name> <cmd> [args] | mcp test <name>
 pasclaw cron list|add|disable|enable|remove
 pasclaw skills list|install|remove
 pasclaw model show|set <name>
+pasclaw post discord|slack <webhook-url> "<content>"
+pasclaw membench [--records N] [--content N]
+pasclaw update [--check] [--repo owner/name]
 pasclaw auth login|logout|status <provider>
 pasclaw version
 ```
@@ -89,9 +93,9 @@ src/
 | 3 | Tool registry + built-in tools (fs/shell) + tool loop  | ✅ done |
 | 4 | MCP stdio client + bridge into tools registry          | ✅ done |
 | 5 | Indy gateway (TIdHTTPServer) + Telegram long-poll bot  | ✅ done |
-| 6 | JSON abstraction, additional channels (Discord/Slack)  | todo |
-| 7 | Cron scheduler, skills loader, memory store            | todo |
-| 8 | MCP over HTTP/SSE, true SSE streaming, web UI launcher | todo |
-| 9 | Self-update, membench tool, TUI front-end              | todo |
+| 6 | JSON abstraction, additional channels (Discord/Slack)  | ✅ done |
+| 7 | Cron scheduler, skills loader, memory store            | ✅ done |
+| 8 | MCP over HTTP/SSE, SSE-streaming helper, web UI        | ✅ done |
+| 9 | Self-update (GitHub releases), membench, TUI front-end | ✅ done |
 
 License: MIT (see LICENSE).
