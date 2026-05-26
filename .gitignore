@@ -1,0 +1,9 @@
+build/
+*.o
+*.ppu
+*.compiled
+*.lps
+*.bak
+*.exe
+*~
+.DS_Store

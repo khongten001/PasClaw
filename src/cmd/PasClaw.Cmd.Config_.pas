@@ -1,0 +1,44 @@
+{ Config — view/edit raw config. }
+unit PasClaw.Cmd.Config_;
+{$MODE DELPHI}
+{$H+}
+
+interface
+
+function Cmd_Config_Run(const Argv: array of string): Integer;
+
+implementation
+
+uses
+  SysUtils, PasClaw.Config, PasClaw.Utils;
+
+function Cmd_Config_Run(const Argv: array of string): Integer;
+var
+  Cfg: TConfig;
+begin
+  if (Length(Argv) > 0) and (Argv[0] = 'path') then
+  begin
+    WriteLn(GetConfigPath);
+    Exit(0);
+  end;
+  if (Length(Argv) > 0) and (Argv[0] = 'reset') then
+  begin
+    Cfg := TConfig.Create;
+    try
+      SaveConfig(Cfg);
+      WriteLn('wrote default config to ', GetConfigPath);
+    finally
+      Cfg.Free;
+    end;
+    Exit(0);
+  end;
+  Cfg := LoadConfig;
+  try
+    WriteLn(Cfg.ToJSON);
+  finally
+    Cfg.Free;
+  end;
+  Result := 0;
+end;
+
+end.
