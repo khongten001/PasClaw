@@ -6,6 +6,7 @@
     pasclaw serve --no-tools              # disable built-in tool registry
     pasclaw serve --no-mcp                # skip MCP server discovery
     pasclaw serve --debug                 # log every request + response body
+    pasclaw serve --max-iter 40           # raise the tool-loop cap (default 25)
 
   Exposes POST /v1/chat/completions on the configured port. Any client
   that speaks the OpenAI Chat Completions API (openai-python, openai-node,
@@ -48,6 +49,7 @@ type
     NoMCP:   Boolean;
     NoTools: Boolean;
     Debug:   Boolean;
+    MaxIter: Integer;
   end;
 
 function ParseServe(const Argv: array of string; const Cfg: TConfig): TServeArgs;
@@ -59,6 +61,7 @@ begin
   Result.NoMCP   := False;
   Result.NoTools := False;
   Result.Debug   := False;
+  Result.MaxIter := 25;  { matches TGatewayServer.Create default }
   i := 0;
   while i <= High(Argv) do
   begin
@@ -68,8 +71,10 @@ begin
     if Argv[i] = '--no-tools' then begin Result.NoTools := True; Inc(i); Continue; end;
     if (Argv[i] = '--debug') or (Argv[i] = '-d') then
                                   begin Result.Debug   := True; Inc(i); Continue; end;
+    if Argv[i] = '--max-iter' then begin if i < High(Argv) then Result.MaxIter := StrToIntDef(Argv[i + 1], Result.MaxIter); Inc(i, 2); Continue; end;
     Inc(i);
   end;
+  if Result.MaxIter < 1 then Result.MaxIter := 1;
 end;
 
 function Cmd_Serve_Run(const Argv: array of string): Integer;
@@ -117,6 +122,7 @@ begin
 
     Server := TGatewayServer.Create(Cfg, Provider, Reg);
     Server.DebugIO := Args.Debug;
+    Server.MaxIter := Args.MaxIter;
     try
       Server.Start(Args.Addr, Args.Port);
 
@@ -124,6 +130,7 @@ begin
       WriteLn(Ansi.Bold, 'OpenAI-compatible server up.', Ansi.Reset);
       WriteLn('  base_url: ', BaseURL);
       WriteLn('  model:    ', Cfg.DefaultModel);
+      WriteLn('  max-iter: ', Args.MaxIter);
       WriteLn;
       WriteLn(Ansi.Dim, '  Example (openai-python):', Ansi.Reset);
       WriteLn('    client = OpenAI(base_url="', BaseURL, '", api_key="sk-pasclaw")');
