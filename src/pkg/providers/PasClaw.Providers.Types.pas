@@ -113,7 +113,13 @@ end;
 
 function DefaultChatOptions: TChatOptions;
 begin
-  Result.Temperature   := 0.7;
+  { Temperature defaults to 0 ("not set"). The Anthropic and OpenAI
+    request builders only emit the `temperature` field when this is
+    > 0, so a caller that never picks a value lets the provider use
+    its server-side default. This avoids hitting Anthropic's
+    "`temperature` is deprecated for this model" 400 on the newer
+    Claude models, which reject the field outright. }
+  Result.Temperature   := 0;
   Result.MaxTokens     := 4096;
   Result.Stream        := False;
   Result.SystemPrompt  := '';
