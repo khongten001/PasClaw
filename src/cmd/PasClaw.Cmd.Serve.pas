@@ -5,6 +5,7 @@
     pasclaw serve --addr 0.0.0.0 --port 8088
     pasclaw serve --no-tools              # disable built-in tool registry
     pasclaw serve --no-mcp                # skip MCP server discovery
+    pasclaw serve --debug                 # log every request + response body
 
   Exposes POST /v1/chat/completions on the configured port. Any client
   that speaks the OpenAI Chat Completions API (openai-python, openai-node,
@@ -46,6 +47,7 @@ type
     Port:    Integer;
     NoMCP:   Boolean;
     NoTools: Boolean;
+    Debug:   Boolean;
   end;
 
 function ParseServe(const Argv: array of string; const Cfg: TConfig): TServeArgs;
@@ -56,6 +58,7 @@ begin
   Result.Port    := Cfg.Gateway.Port;
   Result.NoMCP   := False;
   Result.NoTools := False;
+  Result.Debug   := False;
   i := 0;
   while i <= High(Argv) do
   begin
@@ -63,6 +66,8 @@ begin
     if Argv[i] = '--port'     then begin if i < High(Argv) then Result.Port := StrToIntDef(Argv[i + 1], Result.Port); Inc(i, 2); Continue; end;
     if Argv[i] = '--no-mcp'   then begin Result.NoMCP   := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools' then begin Result.NoTools := True; Inc(i); Continue; end;
+    if (Argv[i] = '--debug') or (Argv[i] = '-d') then
+                                  begin Result.Debug   := True; Inc(i); Continue; end;
     Inc(i);
   end;
 end;
@@ -82,6 +87,12 @@ begin
   Cfg := LoadConfig;
   try
     Args := ParseServe(Argv, Cfg);
+
+    if Args.Debug then
+    begin
+      SetLogLevel(llDebug);
+      LogDebug('serve: --debug enabled (logging every request + body)');
+    end;
 
     Provider := nil;
     if Cfg.DefaultProvider <> '' then
@@ -105,6 +116,7 @@ begin
       MCPClients := ConnectMCPServers(Cfg, Reg);
 
     Server := TGatewayServer.Create(Cfg, Provider, Reg);
+    Server.DebugIO := Args.Debug;
     try
       Server.Start(Args.Addr, Args.Port);
 
