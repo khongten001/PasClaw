@@ -17,7 +17,7 @@
 *)
 unit PasClaw.Gateway.WebUI;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 {$R webui.res}

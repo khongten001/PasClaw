@@ -5,7 +5,7 @@
 }
 unit PasClaw.Tools.FS;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
@@ -20,27 +20,25 @@ procedure RegisterFSTools(R: TToolRegistry);
 implementation
 
 uses
-  fpjson, jsonparser,
+  PasClaw.JSON,
   PasClaw.Utils;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
-  J: TJSONData;
-  Obj: TJSONObject;
+  Obj: TJsonObject;
 begin
   Result := False;
   V := '';
   if Trim(ArgsJSON) = '' then Exit;
   try
-    J := GetJSON(ArgsJSON);
+    Obj := TJsonObject.Parse(ArgsJSON);
+    if Obj = nil then Exit;
     try
-      if not (J is TJSONObject) then Exit;
-      Obj := TJSONObject(J);
-      if Obj.IndexOfName(Field) < 0 then Exit;
-      V := Obj.Get(Field, '');
+      if not Obj.Has(Field) then Exit;
+      V := Obj.GetStr(Field, '');
       Result := V <> '';
     finally
-      J.Free;
+      Obj.Free;
     end;
   except
     Result := False;

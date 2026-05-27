@@ -5,7 +5,7 @@
 *)
 unit PasClaw.Cmd.TUI;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

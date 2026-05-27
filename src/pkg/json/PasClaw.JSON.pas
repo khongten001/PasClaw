@@ -17,7 +17,7 @@
 *)
 unit PasClaw.JSON;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
@@ -102,7 +102,7 @@ uses
   fpjson, jsonparser;
 {$ELSE}
 uses
-  System.JSON;
+  System.JSON, System.JSON.Writers, System.JSON.Readers, System.JSON.Types;
 {$ENDIF}
 
 function JsonEscape(const S: string): string;
@@ -440,8 +440,340 @@ end;
 
 {$ELSE}
 (* ----- Delphi backend (System.JSON) -----
-   Implementations parallel to the FPC versions above. Keep the public
-   interface identical so call sites need no changes. *)
+   Same semantics as the FPC backend above. Backing types are
+   System.JSON.TJSONObject / TJSONArray. Ownership: a parent owns nested
+   children added through PutObject/PutArray/AddObject/AddArray; this is
+   how System.JSON works natively. ChildObject/ChildArray/ItemObject/
+   ItemArray return non-owning wrappers so the caller frees the wrapper
+   but not the underlying System.JSON value. *)
+
+constructor TJsonObject.Create;
+begin
+  inherited Create;
+  FBacking := System.JSON.TJSONObject.Create;
+  FOwnsBacking := True;
+end;
+
+constructor TJsonObject.CreateWrapping(Backing: TObject; OwnsIt: Boolean);
+begin
+  inherited Create;
+  FBacking := Backing;
+  FOwnsBacking := OwnsIt;
+end;
+
+destructor TJsonObject.Destroy;
+begin
+  if FOwnsBacking and (FBacking <> nil) then FBacking.Free;
+  inherited Destroy;
+end;
+
+class function TJsonObject.Parse(const S: string): TJsonObject;
+var
+  V: System.JSON.TJSONValue;
+begin
+  Result := nil;
+  if Trim(S) = '' then Exit;
+  try
+    V := System.JSON.TJSONObject.ParseJSONValue(S);
+  except
+    on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
+  end;
+  if not (V is System.JSON.TJSONObject) then
+  begin
+    V.Free;
+    Exit;
+  end;
+  Result := TJsonObject.CreateWrapping(V, True);
+end;
+
+function TJsonObject.Has(const Key: string): Boolean;
+begin
+  Result := System.JSON.TJSONObject(FBacking).GetValue(Key) <> nil;
+end;
+
+function TJsonObject.GetStr(const Key: string; const Default: string): string;
+var
+  V: System.JSON.TJSONValue;
+begin
+  V := System.JSON.TJSONObject(FBacking).GetValue(Key);
+  if V = nil then Exit(Default);
+  try
+    Result := V.Value;
+  except
+    Result := Default;
+  end;
+end;
+
+function TJsonObject.GetInt(const Key: string; Default: Int64): Int64;
+var
+  V: System.JSON.TJSONValue;
+begin
+  V := System.JSON.TJSONObject(FBacking).GetValue(Key);
+  if V = nil then Exit(Default);
+  if V is System.JSON.TJSONNumber then
+    Result := System.JSON.TJSONNumber(V).AsInt64
+  else
+    Result := Default;
+end;
+
+function TJsonObject.GetBool(const Key: string; Default: Boolean): Boolean;
+var
+  V: System.JSON.TJSONValue;
+begin
+  V := System.JSON.TJSONObject(FBacking).GetValue(Key);
+  if V = nil then Exit(Default);
+  if V is System.JSON.TJSONTrue then Exit(True);
+  if V is System.JSON.TJSONFalse then Exit(False);
+  if V is System.JSON.TJSONBool then Exit(System.JSON.TJSONBool(V).AsBoolean);
+  Result := Default;
+end;
+
+function TJsonObject.GetFloat(const Key: string; Default: Double): Double;
+var
+  V: System.JSON.TJSONValue;
+begin
+  V := System.JSON.TJSONObject(FBacking).GetValue(Key);
+  if V = nil then Exit(Default);
+  if V is System.JSON.TJSONNumber then
+    Result := System.JSON.TJSONNumber(V).AsDouble
+  else
+    Result := Default;
+end;
+
+function TJsonObject.ChildObject(const Key: string): TJsonObject;
+var
+  V: System.JSON.TJSONValue;
+begin
+  Result := nil;
+  V := System.JSON.TJSONObject(FBacking).GetValue(Key);
+  if V is System.JSON.TJSONObject then
+    Result := TJsonObject.CreateWrapping(V, False);
+end;
+
+function TJsonObject.ChildArray(const Key: string): TJsonArray;
+var
+  V: System.JSON.TJSONValue;
+begin
+  Result := nil;
+  V := System.JSON.TJSONObject(FBacking).GetValue(Key);
+  if V is System.JSON.TJSONArray then
+    Result := TJsonArray.CreateWrapping(V, False);
+end;
+
+procedure TJsonObject.PutStr  (const Key, Value: string);
+begin System.JSON.TJSONObject(FBacking).AddPair(Key, Value); end;
+
+procedure TJsonObject.PutInt  (const Key: string; Value: Int64);
+begin System.JSON.TJSONObject(FBacking).AddPair(Key, System.JSON.TJSONNumber.Create(Value)); end;
+
+procedure TJsonObject.PutBool (const Key: string; Value: Boolean);
+begin System.JSON.TJSONObject(FBacking).AddPair(Key, System.JSON.TJSONBool.Create(Value)); end;
+
+procedure TJsonObject.PutFloat(const Key: string; Value: Double);
+begin System.JSON.TJSONObject(FBacking).AddPair(Key, System.JSON.TJSONNumber.Create(Value)); end;
+
+procedure TJsonObject.PutObject(const Key: string; var Obj: TJsonObject);
+var
+  Inner: System.JSON.TJSONValue;
+begin
+  if Obj = nil then Exit;
+  Inner := System.JSON.TJSONValue(Obj.Backing);
+  Obj.FOwnsBacking := False;
+  Obj.Free;
+  Obj := nil;
+  System.JSON.TJSONObject(FBacking).AddPair(Key, Inner);
+end;
+
+procedure TJsonObject.PutArray(const Key: string; var Arr: TJsonArray);
+var
+  Inner: System.JSON.TJSONValue;
+begin
+  if Arr = nil then Exit;
+  Inner := System.JSON.TJSONValue(Arr.Backing);
+  Arr.FOwnsBacking := False;
+  Arr.Free;
+  Arr := nil;
+  System.JSON.TJSONObject(FBacking).AddPair(Key, Inner);
+end;
+
+procedure TJsonObject.PutRaw(const Key, RawJSON: string);
+var
+  V: System.JSON.TJSONValue;
+begin
+  try
+    V := System.JSON.TJSONObject.ParseJSONValue(RawJSON);
+    if V = nil then V := System.JSON.TJSONObject.Create;
+  except
+    V := System.JSON.TJSONObject.Create;
+  end;
+  System.JSON.TJSONObject(FBacking).AddPair(Key, V);
+end;
+
+function TJsonObject.ToJSON: string;
+begin
+  Result := System.JSON.TJSONObject(FBacking).ToJSON;
+end;
+
+function TJsonObject.Backing: TObject;
+begin
+  Result := FBacking;
+end;
+
+(* TJsonArray *)
+
+constructor TJsonArray.Create;
+begin
+  inherited Create;
+  FBacking := System.JSON.TJSONArray.Create;
+  FOwnsBacking := True;
+end;
+
+constructor TJsonArray.CreateWrapping(Backing: TObject; OwnsIt: Boolean);
+begin
+  inherited Create;
+  FBacking := Backing;
+  FOwnsBacking := OwnsIt;
+end;
+
+destructor TJsonArray.Destroy;
+begin
+  if FOwnsBacking and (FBacking <> nil) then FBacking.Free;
+  inherited Destroy;
+end;
+
+class function TJsonArray.Parse(const S: string): TJsonArray;
+var
+  V: System.JSON.TJSONValue;
+begin
+  Result := nil;
+  if Trim(S) = '' then Exit;
+  try
+    V := System.JSON.TJSONObject.ParseJSONValue(S);
+  except
+    on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
+  end;
+  if not (V is System.JSON.TJSONArray) then
+  begin
+    V.Free;
+    Exit;
+  end;
+  Result := TJsonArray.CreateWrapping(V, True);
+end;
+
+function TJsonArray.Count: Integer;
+begin
+  Result := System.JSON.TJSONArray(FBacking).Count;
+end;
+
+function TJsonArray.ItemStr(Index: Integer; const Default: string): string;
+var
+  V: System.JSON.TJSONValue;
+begin
+  if (Index < 0) or (Index >= Count) then Exit(Default);
+  V := System.JSON.TJSONArray(FBacking).Items[Index];
+  if V = nil then Exit(Default);
+  try Result := V.Value; except Result := Default; end;
+end;
+
+function TJsonArray.ItemInt(Index: Integer; Default: Int64): Int64;
+var
+  V: System.JSON.TJSONValue;
+begin
+  if (Index < 0) or (Index >= Count) then Exit(Default);
+  V := System.JSON.TJSONArray(FBacking).Items[Index];
+  if V is System.JSON.TJSONNumber then
+    Result := System.JSON.TJSONNumber(V).AsInt64
+  else
+    Result := Default;
+end;
+
+function TJsonArray.ItemBool(Index: Integer; Default: Boolean): Boolean;
+var
+  V: System.JSON.TJSONValue;
+begin
+  if (Index < 0) or (Index >= Count) then Exit(Default);
+  V := System.JSON.TJSONArray(FBacking).Items[Index];
+  if V is System.JSON.TJSONBool then Result := System.JSON.TJSONBool(V).AsBoolean
+  else Result := Default;
+end;
+
+function TJsonArray.ItemObject(Index: Integer): TJsonObject;
+var
+  V: System.JSON.TJSONValue;
+begin
+  Result := nil;
+  if (Index < 0) or (Index >= Count) then Exit;
+  V := System.JSON.TJSONArray(FBacking).Items[Index];
+  if V is System.JSON.TJSONObject then
+    Result := TJsonObject.CreateWrapping(V, False);
+end;
+
+function TJsonArray.ItemArray(Index: Integer): TJsonArray;
+var
+  V: System.JSON.TJSONValue;
+begin
+  Result := nil;
+  if (Index < 0) or (Index >= Count) then Exit;
+  V := System.JSON.TJSONArray(FBacking).Items[Index];
+  if V is System.JSON.TJSONArray then
+    Result := TJsonArray.CreateWrapping(V, False);
+end;
+
+procedure TJsonArray.AddStr (const Value: string);
+begin System.JSON.TJSONArray(FBacking).Add(Value); end;
+
+procedure TJsonArray.AddInt (Value: Int64);
+begin System.JSON.TJSONArray(FBacking).Add(Value); end;
+
+procedure TJsonArray.AddBool(Value: Boolean);
+begin System.JSON.TJSONArray(FBacking).AddElement(System.JSON.TJSONBool.Create(Value)); end;
+
+procedure TJsonArray.AddObject(var Obj: TJsonObject);
+var
+  Inner: System.JSON.TJSONValue;
+begin
+  if Obj = nil then Exit;
+  Inner := System.JSON.TJSONValue(Obj.Backing);
+  Obj.FOwnsBacking := False;
+  Obj.Free;
+  Obj := nil;
+  System.JSON.TJSONArray(FBacking).AddElement(Inner);
+end;
+
+procedure TJsonArray.AddArray(var Arr: TJsonArray);
+var
+  Inner: System.JSON.TJSONValue;
+begin
+  if Arr = nil then Exit;
+  Inner := System.JSON.TJSONValue(Arr.Backing);
+  Arr.FOwnsBacking := False;
+  Arr.Free;
+  Arr := nil;
+  System.JSON.TJSONArray(FBacking).AddElement(Inner);
+end;
+
+procedure TJsonArray.AddRaw(const RawJSON: string);
+var
+  V: System.JSON.TJSONValue;
+begin
+  try
+    V := System.JSON.TJSONObject.ParseJSONValue(RawJSON);
+    if V <> nil then System.JSON.TJSONArray(FBacking).AddElement(V);
+  except
+    { swallow malformed JSON — call site can detect via Count }
+  end;
+end;
+
+function TJsonArray.ToJSON: string;
+begin
+  Result := System.JSON.TJSONArray(FBacking).ToJSON;
+end;
+
+function TJsonArray.Backing: TObject;
+begin
+  Result := FBacking;
+end;
+
 {$ENDIF}
 
 function JsonReadStr(const Body, Key: string; const Default: string): string;

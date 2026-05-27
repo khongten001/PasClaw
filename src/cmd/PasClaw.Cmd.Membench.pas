@@ -5,7 +5,7 @@
 *)
 unit PasClaw.Cmd.Membench;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

@@ -5,7 +5,7 @@
 }
 unit PasClaw.Cmd.Root;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

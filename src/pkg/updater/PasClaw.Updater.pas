@@ -18,7 +18,7 @@
 *)
 unit PasClaw.Updater;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
@@ -52,7 +52,8 @@ implementation
 
 uses
   Classes,
-  {$IFDEF UNIX} BaseUnix, {$ENDIF}
+  {$IFDEF FPC}{$IFDEF UNIX} BaseUnix, {$ENDIF}{$ENDIF}
+  {$IFNDEF FPC}{$IFDEF POSIX} Posix.SysStat, Posix.UniStd, {$ENDIF}{$ENDIF}
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Providers.HTTP;
@@ -253,10 +254,13 @@ begin
     ErrMsg := 'rename failed (errno=' + IntToStr(GetLastOSError) + ')';
     Exit(False);
   end;
-  {$IFDEF UNIX}
+  {$IFDEF FPC}{$IFDEF UNIX}
   { Best-effort chmod 0755; ignore errors. }
   FpChmod(TargetBinary, &755);
-  {$ENDIF}
+  {$ENDIF}{$ENDIF}
+  {$IFNDEF FPC}{$IFDEF POSIX}
+  Posix.SysStat.chmod(PAnsiChar(AnsiString(TargetBinary)), $1ED);  { 0755 }
+  {$ENDIF}{$ENDIF}
   Result := True;
   {$ENDIF}
 end;

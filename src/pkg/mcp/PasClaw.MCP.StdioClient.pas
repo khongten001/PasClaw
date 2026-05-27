@@ -13,22 +13,28 @@
   Message framing: one JSON object per line (LSP-style "Content-Length"
   headers are also valid but most MCP servers default to newline-delimited
   JSON, which is what we implement here).
+
+  Process spawn is FPC-only for now (uses fcl-process). The Delphi build
+  provides stubs that report "stdio MCP not supported in Delphi build yet";
+  full Delphi support needs a CreateProcess (Win) / Posix.Spawn (POSIX)
+  shim with bidirectional pipes.
 }
 unit PasClaw.MCP.StdioClient;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
 
 uses
-  SysUtils, Classes, Process,
-  PasClaw.MCP.Types;
+  SysUtils, Classes,
+  PasClaw.MCP.Types,
+  PasClaw.Platform;
 
 type
   TMCPStdioClient = class(TMCPBaseClient)
   private
-    FProcess: TProcess;
+    FProcess: TStdioProcess;
     FCmd, FArgs, FName: string;
     FNextId:  Integer;
     FBuffer:  string;
@@ -50,7 +56,7 @@ type
 implementation
 
 uses
-  fpjson, jsonparser,
+  PasClaw.JSON,
   PasClaw.Logger;
 
 constructor TMCPStdioClient.Create(const Name, Cmd, Args: string);
@@ -74,8 +80,7 @@ begin
   if FProcess <> nil then
   begin
     try
-      if FProcess.Running then
-        FProcess.Terminate(0);
+      if FProcess.Running then FProcess.Terminate;
     except
       { ignore — we're tearing down }
     end;
@@ -85,7 +90,7 @@ end;
 
 function SplitArgs(const S: string): TStringList;
 var
-  i, last, n: Integer;
+  i, n: Integer;
   inQuote: Boolean;
   qc: Char;
   cur: string;
@@ -96,7 +101,6 @@ begin
   inQuote := False;
   qc := ' ';
   i := 1;
-  last := 1;
   while i <= n do
   begin
     if inQuote then
@@ -119,24 +123,14 @@ begin
         cur := cur + S[i];
     end;
     Inc(i);
-    Inc(last);
   end;
   if cur <> '' then Result.Add(cur);
 end;
 
 function TMCPStdioClient.WriteLine(const S: string): Boolean;
-var
-  Bytes: TBytes;
-  Buf: string;
 begin
   if (FProcess = nil) or not FProcess.Running then Exit(False);
-  Buf := S + #10;
-  try
-    FProcess.Input.Write(Buf[1], Length(Buf));
-    Result := True;
-  except
-    Result := False;
-  end;
+  Result := FProcess.WriteLineUTF8(S);
 end;
 
 function TMCPStdioClient.ReadLine(out Line: string; TimeoutMs: Integer): Boolean;
@@ -157,24 +151,17 @@ begin
       FBuffer := Copy(FBuffer, NLPos + 1, MaxInt);
       Exit(True);
     end;
-    if not FProcess.Running and (FProcess.Output.NumBytesAvailable = 0) then
-      Exit(False);
-    if FProcess.Output.NumBytesAvailable > 0 then
+    N := FProcess.ReadAvailable(Buf, SizeOf(Buf));
+    if N > 0 then
     begin
-      N := FProcess.Output.Read(Buf, SizeOf(Buf));
-      if N > 0 then
-      begin
-        SetLength(Chunk, N);
-        Move(Buf[0], Chunk[1], N);
-        FBuffer := FBuffer + Chunk;
-      end;
-    end
-    else
-    begin
-      Sleep(20);
-      Inc(Waited, 20);
-      if Waited >= TimeoutMs then Exit(False);
+      SetLength(Chunk, N);
+      Move(Buf[0], Chunk[1], N);
+      FBuffer := FBuffer + Chunk;
+      Continue;
     end;
+    if not FProcess.Running then Exit(False);
+    Inc(Waited, 50);   { ReadAvailable already slept up to ~50 ms }
+    if Waited >= TimeoutMs then Exit(False);
   end;
 end;
 
@@ -183,30 +170,19 @@ function TMCPStdioClient.RoundTrip(const Method, ParamsJSON: string;
                                    out RespJSON: string): Boolean;
 var
   Id: Integer;
-  Req: TJSONObject;
-  ParamsData: TJSONData;
+  Req, RespObj: TJsonObject;
   Line: string;
-  RespRoot: TJSONData;
-  RespObj: TJSONObject;
 begin
   RespJSON := '';
   Id := FNextId; Inc(FNextId);
 
-  Req := TJSONObject.Create;
+  Req := TJsonObject.Create;
   try
-    Req.Add('jsonrpc', JSONRPCVersion);
-    Req.Add('id', Id);
-    Req.Add('method', Method);
-    if ParamsJSON <> '' then
-    begin
-      try
-        ParamsData := GetJSON(ParamsJSON);
-        Req.Add('params', ParamsData);
-      except
-        Req.Add('params', TJSONObject.Create);
-      end;
-    end;
-    if not WriteLine(Req.AsJSON) then Exit(False);
+    Req.PutStr('jsonrpc', JSONRPCVersion);
+    Req.PutInt('id',      Id);
+    Req.PutStr('method',  Method);
+    if ParamsJSON <> '' then Req.PutRaw('params', ParamsJSON);
+    if not WriteLine(Req.ToJSON) then Exit(False);
   finally
     Req.Free;
   end;
@@ -216,21 +192,16 @@ begin
     Line := Trim(Line);
     if Line = '' then Continue;
     LogDebug('mcp[%s] <- %s', [FName, Copy(Line, 1, 200)]);
+    RespObj := TJsonObject.Parse(Line);
+    if RespObj = nil then Continue;
     try
-      RespRoot := GetJSON(Line);
-    except
-      Continue;
-    end;
-    try
-      if not (RespRoot is TJSONObject) then Continue;
-      RespObj := TJSONObject(RespRoot);
       { Skip notifications (no id) and responses to other requests. }
-      if (RespObj.IndexOfName('id') < 0) or
-         (RespObj.Integers['id'] <> Id) then Continue;
+      if (not RespObj.Has('id')) or (RespObj.GetInt('id', -1) <> Id) then
+        Continue;
       RespJSON := Line;
       Exit(True);
     finally
-      RespRoot.Free;
+      RespObj.Free;
     end;
   end;
   Result := False;
@@ -238,46 +209,37 @@ end;
 
 function TMCPStdioClient.Connect(TimeoutMs: Integer; out ErrMsg: string): Boolean;
 var
-  ArgList: TStringList;
-  i: Integer;
-  Params, ServerCaps, ServerInfo: TJSONObject;
+  Params, Caps, ClientInfo, RespObj, ResultObj, Inner: TJsonObject;
   Resp: string;
-  RespData: TJSONData;
-  RespObj, ResultObj: TJSONObject;
+  ArgList: TStringList;
 begin
   ErrMsg := '';
   if FCmd = '' then begin ErrMsg := 'no command configured'; Exit(False); end;
 
-  FProcess := TProcess.Create(nil);
-  FProcess.Executable := FCmd;
+  FProcess := TStdioProcess.Create;
   ArgList := SplitArgs(FArgs);
   try
-    for i := 0 to ArgList.Count - 1 do FProcess.Parameters.Add(ArgList[i]);
+    if not FProcess.Spawn(FCmd, ArgList) then
+    begin
+      ErrMsg := 'failed to spawn ' + FCmd;
+      FreeAndNil(FProcess);
+      Exit(False);
+    end;
   finally
     ArgList.Free;
   end;
-  FProcess.Options := [poUsePipes];
-  try
-    FProcess.Execute;
-  except
-    on E: Exception do
-    begin
-      ErrMsg := 'failed to spawn ' + FCmd + ': ' + E.Message;
-      Exit(False);
-    end;
-  end;
 
   { initialize }
-  Params := TJSONObject.Create;
+  Params := TJsonObject.Create;
   try
-    Params.Add('protocolVersion', MCPProtocolVersion);
-    ServerCaps := TJSONObject.Create;
-    Params.Add('capabilities', ServerCaps);
-    ServerInfo := TJSONObject.Create;
-    ServerInfo.Add('name', 'pasclaw');
-    ServerInfo.Add('version', '0.1');
-    Params.Add('clientInfo', ServerInfo);
-    if not RoundTrip('initialize', Params.AsJSON, TimeoutMs, Resp) then
+    Params.PutStr('protocolVersion', MCPProtocolVersion);
+    Caps := TJsonObject.Create;
+    Params.PutObject('capabilities', Caps);
+    ClientInfo := TJsonObject.Create;
+    ClientInfo.PutStr('name',    'pasclaw');
+    ClientInfo.PutStr('version', '0.1');
+    Params.PutObject('clientInfo', ClientInfo);
+    if not RoundTrip('initialize', Params.ToJSON, TimeoutMs, Resp) then
     begin
       ErrMsg := 'no response to initialize from ' + FCmd;
       Exit(False);
@@ -287,34 +249,39 @@ begin
   end;
 
   { Parse server info & capabilities out of the response. }
-  RespData := GetJSON(Resp);
+  RespObj := TJsonObject.Parse(Resp);
+  if RespObj = nil then begin ErrMsg := 'bad initialize response'; Exit(False); end;
   try
-    if RespData is TJSONObject then
+    if RespObj.Has('error') then
     begin
-      RespObj := TJSONObject(RespData);
-      if RespObj.IndexOfName('error') >= 0 then
-      begin
-        ErrMsg := 'initialize error: ' + RespObj.Find('error').AsJSON;
-        Exit(False);
+      ErrMsg := 'initialize error';
+      Exit(False);
+    end;
+    ResultObj := RespObj.ChildObject('result');
+    if ResultObj <> nil then
+    try
+      Inner := ResultObj.ChildObject('serverInfo');
+      if Inner <> nil then
+      try
+        FInfo.Name    := Inner.GetStr('name',    '');
+        FInfo.Version := Inner.GetStr('version', '');
+      finally
+        Inner.Free;
       end;
-      if RespObj.IndexOfName('result') >= 0 then
-      begin
-        ResultObj := RespObj.Objects['result'];
-        if ResultObj.IndexOfName('serverInfo') >= 0 then
-        begin
-          FInfo.Name    := ResultObj.Objects['serverInfo'].Get('name', '');
-          FInfo.Version := ResultObj.Objects['serverInfo'].Get('version', '');
-        end;
-        if ResultObj.IndexOfName('capabilities') >= 0 then
-        begin
-          FInfo.Caps.Tools     := ResultObj.Objects['capabilities'].IndexOfName('tools')     >= 0;
-          FInfo.Caps.Resources := ResultObj.Objects['capabilities'].IndexOfName('resources') >= 0;
-          FInfo.Caps.Prompts   := ResultObj.Objects['capabilities'].IndexOfName('prompts')   >= 0;
-        end;
+      Inner := ResultObj.ChildObject('capabilities');
+      if Inner <> nil then
+      try
+        FInfo.Caps.Tools     := Inner.Has('tools');
+        FInfo.Caps.Resources := Inner.Has('resources');
+        FInfo.Caps.Prompts   := Inner.Has('prompts');
+      finally
+        Inner.Free;
       end;
+    finally
+      ResultObj.Free;
     end;
   finally
-    RespData.Free;
+    RespObj.Free;
   end;
 
   { Send "initialized" notification (no id, no response expected). }
@@ -325,9 +292,8 @@ end;
 function TMCPStdioClient.ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean;
 var
   Resp: string;
-  Data: TJSONData;
-  Obj, ResultObj, ToolObj: TJSONObject;
-  Arr: TJSONArray;
+  Obj, ResultObj, ToolObj, Schema: TJsonObject;
+  Arr: TJsonArray;
   i: Integer;
 begin
   ErrMsg := '';
@@ -337,33 +303,46 @@ begin
     ErrMsg := 'no response to tools/list';
     Exit(False);
   end;
-  Data := GetJSON(Resp);
+  Obj := TJsonObject.Parse(Resp);
+  if Obj = nil then Exit(False);
   try
-    if not (Data is TJSONObject) then Exit(False);
-    Obj := TJSONObject(Data);
-    if Obj.IndexOfName('error') >= 0 then
-    begin
-      ErrMsg := 'tools/list error: ' + Obj.Find('error').AsJSON;
-      Exit(False);
-    end;
-    if Obj.IndexOfName('result') < 0 then Exit(False);
-    ResultObj := Obj.Objects['result'];
-    if ResultObj.IndexOfName('tools') < 0 then Exit(True);   { server has none }
-    Arr := ResultObj.Arrays['tools'];
-    SetLength(Tools, Arr.Count);
-    for i := 0 to Arr.Count - 1 do
-    begin
-      ToolObj := TJSONObject(Arr[i]);
-      Tools[i].Name        := ToolObj.Get('name', '');
-      Tools[i].Description := ToolObj.Get('description', '');
-      if ToolObj.IndexOfName('inputSchema') >= 0 then
-        Tools[i].Schema := ToolObj.Find('inputSchema').AsJSON
-      else
-        Tools[i].Schema := '{"type":"object"}';
-      Tools[i].Server := FName;
+    if Obj.Has('error') then begin ErrMsg := 'tools/list error'; Exit(False); end;
+    ResultObj := Obj.ChildObject('result');
+    if ResultObj = nil then Exit(True);
+    try
+      Arr := ResultObj.ChildArray('tools');
+      if Arr = nil then Exit(True);
+      try
+        SetLength(Tools, Arr.Count);
+        for i := 0 to Arr.Count - 1 do
+        begin
+          ToolObj := Arr.ItemObject(i);
+          if ToolObj = nil then Continue;
+          try
+            Tools[i].Name        := ToolObj.GetStr('name',        '');
+            Tools[i].Description := ToolObj.GetStr('description', '');
+            Schema := ToolObj.ChildObject('inputSchema');
+            if Schema <> nil then
+            try
+              Tools[i].Schema := Schema.ToJSON;
+            finally
+              Schema.Free;
+            end
+            else
+              Tools[i].Schema := '{"type":"object"}';
+            Tools[i].Server := FName;
+          finally
+            ToolObj.Free;
+          end;
+        end;
+      finally
+        Arr.Free;
+      end;
+    finally
+      ResultObj.Free;
     end;
   finally
-    Data.Free;
+    Obj.Free;
   end;
   Result := True;
 end;
@@ -371,33 +350,19 @@ end;
 function TMCPStdioClient.CallTool(const ToolName, ArgsJSON: string;
                                   out ResultText, ErrMsg: string): Boolean;
 var
-  Params: TJSONObject;
-  ArgsData: TJSONData;
+  Params, RespObj, ResultObj, Block: TJsonObject;
+  ContentArr: TJsonArray;
   Resp: string;
-  Data: TJSONData;
-  Obj, ResultObj, Block: TJSONObject;
-  ContentArr: TJSONArray;
   i: Integer;
-  Kind: string;
 begin
   ResultText := '';
   ErrMsg := '';
-  Params := TJSONObject.Create;
+  Params := TJsonObject.Create;
   try
-    Params.Add('name', ToolName);
-    if ArgsJSON <> '' then
-    begin
-      try
-        ArgsData := GetJSON(ArgsJSON);
-        Params.Add('arguments', ArgsData);
-      except
-        Params.Add('arguments', TJSONObject.Create);
-      end;
-    end
-    else
-      Params.Add('arguments', TJSONObject.Create);
-
-    if not RoundTrip('tools/call', Params.AsJSON, 30000, Resp) then
+    Params.PutStr('name', ToolName);
+    if ArgsJSON <> '' then Params.PutRaw('arguments', ArgsJSON)
+    else                    Params.PutRaw('arguments', '{}');
+    if not RoundTrip('tools/call', Params.ToJSON, 30000, Resp) then
     begin
       ErrMsg := 'no response to tools/call';
       Exit(False);
@@ -406,36 +371,40 @@ begin
     Params.Free;
   end;
 
-  Data := GetJSON(Resp);
+  RespObj := TJsonObject.Parse(Resp);
+  if RespObj = nil then Exit(False);
   try
-    if not (Data is TJSONObject) then Exit(False);
-    Obj := TJSONObject(Data);
-    if Obj.IndexOfName('error') >= 0 then
-    begin
-      ErrMsg := 'tools/call error: ' + Obj.Find('error').AsJSON;
-      Exit(False);
-    end;
-    if Obj.IndexOfName('result') < 0 then Exit(False);
-    ResultObj := Obj.Objects['result'];
-    if ResultObj.IndexOfName('content') >= 0 then
-    begin
-      ContentArr := ResultObj.Arrays['content'];
-      for i := 0 to ContentArr.Count - 1 do
-      begin
-        Block := TJSONObject(ContentArr[i]);
-        Kind := Block.Get('type', '');
-        if Kind = 'text' then
+    if RespObj.Has('error') then begin ErrMsg := 'tools/call error'; Exit(False); end;
+    ResultObj := RespObj.ChildObject('result');
+    if ResultObj = nil then Exit(False);
+    try
+      ContentArr := ResultObj.ChildArray('content');
+      if ContentArr <> nil then
+      try
+        for i := 0 to ContentArr.Count - 1 do
         begin
-          if ResultText <> '' then ResultText := ResultText + sLineBreak;
-          ResultText := ResultText + Block.Get('text', '');
+          Block := ContentArr.ItemObject(i);
+          if Block = nil then Continue;
+          try
+            if Block.GetStr('type', '') = 'text' then
+            begin
+              if ResultText <> '' then ResultText := ResultText + sLineBreak;
+              ResultText := ResultText + Block.GetStr('text', '');
+            end;
+          finally
+            Block.Free;
+          end;
         end;
+      finally
+        ContentArr.Free;
       end;
+      if (ResultText = '') and ResultObj.GetBool('isError', False) then
+        ErrMsg := 'tool reported error (no text content)';
+    finally
+      ResultObj.Free;
     end;
-    if (ResultText = '') and (ResultObj.IndexOfName('isError') >= 0) and
-       (ResultObj.Booleans['isError']) then
-      ErrMsg := 'tool reported error (no text content)';
   finally
-    Data.Free;
+    RespObj.Free;
   end;
   Result := ErrMsg = '';
 end;

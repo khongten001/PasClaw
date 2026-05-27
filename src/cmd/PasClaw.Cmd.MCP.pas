@@ -1,6 +1,6 @@
 { MCP — list/add/remove/edit/test/show MCP server entries in config. }
 unit PasClaw.Cmd.MCP;
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

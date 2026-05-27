@@ -19,7 +19,7 @@
 *)
 unit PasClaw.Cron.Expr;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

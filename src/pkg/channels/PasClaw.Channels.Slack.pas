@@ -12,7 +12,7 @@
 *)
 unit PasClaw.Channels.Slack;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

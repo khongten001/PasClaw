@@ -16,7 +16,7 @@
 *)
 unit PasClaw.MCP.HttpClient;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

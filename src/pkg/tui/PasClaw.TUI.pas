@@ -22,7 +22,7 @@
 *)
 unit PasClaw.TUI;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
@@ -58,9 +58,10 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop;
 
-{$IFDEF UNIX}
+{$IFDEF FPC}{$IFDEF UNIX}
 { Get terminal width via ioctl TIOCGWINSZ. Falls back to 80 if the call
-  fails (e.g. stdin is a pipe). }
+  fails (e.g. stdin is a pipe). FPC-only — Delphi cross-platform width
+  detection lands in a follow-up. }
 const
   TIOCGWINSZ = $5413;
 type
@@ -69,7 +70,7 @@ type
   end;
 function FpIoctl(fd: Integer; req: Cardinal; argp: Pointer): Integer; cdecl;
   external 'c' name 'ioctl';
-{$ENDIF}
+{$ENDIF}{$ENDIF}
 
 constructor TTUI.Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
 begin
@@ -80,17 +81,17 @@ begin
 end;
 
 function TTUI.TermWidth: Integer;
-{$IFDEF UNIX}
+{$IFDEF FPC}{$IFDEF UNIX}
 var
   ws: Twinsize;
-{$ENDIF}
+{$ENDIF}{$ENDIF}
 begin
   Result := 80;
-  {$IFDEF UNIX}
+  {$IFDEF FPC}{$IFDEF UNIX}
   FillChar(ws, SizeOf(ws), 0);
   if FpIoctl(1, TIOCGWINSZ, @ws) = 0 then
     if ws.ws_col > 0 then Result := ws.ws_col;
-  {$ENDIF}
+  {$ENDIF}{$ENDIF}
 end;
 
 procedure TTUI.DrawHeader;

@@ -9,7 +9,7 @@
 }
 unit PasClaw.Tools.Shell;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
@@ -24,28 +24,26 @@ procedure RegisterShellTool(R: TToolRegistry);
 implementation
 
 uses
-  Process,
-  fpjson, jsonparser,
-  PasClaw.Logger;
+  PasClaw.JSON,
+  PasClaw.Logger,
+  PasClaw.Platform;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
-  J: TJSONData;
-  Obj: TJSONObject;
+  Obj: TJsonObject;
 begin
   Result := False;
   V := '';
   if Trim(ArgsJSON) = '' then Exit;
   try
-    J := GetJSON(ArgsJSON);
+    Obj := TJsonObject.Parse(ArgsJSON);
+    if Obj = nil then Exit;
     try
-      if not (J is TJSONObject) then Exit;
-      Obj := TJSONObject(J);
-      if Obj.IndexOfName(Field) < 0 then Exit;
-      V := Obj.Get(Field, '');
+      if not Obj.Has(Field) then Exit;
+      V := Obj.GetStr(Field, '');
       Result := V <> '';
     finally
-      J.Free;
+      Obj.Free;
     end;
   except
     Result := False;
@@ -67,60 +65,8 @@ begin
 end;
 
 function RunShell(const Cmd: string; out ExitCode: Integer): string;
-var
-  P: TProcess;
-  M: TMemoryStream;
-  Buf: array[0..4095] of Byte;
-  N, Total: Integer;
-  Args: TStringList;
 begin
-  Result := '';
-  ExitCode := -1;
-  P := TProcess.Create(nil);
-  M := TMemoryStream.Create;
-  Args := TStringList.Create;
-  try
-    {$IFDEF MSWINDOWS}
-    P.Executable := 'cmd.exe';
-    Args.Add('/C'); Args.Add(Cmd);
-    {$ELSE}
-    P.Executable := '/bin/sh';
-    Args.Add('-c'); Args.Add(Cmd);
-    {$ENDIF}
-    P.Parameters.AddStrings(Args);
-    P.Options := [poUsePipes, poStderrToOutPut];
-    P.Execute;
-    Total := 0;
-    while P.Running or (P.Output.NumBytesAvailable > 0) do
-    begin
-      while P.Output.NumBytesAvailable > 0 do
-      begin
-        N := P.Output.Read(Buf, SizeOf(Buf));
-        if N > 0 then
-        begin
-          M.WriteBuffer(Buf, N);
-          Inc(Total, N);
-        end;
-        if Total > 1024 * 1024 then  { 1 MiB cap }
-        begin
-          P.Terminate(124);
-          Break;
-        end;
-      end;
-      Sleep(20);
-    end;
-    ExitCode := P.ExitStatus;
-    SetLength(Result, M.Size);
-    if M.Size > 0 then
-    begin
-      M.Position := 0;
-      M.ReadBuffer(Result[1], M.Size);
-    end;
-  finally
-    Args.Free;
-    M.Free;
-    P.Free;
-  end;
+  ExitCode := RunOneShot(Cmd, Result);
 end;
 
 function Tool_Shell(const ArgsJSON: string; out ErrMsg: string): string;

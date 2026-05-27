@@ -1,6 +1,6 @@
 { Migrate — migrate config from older PasClaw/PicoClaw layouts. Stub for Phase 1. }
 unit PasClaw.Cmd.Migrate;
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

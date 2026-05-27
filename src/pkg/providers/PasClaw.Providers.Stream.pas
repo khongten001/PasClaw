@@ -16,7 +16,7 @@
 *)
 unit PasClaw.Providers.Stream;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

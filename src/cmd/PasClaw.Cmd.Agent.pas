@@ -9,7 +9,7 @@
   shell_exec). Falls back to an offline preview if no provider is configured.
 }
 unit PasClaw.Cmd.Agent;
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

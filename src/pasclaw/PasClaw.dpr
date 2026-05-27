@@ -13,15 +13,15 @@
 
 program PasClaw;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 {$APPTYPE CONSOLE}
 
 uses
-  {$IFDEF UNIX}
-  cthreads,            { FPC: pull in pthreads so Indy can use TThread }
+  {$IFDEF FPC}{$IFDEF UNIX}
+  cthreads,            { FPC/Linux: pull in pthreads so Indy can use TThread }
   cmem,
-  {$ENDIF}
+  {$ENDIF}{$ENDIF}
   SysUtils,
   PasClaw.CliUI,
   PasClaw.Logger,

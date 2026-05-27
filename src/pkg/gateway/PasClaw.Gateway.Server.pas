@@ -14,7 +14,7 @@
 *)
 unit PasClaw.Gateway.Server;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
@@ -58,7 +58,7 @@ type
 implementation
 
 uses
-  fpjson, jsonparser,
+  PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
@@ -195,21 +195,19 @@ end;
 
 procedure TGatewayServer.HandleStatus(AResp: TIdHTTPResponseInfo);
 var
-  J: TJSONObject;
+  J: TJsonObject;
 begin
-  J := TJSONObject.Create;
+  J := TJsonObject.Create;
   try
-    J.Add('default_provider', FCfg.DefaultProvider);
-    J.Add('default_model',    FCfg.DefaultModel);
-    J.Add('providers',        Length(FCfg.Providers));
-    J.Add('mcp_servers',      Length(FCfg.MCPServers));
-    J.Add('crons',            Length(FCfg.Crons));
-    J.Add('skills',           Length(FCfg.Skills));
-    if FRegistry <> nil then
-      J.Add('tools',          FRegistry.Count)
-    else
-      J.Add('tools', 0);
-    WriteJSON(AResp, 200, J.AsJSON);
+    J.PutStr('default_provider', FCfg.DefaultProvider);
+    J.PutStr('default_model',    FCfg.DefaultModel);
+    J.PutInt('providers',        Length(FCfg.Providers));
+    J.PutInt('mcp_servers',      Length(FCfg.MCPServers));
+    J.PutInt('crons',            Length(FCfg.Crons));
+    J.PutInt('skills',           Length(FCfg.Skills));
+    if FRegistry <> nil then J.PutInt('tools', FRegistry.Count)
+    else                     J.PutInt('tools', 0);
+    WriteJSON(AResp, 200, J.ToJSON);
   finally
     J.Free;
   end;
@@ -217,29 +215,28 @@ end;
 
 procedure TGatewayServer.HandleTools(AResp: TIdHTTPResponseInfo);
 var
-  Root: TJSONObject;
-  Arr: TJSONArray;
+  Root, ToolObj: TJsonObject;
+  Arr: TJsonArray;
   Defs: TToolDefinitionArray;
   i: Integer;
-  ToolObj: TJSONObject;
 begin
-  Root := TJSONObject.Create;
-  Arr  := TJSONArray.Create;
+  Root := TJsonObject.Create;
   try
+    Arr := TJsonArray.Create;
     if FRegistry <> nil then
     begin
       Defs := FRegistry.ToProviderDefs;
       for i := 0 to High(Defs) do
       begin
-        ToolObj := TJSONObject.Create;
-        ToolObj.Add('name',        Defs[i].Name);
-        ToolObj.Add('description', Defs[i].Description);
-        ToolObj.Add('schema',      Defs[i].Schema);
-        Arr.Add(ToolObj);
+        ToolObj := TJsonObject.Create;
+        ToolObj.PutStr('name',        Defs[i].Name);
+        ToolObj.PutStr('description', Defs[i].Description);
+        ToolObj.PutStr('schema',      Defs[i].Schema);
+        Arr.AddObject(ToolObj);
       end;
     end;
-    Root.Add('tools', Arr);
-    WriteJSON(AResp, 200, Root.AsJSON);
+    Root.PutArray('tools', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
   end;
@@ -249,8 +246,7 @@ procedure TGatewayServer.HandleChat(ARequest: TIdHTTPRequestInfo;
                                     AResp: TIdHTTPResponseInfo);
 var
   Body, Prompt: string;
-  Req, RespJ: TJSONObject;
-  Data: TJSONData;
+  Req, RespJ: TJsonObject;
   Msgs: array of TMessage;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
@@ -271,20 +267,12 @@ begin
   end;
 
   Prompt := '';
+  Req := TJsonObject.Parse(Body);
+  if Req <> nil then
   try
-    Data := GetJSON(Body);
-    try
-      if Data is TJSONObject then
-      begin
-        Req := TJSONObject(Data);
-        Prompt := Req.Get('message', '');
-      end;
-    finally
-      Data.Free;
-    end;
-  except
-    WriteJSON(AResp, 400, '{"error":"invalid json"}');
-    Exit;
+    Prompt := Req.GetStr('message', '');
+  finally
+    Req.Free;
   end;
 
   if Prompt = '' then
@@ -317,13 +305,13 @@ begin
     Exit;
   end;
 
-  RespJ := TJSONObject.Create;
+  RespJ := TJsonObject.Create;
   try
-    RespJ.Add('content',     Loop.Content);
-    RespJ.Add('iterations',  Loop.Iterations);
-    RespJ.Add('input_tokens', Loop.LastResp.Usage.InputTokens);
-    RespJ.Add('output_tokens', Loop.LastResp.Usage.OutputTokens);
-    WriteJSON(AResp, 200, RespJ.AsJSON);
+    RespJ.PutStr('content',       Loop.Content);
+    RespJ.PutInt('iterations',    Loop.Iterations);
+    RespJ.PutInt('input_tokens',  Loop.LastResp.Usage.InputTokens);
+    RespJ.PutInt('output_tokens', Loop.LastResp.Usage.OutputTokens);
+    WriteJSON(AResp, 200, RespJ.ToJSON);
   finally
     RespJ.Free;
   end;

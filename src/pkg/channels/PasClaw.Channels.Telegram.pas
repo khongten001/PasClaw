@@ -10,7 +10,7 @@
 *)
 unit PasClaw.Channels.Telegram;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
@@ -44,7 +44,7 @@ type
 implementation
 
 uses
-  fpjson, jsonparser,
+  PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Providers.HTTP,
@@ -91,16 +91,16 @@ function TTelegramChannel.SendMessage(ChatId: Int64; const Text: string): Boolea
 var
   URL, Body: string;
   Empty: array of THeaderPair;
-  J: TJSONObject;
+  J: TJsonObject;
   Resp: THTTPResult;
 begin
   SetLength(Empty, 0);
   URL := ApiUrl('sendMessage');
-  J := TJSONObject.Create;
+  J := TJsonObject.Create;
   try
-    J.Add('chat_id', ChatId);
-    J.Add('text',    Text);
-    Body := J.AsJSON;
+    J.PutInt('chat_id', ChatId);
+    J.PutStr('text',    Text);
+    Body := J.ToJSON;
   finally
     J.Free;
   end;
@@ -112,29 +112,35 @@ end;
 
 procedure TTelegramChannel.ProcessUpdate(const UpdateJSON: string);
 var
-  Root: TJSONData;
-  Obj, Msg, Chat: TJSONObject;
+  Obj, Msg, Chat: TJsonObject;
   Text: string;
   ChatId, UpdateId: Int64;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
   Msgs: array of TMessage;
 begin
-  Root := GetJSON(UpdateJSON);
+  Obj := TJsonObject.Parse(UpdateJSON);
+  if Obj = nil then Exit;
   try
-    if not (Root is TJSONObject) then Exit;
-    Obj := TJSONObject(Root);
-    UpdateId := Obj.Get('update_id', Int64(0));
+    UpdateId := Obj.GetInt('update_id', 0);
     if UpdateId >= FOffset then FOffset := UpdateId + 1;
-    if Obj.IndexOfName('message') < 0 then Exit;
-    Msg := Obj.Objects['message'];
-    if Msg.IndexOfName('chat') < 0 then Exit;
-    Chat := Msg.Objects['chat'];
-    ChatId := Chat.Get('id', Int64(0));
-    Text   := Msg.Get('text', '');
-    if Text = '' then Exit;
+    Msg := Obj.ChildObject('message');
+    if Msg = nil then Exit;
+    try
+      Chat := Msg.ChildObject('chat');
+      if Chat = nil then Exit;
+      try
+        ChatId := Chat.GetInt('id', 0);
+      finally
+        Chat.Free;
+      end;
+      Text := Msg.GetStr('text', '');
+      if Text = '' then Exit;
+    finally
+      Msg.Free;
+    end;
   finally
-    Root.Free;
+    Obj.Free;
   end;
 
   LogInfo('telegram: chat=%d msg=%s', [ChatId, Copy(Text, 1, 80)]);
@@ -166,9 +172,8 @@ end;
 procedure TTelegramChannel.Run;
 var
   RawJSON: string;
-  Root: TJSONData;
-  Obj: TJSONObject;
-  Arr: TJSONArray;
+  Obj, Item: TJsonObject;
+  Arr: TJsonArray;
   i: Integer;
 begin
   if FToken = '' then
@@ -176,7 +181,7 @@ begin
     LogError('telegram: no bot token (set PASCLAW_TELEGRAM_TOKEN or --token)');
     Exit;
   end;
-  LogInfo('telegram: long-poll started (token …%s)',
+  LogInfo('telegram: long-poll started (token ...%s)',
     [Copy(FToken, Length(FToken) - 5, 5)]);
 
   while not FStop do
@@ -186,22 +191,28 @@ begin
       Sleep(2000);
       Continue;
     end;
+    Obj := TJsonObject.Parse(RawJSON);
+    if Obj = nil then begin Sleep(1000); Continue; end;
     try
-      Root := GetJSON(RawJSON);
-    except
-      Sleep(1000);
-      Continue;
-    end;
-    try
-      if not (Root is TJSONObject) then Continue;
-      Obj := TJSONObject(Root);
-      if not Obj.Get('ok', False) then Continue;
-      if Obj.IndexOfName('result') < 0 then Continue;
-      Arr := Obj.Arrays['result'];
-      for i := 0 to Arr.Count - 1 do
-        ProcessUpdate(Arr[i].AsJSON);
+      if not Obj.GetBool('ok', False) then Continue;
+      Arr := Obj.ChildArray('result');
+      if Arr = nil then Continue;
+      try
+        for i := 0 to Arr.Count - 1 do
+        begin
+          Item := Arr.ItemObject(i);
+          if Item = nil then Continue;
+          try
+            ProcessUpdate(Item.ToJSON);
+          finally
+            Item.Free;
+          end;
+        end;
+      finally
+        Arr.Free;
+      end;
     finally
-      Root.Free;
+      Obj.Free;
     end;
   end;
   LogInfo('telegram: long-poll stopped');

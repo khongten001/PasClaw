@@ -19,7 +19,7 @@
 *)
 unit PasClaw.Skills.Loader;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
@@ -50,10 +50,10 @@ function RenderTemplate(const Template, ArgsJSON: string): string;
 implementation
 
 uses
-  Process,
   PasClaw.Utils,
   PasClaw.JSON,
-  PasClaw.Logger;
+  PasClaw.Logger,
+  PasClaw.Platform;
 
 const
   MaxSkills = 64;
@@ -170,48 +170,8 @@ begin
 end;
 
 function RunShell(const Cmd: string; out ExitCode: Integer): string;
-var
-  P: TProcess;
-  M: TMemoryStream;
-  Buf: array[0..4095] of Byte;
-  N: Integer;
 begin
-  Result := '';
-  ExitCode := -1;
-  P := TProcess.Create(nil);
-  M := TMemoryStream.Create;
-  try
-    {$IFDEF MSWINDOWS}
-    P.Executable := 'cmd.exe';
-    P.Parameters.Add('/C');
-    P.Parameters.Add(Cmd);
-    {$ELSE}
-    P.Executable := '/bin/sh';
-    P.Parameters.Add('-c');
-    P.Parameters.Add(Cmd);
-    {$ENDIF}
-    P.Options := [poUsePipes, poStderrToOutPut];
-    P.Execute;
-    while P.Running or (P.Output.NumBytesAvailable > 0) do
-    begin
-      while P.Output.NumBytesAvailable > 0 do
-      begin
-        N := P.Output.Read(Buf, SizeOf(Buf));
-        if N > 0 then M.WriteBuffer(Buf, N);
-      end;
-      Sleep(20);
-    end;
-    ExitCode := P.ExitStatus;
-    SetLength(Result, M.Size);
-    if M.Size > 0 then
-    begin
-      M.Position := 0;
-      M.ReadBuffer(Result[1], M.Size);
-    end;
-  finally
-    M.Free;
-    P.Free;
-  end;
+  ExitCode := RunOneShot(Cmd, Result);
 end;
 
 function RunShellSkill(Slot: Integer; const ArgsJSON: string; out ErrMsg: string): string;
