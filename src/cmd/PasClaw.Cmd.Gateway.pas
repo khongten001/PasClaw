@@ -34,33 +34,36 @@ uses
 
 type
   TGwArgs = record
-    Addr:      string;
-    Port:      Integer;
-    Telegram:  Boolean;
-    Token:     string;
-    NoMCP:     Boolean;
-    NoTools:   Boolean;
+    Addr:        string;
+    Port:        Integer;
+    Telegram:    Boolean;
+    Token:       string;
+    NoMCP:       Boolean;
+    NoTools:     Boolean;
+    NoHashline:  Boolean;
   end;
 
 function ParseGw(const Argv: array of string; const Cfg: TConfig): TGwArgs;
 var
   i: Integer;
 begin
-  Result.Addr     := Cfg.Gateway.BindAddr;
-  Result.Port     := Cfg.Gateway.Port;
-  Result.Telegram := False;
-  Result.Token    := GetEnvironmentVariable('PASCLAW_TELEGRAM_TOKEN');
-  Result.NoMCP    := False;
-  Result.NoTools  := False;
+  Result.Addr       := Cfg.Gateway.BindAddr;
+  Result.Port       := Cfg.Gateway.Port;
+  Result.Telegram   := False;
+  Result.Token      := GetEnvironmentVariable('PASCLAW_TELEGRAM_TOKEN');
+  Result.NoMCP      := False;
+  Result.NoTools    := False;
+  Result.NoHashline := False;
   i := 0;
   while i <= High(Argv) do
   begin
-    if Argv[i] = '--addr'     then begin if i < High(Argv) then Result.Addr     := Argv[i + 1]; Inc(i, 2); Continue; end;
-    if Argv[i] = '--port'     then begin if i < High(Argv) then Result.Port     := StrToIntDef(Argv[i + 1], Result.Port); Inc(i, 2); Continue; end;
-    if Argv[i] = '--telegram' then begin Result.Telegram := True; Inc(i); Continue; end;
-    if Argv[i] = '--token'    then begin if i < High(Argv) then Result.Token    := Argv[i + 1]; Inc(i, 2); Continue; end;
-    if Argv[i] = '--no-mcp'   then begin Result.NoMCP    := True; Inc(i); Continue; end;
-    if Argv[i] = '--no-tools' then begin Result.NoTools  := True; Inc(i); Continue; end;
+    if Argv[i] = '--addr'         then begin if i < High(Argv) then Result.Addr     := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--port'         then begin if i < High(Argv) then Result.Port     := StrToIntDef(Argv[i + 1], Result.Port); Inc(i, 2); Continue; end;
+    if Argv[i] = '--telegram'     then begin Result.Telegram   := True; Inc(i); Continue; end;
+    if Argv[i] = '--token'        then begin if i < High(Argv) then Result.Token    := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--no-mcp'       then begin Result.NoMCP      := True; Inc(i); Continue; end;
+    if Argv[i] = '--no-tools'     then begin Result.NoTools    := True; Inc(i); Continue; end;
+    if Argv[i] = '--no-hashline'  then begin Result.NoHashline := True; Inc(i); Continue; end;
     Inc(i);
   end;
 end;
@@ -91,7 +94,7 @@ begin
     if not Args.NoTools then
     begin
       Reg := TToolRegistry.Create;
-      RegisterFSTools(Reg);
+      RegisterFSTools(Reg, not Args.NoHashline);
       RegisterShellTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);

@@ -30,10 +30,11 @@ uses
 
 type
   TTUIArgs = record
-    Model:    string;
-    Provider: string;
-    NoMCP:    Boolean;
-    NoTools:  Boolean;
+    Model:       string;
+    Provider:    string;
+    NoMCP:       Boolean;
+    NoTools:     Boolean;
+    NoHashline:  Boolean;
   end;
 
 function ParseArgs(const Argv: array of string; var A: TTUIArgs): Boolean;
@@ -41,14 +42,15 @@ var
   i: Integer;
 begin
   Result := True;
-  A.Model := ''; A.Provider := ''; A.NoMCP := False; A.NoTools := False;
+  A.Model := ''; A.Provider := ''; A.NoMCP := False; A.NoTools := False; A.NoHashline := False;
   i := 0;
   while i <= High(Argv) do
   begin
-    if Argv[i] = '--model'    then begin if i = High(Argv) then Exit(False); A.Model    := Argv[i + 1]; Inc(i, 2); Continue; end;
-    if Argv[i] = '--provider' then begin if i = High(Argv) then Exit(False); A.Provider := Argv[i + 1]; Inc(i, 2); Continue; end;
-    if Argv[i] = '--no-mcp'   then begin A.NoMCP   := True; Inc(i); Continue; end;
-    if Argv[i] = '--no-tools' then begin A.NoTools := True; Inc(i); Continue; end;
+    if Argv[i] = '--model'        then begin if i = High(Argv) then Exit(False); A.Model    := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--provider'     then begin if i = High(Argv) then Exit(False); A.Provider := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--no-mcp'       then begin A.NoMCP      := True; Inc(i); Continue; end;
+    if Argv[i] = '--no-tools'     then begin A.NoTools    := True; Inc(i); Continue; end;
+    if Argv[i] = '--no-hashline'  then begin A.NoHashline := True; Inc(i); Continue; end;
     Inc(i);
   end;
 end;
@@ -78,7 +80,7 @@ begin
     if not A.NoTools then
     begin
       Reg := TToolRegistry.Create;
-      RegisterFSTools(Reg);
+      RegisterFSTools(Reg, not A.NoHashline);
       RegisterShellTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);

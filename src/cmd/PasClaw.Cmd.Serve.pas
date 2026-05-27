@@ -7,6 +7,7 @@
     pasclaw serve --no-mcp                # skip MCP server discovery
     pasclaw serve --debug                 # log every request + response body
     pasclaw serve --max-iter 40           # raise the tool-loop cap (default 25)
+    pasclaw serve --no-hashline           # raw fs_read; skip fs_edit_hashline + fs_grep
 
   Exposes POST /v1/chat/completions on the configured port. Any client
   that speaks the OpenAI Chat Completions API (openai-python, openai-node,
@@ -44,34 +45,37 @@ uses
 
 type
   TServeArgs = record
-    Addr:    string;
-    Port:    Integer;
-    NoMCP:   Boolean;
-    NoTools: Boolean;
-    Debug:   Boolean;
-    MaxIter: Integer;
+    Addr:        string;
+    Port:        Integer;
+    NoMCP:       Boolean;
+    NoTools:     Boolean;
+    Debug:       Boolean;
+    MaxIter:     Integer;
+    NoHashline:  Boolean;
   end;
 
 function ParseServe(const Argv: array of string; const Cfg: TConfig): TServeArgs;
 var
   i: Integer;
 begin
-  Result.Addr    := Cfg.Gateway.BindAddr;
-  Result.Port    := Cfg.Gateway.Port;
-  Result.NoMCP   := False;
-  Result.NoTools := False;
-  Result.Debug   := False;
-  Result.MaxIter := 25;  { matches TGatewayServer.Create default }
+  Result.Addr       := Cfg.Gateway.BindAddr;
+  Result.Port       := Cfg.Gateway.Port;
+  Result.NoMCP      := False;
+  Result.NoTools    := False;
+  Result.Debug      := False;
+  Result.MaxIter    := 25;  { matches TGatewayServer.Create default }
+  Result.NoHashline := False;
   i := 0;
   while i <= High(Argv) do
   begin
-    if Argv[i] = '--addr'     then begin if i < High(Argv) then Result.Addr := Argv[i + 1]; Inc(i, 2); Continue; end;
-    if Argv[i] = '--port'     then begin if i < High(Argv) then Result.Port := StrToIntDef(Argv[i + 1], Result.Port); Inc(i, 2); Continue; end;
-    if Argv[i] = '--no-mcp'   then begin Result.NoMCP   := True; Inc(i); Continue; end;
-    if Argv[i] = '--no-tools' then begin Result.NoTools := True; Inc(i); Continue; end;
+    if Argv[i] = '--addr'         then begin if i < High(Argv) then Result.Addr := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--port'         then begin if i < High(Argv) then Result.Port := StrToIntDef(Argv[i + 1], Result.Port); Inc(i, 2); Continue; end;
+    if Argv[i] = '--no-mcp'       then begin Result.NoMCP      := True; Inc(i); Continue; end;
+    if Argv[i] = '--no-tools'     then begin Result.NoTools    := True; Inc(i); Continue; end;
     if (Argv[i] = '--debug') or (Argv[i] = '-d') then
-                                  begin Result.Debug   := True; Inc(i); Continue; end;
-    if Argv[i] = '--max-iter' then begin if i < High(Argv) then Result.MaxIter := StrToIntDef(Argv[i + 1], Result.MaxIter); Inc(i, 2); Continue; end;
+                                      begin Result.Debug       := True; Inc(i); Continue; end;
+    if Argv[i] = '--max-iter'     then begin if i < High(Argv) then Result.MaxIter := StrToIntDef(Argv[i + 1], Result.MaxIter); Inc(i, 2); Continue; end;
+    if Argv[i] = '--no-hashline'  then begin Result.NoHashline := True; Inc(i); Continue; end;
     Inc(i);
   end;
   if Result.MaxIter < 1 then Result.MaxIter := 1;
@@ -108,7 +112,7 @@ begin
     if not Args.NoTools then
     begin
       Reg := TToolRegistry.Create;
-      RegisterFSTools(Reg);
+      RegisterFSTools(Reg, not Args.NoHashline);
       RegisterShellTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
