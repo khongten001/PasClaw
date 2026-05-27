@@ -42,6 +42,7 @@ type
     MaxIterations: Integer;
     NoTools:       Boolean;
     NoMCP:         Boolean;
+    NoHashline:    Boolean;
   end;
 
   TLoopHandlers = class
@@ -79,6 +80,7 @@ begin
   Result.MaxIterations := 8;
   Result.NoTools       := False;
   Result.NoMCP         := False;
+  Result.NoHashline    := False;
 end;
 
 function ParseArgs(const Argv: array of string; var A: TAgentArgs): Boolean;
@@ -101,8 +103,9 @@ begin
     if Argv[i] = '--thinking' then begin if i = High(Argv) then Exit(False); A.Thinking := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--max-tokens'     then begin if i = High(Argv) then Exit(False); A.MaxTokens     := StrToIntDef(Argv[i + 1], A.MaxTokens);     Inc(i, 2); Continue; end;
     if Argv[i] = '--max-iterations' then begin if i = High(Argv) then Exit(False); A.MaxIterations := StrToIntDef(Argv[i + 1], A.MaxIterations); Inc(i, 2); Continue; end;
-    if Argv[i] = '--no-tools' then begin A.NoTools := True; Inc(i); Continue; end;
-    if Argv[i] = '--no-mcp'   then begin A.NoMCP   := True; Inc(i); Continue; end;
+    if Argv[i] = '--no-tools'    then begin A.NoTools    := True; Inc(i); Continue; end;
+    if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
+    if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
     Inc(i);
   end;
 end;
@@ -121,12 +124,12 @@ begin
   Result := NewProviderFromConfig(Cfg, Name, Provider, Err);
 end;
 
-function NewBuiltinRegistry: TToolRegistry;
+function NewBuiltinRegistry(UseHashline: Boolean = True): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
   Result := TToolRegistry.Create;
-  RegisterFSTools(Result);
+  RegisterFSTools(Result, UseHashline);
   RegisterShellTool(Result);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(Result, Skills);
@@ -178,7 +181,7 @@ begin
   end;
 
   Reg := nil;
-  if not A.NoTools then Reg := NewBuiltinRegistry;
+  if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Handlers := TLoopHandlers.Create;
   try
@@ -227,7 +230,7 @@ begin
 
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
   Reg := nil;
-  if not A.NoTools then Reg := NewBuiltinRegistry;
+  if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Handlers := TLoopHandlers.Create;
   try

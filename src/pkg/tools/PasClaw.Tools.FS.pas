@@ -21,7 +21,10 @@ uses
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry;
 
-procedure RegisterFSTools(R: TToolRegistry);
+{ UseHashline controls fs_read's default output format and whether the
+  hashline-only tools (fs_edit_hashline, fs_grep) get registered at all.
+  Default True. Set False from a command with --no-hashline. }
+procedure RegisterFSTools(R: TToolRegistry; UseHashline: Boolean = True);
 
 implementation
 
@@ -30,6 +33,9 @@ uses
   PasClaw.JSON,
   PasClaw.Utils,
   PasClaw.Hashline;
+
+var
+  GHashlineEnabled: Boolean = True;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -88,8 +94,15 @@ begin
     ErrMsg := 'no such file: ' + Path;
     Exit('');
   end;
-  Body  := ReadFileText(Path);
-  Plain := ParseBoolArg(ArgsJSON, 'plain', False);
+  Body := ReadFileText(Path);
+  { When hashline is disabled at register time, force plain regardless of
+    the per-call flag: there's no fs_edit_hashline registered to consume
+    a header, so emitting one would just confuse the model. The per-call
+    plain=true escape hatch still works in hashline-on mode. }
+  if not GHashlineEnabled then
+    Plain := True
+  else
+    Plain := ParseBoolArg(ArgsJSON, 'plain', False);
   if Plain then
     Result := Body
   else
@@ -415,24 +428,37 @@ begin
   end;
 end;
 
-procedure RegisterFSTools(R: TToolRegistry);
+procedure RegisterFSTools(R: TToolRegistry; UseHashline: Boolean);
 var
   T: TTool;
 begin
-  T.Name        := 'fs_read';
-  T.Description := 'Read a file. By default returns hashline format: a ' + HL_FILE_PREFIX +
-                   'path#hash header followed by LINENO:line per source line. Pass {"plain":true} for raw bytes.';
-  T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"plain":{"type":"boolean","description":"Return raw file bytes instead of hashline-prefixed output."}},"required":["path"]}';
-  T.Handler     := Tool_FSRead;
-  T.IsCore      := True;
+  GHashlineEnabled := UseHashline;
+
+  T.Name := 'fs_read';
+  if UseHashline then
+  begin
+    T.Description := 'Read a file. Returns hashline format: a ' + HL_FILE_PREFIX +
+                     'path#hash header followed by LINENO:line per source line. Pass {"plain":true} for raw bytes.';
+    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"plain":{"type":"boolean","description":"Return raw file bytes instead of hashline-prefixed output."}},"required":["path"]}';
+  end
+  else
+  begin
+    T.Description := 'Read the contents of a file from the local filesystem.';
+    T.Schema      := '{"type":"object","properties":{"path":{"type":"string","description":"Absolute or relative path to the file."}},"required":["path"]}';
+  end;
+  T.Handler := Tool_FSRead;
+  T.IsCore  := True;
   R.Register(T);
 
-  T.Name        := 'fs_write';
-  T.Description := 'Write a string to a file (overwrites). Creates parent dirs. ' +
-                   'Strips hashline LINENO: prefixes from `content` when every non-empty line carries one.';
-  T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}';
-  T.Handler     := Tool_FSWrite;
-  T.IsCore      := True;
+  T.Name := 'fs_write';
+  if UseHashline then
+    T.Description := 'Write a string to a file (overwrites). Creates parent dirs. ' +
+                     'Strips hashline LINENO: prefixes from `content` when every non-empty line carries one.'
+  else
+    T.Description := 'Write a string to a file (overwrites). Creates parent dirs.';
+  T.Schema  := '{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}';
+  T.Handler := Tool_FSWrite;
+  T.IsCore  := True;
   R.Register(T);
 
   T.Name        := 'fs_list';
@@ -442,25 +468,31 @@ begin
   T.IsCore      := True;
   R.Register(T);
 
-  T.Name        := 'fs_edit_hashline';
-  T.Description := 'Apply a hashline-format patch. Patch begins with ' + HL_FILE_PREFIX +
-                   'path#hash; each block is an anchor like 42: or 7-10: followed by ' +
-                   '| (replace), ' + HL_PAYLOAD_ABOVE + ' (insert above), or ' +
-                   HL_PAYLOAD_BELOW + ' (insert below). The header hash must match the file on disk; ' +
-                   'stale patches abort without writing.';
-  T.Schema      := '{"type":"object","properties":{"patch":{"type":"string","description":"Hashline-format patch text."}},"required":["patch"]}';
-  T.Handler     := Tool_FSEditHashline;
-  T.IsCore      := True;
-  R.Register(T);
+  { Hashline-only tools: skip registration entirely when UseHashline is False
+    so the model never sees them in the tool list and doesn't try to call
+    fs_edit_hashline with a hashless patch that we'd reject. }
+  if UseHashline then
+  begin
+    T.Name        := 'fs_edit_hashline';
+    T.Description := 'Apply a hashline-format patch. Patch begins with ' + HL_FILE_PREFIX +
+                     'path#hash; each block is an anchor like 42: or 7-10: followed by ' +
+                     '| (replace), ' + HL_PAYLOAD_ABOVE + ' (insert above), or ' +
+                     HL_PAYLOAD_BELOW + ' (insert below). The header hash must match the file on disk; ' +
+                     'stale patches abort without writing.';
+    T.Schema      := '{"type":"object","properties":{"patch":{"type":"string","description":"Hashline-format patch text."}},"required":["patch"]}';
+    T.Handler     := Tool_FSEditHashline;
+    T.IsCore      := True;
+    R.Register(T);
 
-  T.Name        := 'fs_grep';
-  T.Description := 'Search files for a substring. Recursive when path is a directory. ' +
-                   'Skips dotdirs. Returns hashline-formatted matches (one section per file, header + LINENO:line per match) ' +
-                   'so you can paste anchors directly into fs_edit_hashline.';
-  T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"pattern":{"type":"string"},"ignore_case":{"type":"boolean"},"include":{"type":"string","description":"Comma-separated filename glob(s), e.g. *.pas,*.dpr"}},"required":["path","pattern"]}';
-  T.Handler     := Tool_FSGrep;
-  T.IsCore      := True;
-  R.Register(T);
+    T.Name        := 'fs_grep';
+    T.Description := 'Search files for a substring. Recursive when path is a directory. ' +
+                     'Skips dotdirs. Returns hashline-formatted matches (one section per file, header + LINENO:line per match) ' +
+                     'so you can paste anchors directly into fs_edit_hashline.';
+    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"pattern":{"type":"string"},"ignore_case":{"type":"boolean"},"include":{"type":"string","description":"Comma-separated filename glob(s), e.g. *.pas,*.dpr"}},"required":["path","pattern"]}';
+    T.Handler     := Tool_FSGrep;
+    T.IsCore      := True;
+    R.Register(T);
+  end;
 end;
 
 end.
