@@ -49,9 +49,19 @@ var
 procedure EnableUTF8Console;
 begin
   { Force UTF-8 console code pages on Windows so Unicode banner/panel glyphs
-    (█, ╔, ┌, etc.) are not interpreted via legacy ANSI/OEM encodings. }
+    (█, ╔, ┌, etc.) are not interpreted via legacy ANSI/OEM encodings.
+    SetConsoleOutputCP alone tells the console how to interpret bytes;
+    under Delphi the RTL also caches a per-Text-file codepage that
+    converts UnicodeString → bytes before they reach the console, so we
+    need SetTextCodePage to point Output/ErrOutput at UTF-8 as well.
+    FPC's WriteLn already emits the UTF-8 bytes its AnsiString holds,
+    so it doesn't need the extra call. }
   SetConsoleCP(CP_UTF8);
   SetConsoleOutputCP(CP_UTF8);
+  {$IFNDEF FPC}
+  SetTextCodePage(Output,    CP_UTF8);
+  SetTextCodePage(ErrOutput, CP_UTF8);
+  {$ENDIF}
 end;
 {$ENDIF}
 

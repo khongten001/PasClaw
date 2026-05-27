@@ -43,6 +43,7 @@ type
     FRegistry: TToolRegistry;
     FStarted:  Boolean;
     FStopFlag: TEvent;
+    FDebugIO:  Boolean;
     procedure OnCommandGet(AContext: TIdContext;
                            ARequest: TIdHTTPRequestInfo;
                            AResponse: TIdHTTPResponseInfo);
@@ -58,6 +59,10 @@ type
   public
     constructor Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
     destructor  Destroy; override;
+    { When True every request to /v1/chat/completions logs its full body
+      and the response body via LogDebug. Off by default; the `serve`
+      subcommand flips it on with --debug. }
+    property DebugIO: Boolean read FDebugIO write FDebugIO;
     procedure Start(const BindAddr: string; Port: Integer);
     procedure Stop;
     procedure WaitForStop;
@@ -463,8 +468,13 @@ begin
     end;
   end;
 
+  if FDebugIO then
+    LogDebug('chat/completions <- %d bytes from %s: %s',
+             [Length(Bytes), ARequest.RemoteIP, Body]);
+
   if Trim(Body) = '' then
   begin
+    if FDebugIO then LogDebug('chat/completions -> 400 (empty body)');
     WriteJSON(AResp, 400,
       '{"error":{"message":"empty request body","type":"invalid_request_error"}}');
     Exit;
@@ -473,6 +483,7 @@ begin
   Req := TJsonObject.Parse(Body);
   if Req = nil then
   begin
+    if FDebugIO then LogDebug('chat/completions -> 400 (invalid JSON)');
     WriteJSON(AResp, 400,
       '{"error":{"message":"invalid JSON","type":"invalid_request_error"}}');
     Exit;
@@ -481,6 +492,11 @@ begin
   try
     ReqModel    := Req.GetStr('model', FCfg.DefaultModel);
     WantsStream := Req.GetBool('stream', False);
+    if FDebugIO then
+      LogDebug('chat/completions: model=%s stream=%s temperature=%g max_tokens=%d',
+               [ReqModel, BoolToStr(WantsStream, True),
+                Req.GetFloat('temperature', 0),
+                Req.GetInt('max_tokens', 0)]);
 
     { Walk messages[] -> TMessageArray. We accept the OpenAI shape but
       pass the raw content string through; multimodal/image parts get
@@ -488,6 +504,7 @@ begin
     MsgArr := Req.ChildArray('messages');
     if (MsgArr = nil) or (MsgArr.Count = 0) then
     begin
+      if FDebugIO then LogDebug('chat/completions -> 400 (no messages[])');
       WriteJSON(AResp, 400,
         '{"error":{"message":"missing or empty messages[]","type":"invalid_request_error"}}');
       if MsgArr <> nil then MsgArr.Free;
@@ -512,6 +529,7 @@ begin
 
     if FProvider = nil then
     begin
+      if FDebugIO then LogDebug('chat/completions -> 503 (no provider configured)');
       WriteJSON(AResp, 503,
         '{"error":{"message":"no provider configured","type":"server_error"}}');
       Exit;
@@ -535,6 +553,7 @@ begin
 
     if not RunToolLoop(LoopCfg, Msgs, Loop) then
     begin
+      if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
       WriteJSON(AResp, 502,
         '{"error":{"message":"tool loop failed","type":"server_error"}}');
       Exit;
@@ -546,11 +565,17 @@ begin
     else
       FinishReason := 'stop';
 
+    if FDebugIO then
+      LogDebug('chat/completions: tool loop done iterations=%d in=%d out=%d finish=%s content=%s',
+               [Loop.Iterations, Loop.LastResp.Usage.InputTokens,
+                Loop.LastResp.Usage.OutputTokens, FinishReason, Loop.Content]);
+
     if WantsStream then
     begin
       Buf := BuildOpenAIChunk(CompId, ReqModel, Loop.Content, '') +
              BuildOpenAIChunk(CompId, ReqModel, '', FinishReason) +
              'data: [DONE]' + #10#10;
+      if FDebugIO then LogDebug('chat/completions -> 200 SSE %d bytes', [Length(Buf)]);
       WriteSSE(AResp, Buf);
     end
     else
@@ -558,6 +583,7 @@ begin
       ReplyObj := BuildOpenAICompletion(CompId, ReqModel, Loop.Content,
                                          Loop.LastResp.Usage, FinishReason);
       try
+        if FDebugIO then LogDebug('chat/completions -> 200 JSON: %s', [ReplyObj.ToJSON]);
         WriteJSON(AResp, 200, ReplyObj.ToJSON);
       finally
         ReplyObj.Free;
