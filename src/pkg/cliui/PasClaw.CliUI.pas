@@ -36,10 +36,24 @@ function  RenderCommandHelp(const Use, Short, Long, Example: string;
 implementation
 
 uses
-  PasClaw.Utils;
+  PasClaw.Utils
+  {$IFDEF MSWINDOWS}
+  , {$IFDEF FPC}Windows{$ELSE}Winapi.Windows{$ENDIF}
+  {$ENDIF}
+  ;
 
 var
   GNoColor: Boolean = False;
+
+{$IFDEF MSWINDOWS}
+procedure EnableUTF8Console;
+begin
+  { Force UTF-8 console code pages on Windows so Unicode banner/panel glyphs
+    (█, ╔, ┌, etc.) are not interpreted via legacy ANSI/OEM encodings. }
+  SetConsoleCP(CP_UTF8);
+  SetConsoleOutputCP(CP_UTF8);
+end;
+{$ENDIF}
 
 procedure SetAnsi(Disabled: Boolean);
 begin
@@ -77,6 +91,9 @@ end;
 
 procedure CliUI_Init(NoColor: Boolean);
 begin
+  {$IFDEF MSWINDOWS}
+  EnableUTF8Console;
+  {$ENDIF}
   GNoColor := NoColor;
   SetAnsi(NoColor);
 end;
