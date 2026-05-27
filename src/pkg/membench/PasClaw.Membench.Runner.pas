@@ -44,9 +44,19 @@ implementation
 
 uses
   Classes, DateUtils,
+  {$IFNDEF FPC}IOUtils,{$ENDIF}
   PasClaw.Memory,
   PasClaw.Providers.Types,
   PasClaw.Utils;
+
+function SystemTempDir: string;
+begin
+  {$IFDEF FPC}
+  Result := GetTempDir;
+  {$ELSE}
+  Result := TPath.GetTempPath;
+  {$ENDIF}
+end;
 
 function DefaultMembenchOpts: TMembenchOpts;
 begin
@@ -105,7 +115,7 @@ begin
   Result.LoadSeconds    := 0;
 
   if Opts.OutDir <> '' then Home := Opts.OutDir
-  else                      Home := GetTempDir;
+  else                      Home := SystemTempDir;
 
   SessionId := 'membench-' + FormatDateTime('yyyymmdd-hhnnsszzz', Now);
   Log := NewMemoryLog(Home, SessionId);
