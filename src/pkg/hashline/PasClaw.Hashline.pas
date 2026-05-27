@@ -43,12 +43,11 @@ uses
   SysUtils, Classes;
 
 const
-  { Use literal Unicode characters so each compiler stores them in its
-    native `string` form: Delphi UnicodeString = one WideChar per
-    codepoint, FPC {$MODE DELPHI} {$H+} = UTF-8 AnsiString = multi-byte
-    encoding. Length() and Copy() are unit-consistent per compiler
-    (chars in Delphi, bytes in FPC), so the same parsing code works
-    in both. }
+  (* Use literal Unicode characters so each compiler stores them in its
+     native string form: Delphi UnicodeString = one WideChar per
+     codepoint, FPC mode-delphi UTF-8 AnsiString = multi-byte encoding.
+     Length() and Copy() are unit-consistent per compiler (chars in
+     Delphi, bytes in FPC), so the same parsing code works in both. *)
   HL_FILE_PREFIX     = '¶';
   HL_FILE_HASH_SEP   = '#';
   HL_LINE_BODY_SEP   = ':';
