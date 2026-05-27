@@ -13,11 +13,16 @@ interface
 
 uses
   SysUtils, Classes,
-  {$IFNDEF FPC}Types,{$ENDIF}
   PasClaw.Tools.Types,
   PasClaw.Providers.Types;
 
 type
+  {$IFNDEF FPC}
+  { Delphi's RTL doesn't declare TStringArray (FPC's SysUtils does); declare
+    it locally so the cross-compiler signature below resolves. }
+  TStringArray = array of string;
+  {$ENDIF}
+
   TToolRegistry = class
   private
     FTools: TToolList;
