@@ -13,6 +13,7 @@ interface
 
 uses
   SysUtils, Classes,
+  {$IFNDEF FPC}Types,{$ENDIF}
   PasClaw.Tools.Types,
   PasClaw.Providers.Types;
 
@@ -27,7 +28,7 @@ type
     function  Names: TStringArray;
     function  Count: Integer;
     function  ToProviderDefs: TToolDefinitionArray;
-    function  Dispatch(const Name, ArgsJSON: string; out ErrMsg: string): string;
+    function  RunTool(const Name, ArgsJSON: string; out ErrMsg: string): string;
   end;
 
 implementation
@@ -91,7 +92,7 @@ begin
   end;
 end;
 
-function TToolRegistry.Dispatch(const Name, ArgsJSON: string; out ErrMsg: string): string;
+function TToolRegistry.RunTool(const Name, ArgsJSON: string; out ErrMsg: string): string;
 var
   T: TTool;
 begin

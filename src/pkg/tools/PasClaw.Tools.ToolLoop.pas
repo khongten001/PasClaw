@@ -119,7 +119,7 @@ begin
       Err := '';
       ResultText := '';
       if Cfg.Registry <> nil then
-        ResultText := Cfg.Registry.Dispatch(Resp.ToolCalls[i].Func.Name,
+        ResultText := Cfg.Registry.RunTool(Resp.ToolCalls[i].Func.Name,
                                             Resp.ToolCalls[i].Func.Arguments,
                                             Err)
       else

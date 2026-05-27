@@ -288,7 +288,7 @@ function RunSkill(Reg: TToolRegistry; const Name, ArgsJSON: string; out ErrMsg: 
 begin
   ErrMsg := '';
   if Reg = nil then begin ErrMsg := 'no registry'; Exit(''); end;
-  Result := Reg.Dispatch('skill_' + Name, ArgsJSON, ErrMsg);
+  Result := Reg.RunTool('skill_' + Name, ArgsJSON, ErrMsg);
 end;
 
 initialization
