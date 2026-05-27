@@ -24,28 +24,26 @@ procedure RegisterShellTool(R: TToolRegistry);
 implementation
 
 uses
-  Process,
-  fpjson, jsonparser,
+  {$IFDEF FPC} Process, {$ENDIF}
+  PasClaw.JSON,
   PasClaw.Logger;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
-  J: TJSONData;
-  Obj: TJSONObject;
+  Obj: TJsonObject;
 begin
   Result := False;
   V := '';
   if Trim(ArgsJSON) = '' then Exit;
   try
-    J := GetJSON(ArgsJSON);
+    Obj := TJsonObject.Parse(ArgsJSON);
+    if Obj = nil then Exit;
     try
-      if not (J is TJSONObject) then Exit;
-      Obj := TJSONObject(J);
-      if Obj.IndexOfName(Field) < 0 then Exit;
-      V := Obj.Get(Field, '');
+      if not Obj.Has(Field) then Exit;
+      V := Obj.GetStr(Field, '');
       Result := V <> '';
     finally
-      J.Free;
+      Obj.Free;
     end;
   except
     Result := False;
@@ -66,6 +64,7 @@ begin
     (Pos('shutdown -h', L) > 0);
 end;
 
+{$IFDEF FPC}
 function RunShell(const Cmd: string; out ExitCode: Integer): string;
 var
   P: TProcess;
@@ -122,6 +121,19 @@ begin
     P.Free;
   end;
 end;
+{$ELSE}
+function RunShell(const Cmd: string; out ExitCode: Integer): string;
+begin
+  { Delphi-native shell exec stub.
+    A real Delphi build needs to call CreateProcess (Windows) or
+    Posix.Spawn / fork+execve (Linux/macOS). Until that's ported the
+    shell_exec tool returns a clear error so the agent loop can
+    surface it. }
+  ExitCode := 127;
+  Result := '(shell_exec not implemented in Delphi build yet — see ' +
+            'src/pkg/tools/PasClaw.Tools.Shell.pas)';
+end;
+{$ENDIF}
 
 function Tool_Shell(const ArgsJSON: string; out ErrMsg: string): string;
 var

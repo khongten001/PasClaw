@@ -50,7 +50,7 @@ function RenderTemplate(const Template, ArgsJSON: string): string;
 implementation
 
 uses
-  Process,
+  {$IFDEF FPC} Process, {$ENDIF}
   PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Logger;
@@ -169,6 +169,7 @@ begin
   end;
 end;
 
+{$IFDEF FPC}
 function RunShell(const Cmd: string; out ExitCode: Integer): string;
 var
   P: TProcess;
@@ -213,6 +214,14 @@ begin
     P.Free;
   end;
 end;
+{$ELSE}
+function RunShell(const Cmd: string; out ExitCode: Integer): string;
+begin
+  { Delphi-native skill shell exec stub. See Tools.Shell for the same note. }
+  ExitCode := 127;
+  Result := '(shell skills not implemented in Delphi build yet)';
+end;
+{$ENDIF}
 
 function RunShellSkill(Slot: Integer; const ArgsJSON: string; out ErrMsg: string): string;
 var

@@ -44,7 +44,7 @@ type
 implementation
 
 uses
-  fpjson, jsonparser,
+  PasClaw.JSON,
   PasClaw.Providers.HTTP,
   PasClaw.Providers.Stream,
   PasClaw.Logger;
@@ -96,116 +96,107 @@ function BuildRequest(const Messages: array of TMessage;
                       const Model:    string;
                       const Options:  TChatOptions): string;
 var
-  Root: TJSONObject;
-  MsgArr, ToolArr, ContentArr: TJSONArray;
-  Msg, Block, ToolObj: TJSONObject;
+  Root, Block, ToolObj, Thinking, Msg, EmptyInput: TJsonObject;
+  MsgArr, ToolArr, ContentArr: TJsonArray;
   i, j: Integer;
   Sys: string;
-  ToolSchema: TJSONData;
 begin
-  Root := TJSONObject.Create;
+  Root := TJsonObject.Create;
   try
-    Root.Add('model', Model);
-    Root.Add('max_tokens', Options.MaxTokens);
-    if Options.Temperature > 0 then Root.Add('temperature', Options.Temperature);
+    Root.PutStr('model',      Model);
+    Root.PutInt('max_tokens', Options.MaxTokens);
+    if Options.Temperature > 0 then Root.PutFloat('temperature', Options.Temperature);
 
     { System prompt: prefer Options.SystemPrompt, else first system message. }
     Sys := Options.SystemPrompt;
     for i := 0 to High(Messages) do
       if (Messages[i].Role = mrSystem) and (Sys = '') then
         Sys := Messages[i].Content;
-    if Sys <> '' then Root.Add('system', Sys);
+    if Sys <> '' then Root.PutStr('system', Sys);
 
     if Options.ThinkingLevel <> '' then
     begin
-      Block := TJSONObject.Create;
-      Block.Add('type', 'enabled');
-      if Options.ThinkingLevel = 'low'    then Block.Add('budget_tokens', 1024)
-      else if Options.ThinkingLevel = 'high' then Block.Add('budget_tokens', 8192)
-      else Block.Add('budget_tokens', 2048);
-      Root.Add('thinking', Block);
+      Thinking := TJsonObject.Create;
+      Thinking.PutStr('type', 'enabled');
+      if      Options.ThinkingLevel = 'low'  then Thinking.PutInt('budget_tokens', 1024)
+      else if Options.ThinkingLevel = 'high' then Thinking.PutInt('budget_tokens', 8192)
+      else                                        Thinking.PutInt('budget_tokens', 2048);
+      Root.PutObject('thinking', Thinking);
     end;
 
-    MsgArr := TJSONArray.Create;
+    MsgArr := TJsonArray.Create;
     for i := 0 to High(Messages) do
     begin
       if Messages[i].Role = mrSystem then Continue;
-      Msg := TJSONObject.Create;
-      Msg.Add('role', RoleForAnthropic(Messages[i].Role));
-      ContentArr := TJSONArray.Create;
+      Msg := TJsonObject.Create;
+      Msg.PutStr('role', RoleForAnthropic(Messages[i].Role));
+      ContentArr := TJsonArray.Create;
       if Messages[i].Role = mrTool then
       begin
-        Block := TJSONObject.Create;
-        Block.Add('type', 'tool_result');
-        Block.Add('tool_use_id', Messages[i].ToolCallId);
-        Block.Add('content', Messages[i].Content);
-        ContentArr.Add(Block);
+        Block := TJsonObject.Create;
+        Block.PutStr('type',        'tool_result');
+        Block.PutStr('tool_use_id', Messages[i].ToolCallId);
+        Block.PutStr('content',     Messages[i].Content);
+        ContentArr.AddObject(Block);
       end
       else if Length(Messages[i].ToolCalls) > 0 then
       begin
         if Messages[i].Content <> '' then
         begin
-          Block := TJSONObject.Create;
-          Block.Add('type', 'text');
-          Block.Add('text', Messages[i].Content);
-          ContentArr.Add(Block);
+          Block := TJsonObject.Create;
+          Block.PutStr('type', 'text');
+          Block.PutStr('text', Messages[i].Content);
+          ContentArr.AddObject(Block);
         end;
         for j := 0 to High(Messages[i].ToolCalls) do
         begin
-          Block := TJSONObject.Create;
-          Block.Add('type', 'tool_use');
-          Block.Add('id',    Messages[i].ToolCalls[j].Id);
-          Block.Add('name',  Messages[i].ToolCalls[j].Func.Name);
+          Block := TJsonObject.Create;
+          Block.PutStr('type', 'tool_use');
+          Block.PutStr('id',   Messages[i].ToolCalls[j].Id);
+          Block.PutStr('name', Messages[i].ToolCalls[j].Func.Name);
           if Messages[i].ToolCalls[j].Func.Arguments <> '' then
-          begin
-            try
-              Block.Add('input', GetJSON(Messages[i].ToolCalls[j].Func.Arguments));
-            except
-              Block.Add('input', TJSONObject.Create);
-            end;
-          end
+            Block.PutRaw('input', Messages[i].ToolCalls[j].Func.Arguments)
           else
-            Block.Add('input', TJSONObject.Create);
-          ContentArr.Add(Block);
+          begin
+            EmptyInput := TJsonObject.Create;
+            Block.PutObject('input', EmptyInput);
+          end;
+          ContentArr.AddObject(Block);
         end;
       end
       else
       begin
-        Block := TJSONObject.Create;
-        Block.Add('type', 'text');
-        Block.Add('text', Messages[i].Content);
-        ContentArr.Add(Block);
+        Block := TJsonObject.Create;
+        Block.PutStr('type', 'text');
+        Block.PutStr('text', Messages[i].Content);
+        ContentArr.AddObject(Block);
       end;
-      Msg.Add('content', ContentArr);
-      MsgArr.Add(Msg);
+      Msg.PutArray('content', ContentArr);
+      MsgArr.AddObject(Msg);
     end;
-    Root.Add('messages', MsgArr);
+    Root.PutArray('messages', MsgArr);
 
     if Length(Tools) > 0 then
     begin
-      ToolArr := TJSONArray.Create;
+      ToolArr := TJsonArray.Create;
       for i := 0 to High(Tools) do
       begin
-        ToolObj := TJSONObject.Create;
-        ToolObj.Add('name', Tools[i].Name);
-        if Tools[i].Description <> '' then ToolObj.Add('description', Tools[i].Description);
+        ToolObj := TJsonObject.Create;
+        ToolObj.PutStr('name', Tools[i].Name);
+        if Tools[i].Description <> '' then ToolObj.PutStr('description', Tools[i].Description);
         if Tools[i].Schema <> '' then
-        begin
-          try
-            ToolSchema := GetJSON(Tools[i].Schema);
-            ToolObj.Add('input_schema', ToolSchema);
-          except
-            ToolObj.Add('input_schema', TJSONObject.Create);
-          end;
-        end
+          ToolObj.PutRaw('input_schema', Tools[i].Schema)
         else
-          ToolObj.Add('input_schema', TJSONObject.Create);
-        ToolArr.Add(ToolObj);
+        begin
+          EmptyInput := TJsonObject.Create;
+          ToolObj.PutObject('input_schema', EmptyInput);
+        end;
+        ToolArr.AddObject(ToolObj);
       end;
-      Root.Add('tools', ToolArr);
+      Root.PutArray('tools', ToolArr);
     end;
 
-    Result := Root.AsJSON;
+    Result := Root.ToJSON;
   finally
     Root.Free;
   end;
@@ -213,15 +204,12 @@ end;
 
 procedure ParseResponse(const Body: string; var Resp: TLLMResponse);
 var
-  Root: TJSONData;
-  Obj: TJSONObject;
-  Arr: TJSONArray;
+  Obj, Block, Usage, InputObj: TJsonObject;
+  Arr: TJsonArray;
+  InputArr: TJsonArray;
   i: Integer;
-  Block: TJSONObject;
   Kind, Text: string;
   TC: TToolCall;
-  Usage: TJSONObject;
-  Input: TJSONData;
 begin
   Resp.Content := '';
   Resp.FinishReason := '';
@@ -230,53 +218,72 @@ begin
   Resp.Usage.OutputTokens := 0;
   SetLength(Resp.ToolCalls, 0);
   if Trim(Body) = '' then Exit;
-  Root := GetJSON(Body);
-  if not (Root is TJSONObject) then begin Root.Free; Exit; end;
-  Obj := TJSONObject(Root);
+  Obj := TJsonObject.Parse(Body);
+  if Obj = nil then Exit;
   try
-    Resp.Model        := Obj.Get('model', '');
-    Resp.FinishReason := Obj.Get('stop_reason', '');
-    if Obj.IndexOfName('content') >= 0 then
-    begin
-      Arr := Obj.Arrays['content'];
+    Resp.Model        := Obj.GetStr('model',       '');
+    Resp.FinishReason := Obj.GetStr('stop_reason', '');
+    Arr := Obj.ChildArray('content');
+    if Arr <> nil then
+    try
       for i := 0 to Arr.Count - 1 do
       begin
-        Block := TJSONObject(Arr[i]);
-        Kind := Block.Get('type', '');
-        if Kind = 'text' then
-        begin
-          Text := Block.Get('text', '');
-          if Resp.Content <> '' then Resp.Content := Resp.Content + sLineBreak;
-          Resp.Content := Resp.Content + Text;
-        end
-        else if Kind = 'tool_use' then
-        begin
-          TC.Id        := Block.Get('id', '');
-          TC.Kind      := 'function';
-          TC.Func.Name := Block.Get('name', '');
-          if Block.IndexOfName('input') >= 0 then
+        Block := Arr.ItemObject(i);
+        if Block = nil then Continue;
+        try
+          Kind := Block.GetStr('type', '');
+          if Kind = 'text' then
           begin
-            Input := Block.Find('input');
-            if Input <> nil then TC.Func.Arguments := Input.AsJSON
-            else TC.Func.Arguments := '{}';
+            Text := Block.GetStr('text', '');
+            if Resp.Content <> '' then Resp.Content := Resp.Content + sLineBreak;
+            Resp.Content := Resp.Content + Text;
           end
-          else
-            TC.Func.Arguments := '{}';
-          SetLength(Resp.ToolCalls, Length(Resp.ToolCalls) + 1);
-          Resp.ToolCalls[High(Resp.ToolCalls)] := TC;
+          else if Kind = 'tool_use' then
+          begin
+            TC.Id        := Block.GetStr('id',   '');
+            TC.Kind      := 'function';
+            TC.Func.Name := Block.GetStr('name', '');
+            InputObj := Block.ChildObject('input');
+            if InputObj <> nil then
+            try
+              TC.Func.Arguments := InputObj.ToJSON;
+            finally
+              InputObj.Free;
+            end
+            else
+            begin
+              InputArr := Block.ChildArray('input');
+              if InputArr <> nil then
+              try
+                TC.Func.Arguments := InputArr.ToJSON;
+              finally
+                InputArr.Free;
+              end
+              else
+                TC.Func.Arguments := '{}';
+            end;
+            SetLength(Resp.ToolCalls, Length(Resp.ToolCalls) + 1);
+            Resp.ToolCalls[High(Resp.ToolCalls)] := TC;
+          end;
+        finally
+          Block.Free;
         end;
       end;
+    finally
+      Arr.Free;
     end;
-    if Obj.IndexOfName('usage') >= 0 then
-    begin
-      Usage := Obj.Objects['usage'];
-      Resp.Usage.InputTokens        := Usage.Get('input_tokens',  0);
-      Resp.Usage.OutputTokens       := Usage.Get('output_tokens', 0);
-      Resp.Usage.CacheReadTokens    := Usage.Get('cache_read_input_tokens', 0);
-      Resp.Usage.CacheCreatedTokens := Usage.Get('cache_creation_input_tokens', 0);
+    Usage := Obj.ChildObject('usage');
+    if Usage <> nil then
+    try
+      Resp.Usage.InputTokens        := Usage.GetInt('input_tokens',  0);
+      Resp.Usage.OutputTokens       := Usage.GetInt('output_tokens', 0);
+      Resp.Usage.CacheReadTokens    := Usage.GetInt('cache_read_input_tokens',     0);
+      Resp.Usage.CacheCreatedTokens := Usage.GetInt('cache_creation_input_tokens', 0);
+    finally
+      Usage.Free;
     end;
   finally
-    Root.Free;
+    Obj.Free;
   end;
 end;
 
@@ -288,7 +295,6 @@ var
   Body, URL, UseModel: string;
   Resp: THTTPResult;
   Headers: array of THeaderPair;
-  ErrJSON: TJSONData;
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1/messages';
@@ -309,20 +315,8 @@ begin
     Exit;
   end;
 
-  { Surface API error message rather than swallowing it. }
   if Resp.Body <> '' then
-  begin
-    try
-      ErrJSON := GetJSON(Resp.Body);
-      try
-        Result.Content := Format('anthropic error %d: %s', [Resp.StatusCode, ErrJSON.AsJSON]);
-      finally
-        ErrJSON.Free;
-      end;
-    except
-      Result.Content := Format('anthropic error %d: %s', [Resp.StatusCode, Resp.Body]);
-    end;
-  end
+    Result.Content := Format('anthropic error %d: %s', [Resp.StatusCode, Resp.Body])
   else
     Result.Content := Format('anthropic error: status=%d msg=%s', [Resp.StatusCode, Resp.ErrorMsg]);
   Result.FinishReason := 'error';
@@ -335,62 +329,70 @@ var
 
 procedure HandleAnthropicSSE(const Event, Data: string);
 var
-  Obj: TJSONData;
-  Root, Delta, Usage: TJSONObject;
+  Root, Delta, Usage, MsgObj: TJsonObject;
   Kind, Text: string;
   Chunk: TStreamChunk;
 begin
   if Data = '' then Exit;
+  Root := TJsonObject.Parse(Data);
+  if Root = nil then Exit;
   try
-    Obj := GetJSON(Data);
-  except
-    Exit;
-  end;
-  try
-    if not (Obj is TJSONObject) then Exit;
-    Root := TJSONObject(Obj);
-    Kind := Root.Get('type', Event);
+    Kind := Root.GetStr('type', Event);
 
     if Kind = 'content_block_delta' then
     begin
-      if Root.IndexOfName('delta') < 0 then Exit;
-      Delta := Root.Objects['delta'];
-      if Delta.Get('type', '') = 'text_delta' then
-      begin
-        Text := Delta.Get('text', '');
-        if Text <> '' then
+      Delta := Root.ChildObject('delta');
+      if Delta = nil then Exit;
+      try
+        if Delta.GetStr('type', '') = 'text_delta' then
         begin
-          GStreamAcc := GStreamAcc + Text;
-          Chunk.Kind := 'text';
-          Chunk.Text := Text;
-          if Assigned(GStreamCB) then GStreamCB(Chunk);
+          Text := Delta.GetStr('text', '');
+          if Text <> '' then
+          begin
+            GStreamAcc := GStreamAcc + Text;
+            Chunk.Kind := 'text';
+            Chunk.Text := Text;
+            if Assigned(GStreamCB) then GStreamCB(Chunk);
+          end;
         end;
+      finally
+        Delta.Free;
       end;
     end
     else if Kind = 'message_delta' then
     begin
-      if Root.IndexOfName('usage') >= 0 then
-      begin
-        Usage := Root.Objects['usage'];
-        GStreamLast.Usage.OutputTokens := Usage.Get('output_tokens', GStreamLast.Usage.OutputTokens);
+      Usage := Root.ChildObject('usage');
+      if Usage <> nil then
+      try
+        GStreamLast.Usage.OutputTokens :=
+          Usage.GetInt('output_tokens', GStreamLast.Usage.OutputTokens);
+      finally
+        Usage.Free;
       end;
-      if Root.IndexOfName('delta') >= 0 then
-      begin
-        Delta := Root.Objects['delta'];
-        GStreamLast.FinishReason := Delta.Get('stop_reason', GStreamLast.FinishReason);
+      Delta := Root.ChildObject('delta');
+      if Delta <> nil then
+      try
+        GStreamLast.FinishReason :=
+          Delta.GetStr('stop_reason', GStreamLast.FinishReason);
+      finally
+        Delta.Free;
       end;
     end
     else if Kind = 'message_start' then
     begin
-      if Root.IndexOfName('message') >= 0 then
-      begin
-        Delta := Root.Objects['message'];
-        GStreamLast.Model := Delta.Get('model', GStreamLast.Model);
-        if Delta.IndexOfName('usage') >= 0 then
-        begin
-          Usage := Delta.Objects['usage'];
-          GStreamLast.Usage.InputTokens := Usage.Get('input_tokens', 0);
+      MsgObj := Root.ChildObject('message');
+      if MsgObj <> nil then
+      try
+        GStreamLast.Model := MsgObj.GetStr('model', GStreamLast.Model);
+        Usage := MsgObj.ChildObject('usage');
+        if Usage <> nil then
+        try
+          GStreamLast.Usage.InputTokens := Usage.GetInt('input_tokens', 0);
+        finally
+          Usage.Free;
         end;
+      finally
+        MsgObj.Free;
       end;
     end
     else if Kind = 'message_stop' then
@@ -400,7 +402,7 @@ begin
       if Assigned(GStreamCB) then GStreamCB(Chunk);
     end;
   finally
-    Obj.Free;
+    Root.Free;
   end;
 end;
 
@@ -415,8 +417,7 @@ var
   Opts: TChatOptions;
   Status: Integer;
   Err: string;
-  Root: TJSONObject;
-  Stream: TJSONBoolean;
+  Root: TJsonObject;
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL := FAPIBase + '/v1/messages';
@@ -425,19 +426,17 @@ begin
   Opts := Options;
   Opts.Stream := True;
   Body := BuildRequest(Messages, Tools, UseModel, Opts);
-  try
-    Root := TJSONObject(GetJSON(Body));
-    try
-      Stream := TJSONBoolean.Create(True);
-      Root.Add('stream', Stream);
-      Body := Root.AsJSON;
-    finally
-      Root.Free;
-    end;
-  except
-    { fall back to non-stream }
+  Root := TJsonObject.Parse(Body);
+  if Root = nil then
+  begin
     Result := Chat(Messages, Tools, UseModel, Options);
     Exit;
+  end;
+  try
+    Root.PutBool('stream', True);
+    Body := Root.ToJSON;
+  finally
+    Root.Free;
   end;
 
   SetLength(Headers, 2);

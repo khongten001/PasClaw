@@ -84,7 +84,7 @@ implementation
 
 uses
   PasClaw.Utils,
-  fpjson, jsonparser;
+  PasClaw.JSON;
 
 constructor TConfig.Create;
 begin
@@ -96,178 +96,210 @@ begin
   Gateway.Port     := 8088;
 end;
 
-function ProviderToJSON(const P: TProviderConfig): TJSONObject;
+function ProviderToJSON(const P: TProviderConfig): TJsonObject;
 begin
-  Result := TJSONObject.Create;
-  Result.Add('name',     P.Name);
-  Result.Add('kind',     P.Kind);
-  Result.Add('api_base', P.APIBase);
-  Result.Add('api_key',  P.APIKey);
-  Result.Add('model',    P.Model);
+  Result := TJsonObject.Create;
+  Result.PutStr('name',     P.Name);
+  Result.PutStr('kind',     P.Kind);
+  Result.PutStr('api_base', P.APIBase);
+  Result.PutStr('api_key',  P.APIKey);
+  Result.PutStr('model',    P.Model);
 end;
 
-function MCPToJSON(const M: TMCPServer): TJSONObject;
+function MCPToJSON(const M: TMCPServer): TJsonObject;
 begin
-  Result := TJSONObject.Create;
-  Result.Add('name',    M.Name);
-  Result.Add('cmd',     M.Cmd);
-  Result.Add('args',    M.Args);
-  Result.Add('env',     M.Env);
-  Result.Add('enabled', M.Enabled);
+  Result := TJsonObject.Create;
+  Result.PutStr ('name',    M.Name);
+  Result.PutStr ('cmd',     M.Cmd);
+  Result.PutStr ('args',    M.Args);
+  Result.PutStr ('env',     M.Env);
+  Result.PutBool('enabled', M.Enabled);
 end;
 
-function CronToJSON(const C: TCronEntry): TJSONObject;
+function CronToJSON(const C: TCronEntry): TJsonObject;
 begin
-  Result := TJSONObject.Create;
-  Result.Add('id',      C.Id);
-  Result.Add('spec',    C.Spec);
-  Result.Add('skill',   C.Skill);
-  Result.Add('args',    C.Args);
-  Result.Add('enabled', C.Enabled);
+  Result := TJsonObject.Create;
+  Result.PutStr ('id',      C.Id);
+  Result.PutStr ('spec',    C.Spec);
+  Result.PutStr ('skill',   C.Skill);
+  Result.PutStr ('args',    C.Args);
+  Result.PutBool('enabled', C.Enabled);
 end;
 
-function SkillToJSON(const S: TSkillEntry): TJSONObject;
+function SkillToJSON(const S: TSkillEntry): TJsonObject;
 begin
-  Result := TJSONObject.Create;
-  Result.Add('name',    S.Name);
-  Result.Add('source',  S.Source);
-  Result.Add('enabled', S.Enabled);
+  Result := TJsonObject.Create;
+  Result.PutStr ('name',    S.Name);
+  Result.PutStr ('source',  S.Source);
+  Result.PutBool('enabled', S.Enabled);
 end;
 
 function TConfig.ToJSON: string;
 var
-  Root, Gw: TJSONObject;
-  Arr: TJSONArray;
+  Root, Gw, Tmp: TJsonObject;
+  Arr: TJsonArray;
   i: Integer;
 begin
-  Root := TJSONObject.Create;
+  Root := TJsonObject.Create;
   try
-    Root.Add('default_provider', DefaultProvider);
-    Root.Add('default_model',    DefaultModel);
+    Root.PutStr('default_provider', DefaultProvider);
+    Root.PutStr('default_model',    DefaultModel);
 
-    Gw := TJSONObject.Create;
-    Gw.Add('log_level', Gateway.LogLevel);
-    Gw.Add('bind_addr', Gateway.BindAddr);
-    Gw.Add('port',      Gateway.Port);
-    Root.Add('gateway', Gw);
+    Gw := TJsonObject.Create;
+    Gw.PutStr ('log_level', Gateway.LogLevel);
+    Gw.PutStr ('bind_addr', Gateway.BindAddr);
+    Gw.PutInt ('port',      Gateway.Port);
+    Root.PutObject('gateway', Gw);
 
-    Arr := TJSONArray.Create;
-    for i := 0 to High(Providers) do Arr.Add(ProviderToJSON(Providers[i]));
-    Root.Add('providers', Arr);
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Providers) do
+    begin
+      Tmp := ProviderToJSON(Providers[i]);
+      Arr.AddObject(Tmp);
+    end;
+    Root.PutArray('providers', Arr);
 
-    Arr := TJSONArray.Create;
-    for i := 0 to High(MCPServers) do Arr.Add(MCPToJSON(MCPServers[i]));
-    Root.Add('mcp_servers', Arr);
+    Arr := TJsonArray.Create;
+    for i := 0 to High(MCPServers) do
+    begin
+      Tmp := MCPToJSON(MCPServers[i]);
+      Arr.AddObject(Tmp);
+    end;
+    Root.PutArray('mcp_servers', Arr);
 
-    Arr := TJSONArray.Create;
-    for i := 0 to High(Crons) do Arr.Add(CronToJSON(Crons[i]));
-    Root.Add('crons', Arr);
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Crons) do
+    begin
+      Tmp := CronToJSON(Crons[i]);
+      Arr.AddObject(Tmp);
+    end;
+    Root.PutArray('crons', Arr);
 
-    Arr := TJSONArray.Create;
-    for i := 0 to High(Skills) do Arr.Add(SkillToJSON(Skills[i]));
-    Root.Add('skills', Arr);
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Skills) do
+    begin
+      Tmp := SkillToJSON(Skills[i]);
+      Arr.AddObject(Tmp);
+    end;
+    Root.PutArray('skills', Arr);
 
-    Result := Root.FormatJSON;
+    Result := Root.ToJSON;
   finally
     Root.Free;
   end;
 end;
-
-procedure ReadProviders(Arr: TJSONArray; var Dest: array of TProviderConfig); forward;
 
 procedure TConfig.FromJSON(const S: string);
 var
-  Root: TJSONObject;
-  Obj: TJSONObject;
-  Arr: TJSONArray;
+  Root, Obj, Item: TJsonObject;
+  Arr: TJsonArray;
   i: Integer;
-  Data: TJSONData;
 begin
   if Trim(S) = '' then Exit;
-  Data := GetJSON(S);
-  if not (Data is TJSONObject) then
-  begin
-    Data.Free;
-    Exit;
-  end;
-  Root := TJSONObject(Data);
+  Root := TJsonObject.Parse(S);
+  if Root = nil then Exit;
   try
-    DefaultProvider := Root.Get('default_provider', DefaultProvider);
-    DefaultModel    := Root.Get('default_model',    DefaultModel);
+    DefaultProvider := Root.GetStr('default_provider', DefaultProvider);
+    DefaultModel    := Root.GetStr('default_model',    DefaultModel);
 
-    if Root.IndexOfName('gateway') >= 0 then
-    begin
-      Obj := Root.Objects['gateway'];
-      Gateway.LogLevel := Obj.Get('log_level', Gateway.LogLevel);
-      Gateway.BindAddr := Obj.Get('bind_addr', Gateway.BindAddr);
-      Gateway.Port     := Obj.Get('port',      Gateway.Port);
+    Obj := Root.ChildObject('gateway');
+    if Obj <> nil then
+    try
+      Gateway.LogLevel := Obj.GetStr('log_level', Gateway.LogLevel);
+      Gateway.BindAddr := Obj.GetStr('bind_addr', Gateway.BindAddr);
+      Gateway.Port     := Obj.GetInt('port',      Gateway.Port);
+    finally
+      Obj.Free;
     end;
 
-    if Root.IndexOfName('providers') >= 0 then
-    begin
-      Arr := Root.Arrays['providers'];
+    Arr := Root.ChildArray('providers');
+    if Arr <> nil then
+    try
       SetLength(Providers, Arr.Count);
       for i := 0 to Arr.Count - 1 do
       begin
-        Obj := TJSONObject(Arr[i]);
-        Providers[i].Name    := Obj.Get('name',     '');
-        Providers[i].Kind    := Obj.Get('kind',     '');
-        Providers[i].APIBase := Obj.Get('api_base', '');
-        Providers[i].APIKey  := Obj.Get('api_key',  '');
-        Providers[i].Model   := Obj.Get('model',    '');
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          Providers[i].Name    := Item.GetStr('name',     '');
+          Providers[i].Kind    := Item.GetStr('kind',     '');
+          Providers[i].APIBase := Item.GetStr('api_base', '');
+          Providers[i].APIKey  := Item.GetStr('api_key',  '');
+          Providers[i].Model   := Item.GetStr('model',    '');
+        finally
+          Item.Free;
+        end;
       end;
+    finally
+      Arr.Free;
     end;
 
-    if Root.IndexOfName('mcp_servers') >= 0 then
-    begin
-      Arr := Root.Arrays['mcp_servers'];
+    Arr := Root.ChildArray('mcp_servers');
+    if Arr <> nil then
+    try
       SetLength(MCPServers, Arr.Count);
       for i := 0 to Arr.Count - 1 do
       begin
-        Obj := TJSONObject(Arr[i]);
-        MCPServers[i].Name    := Obj.Get('name',    '');
-        MCPServers[i].Cmd     := Obj.Get('cmd',     '');
-        MCPServers[i].Args    := Obj.Get('args',    '');
-        MCPServers[i].Env     := Obj.Get('env',     '');
-        MCPServers[i].Enabled := Obj.Get('enabled', True);
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          MCPServers[i].Name    := Item.GetStr ('name',    '');
+          MCPServers[i].Cmd     := Item.GetStr ('cmd',     '');
+          MCPServers[i].Args    := Item.GetStr ('args',    '');
+          MCPServers[i].Env     := Item.GetStr ('env',     '');
+          MCPServers[i].Enabled := Item.GetBool('enabled', True);
+        finally
+          Item.Free;
+        end;
       end;
+    finally
+      Arr.Free;
     end;
 
-    if Root.IndexOfName('crons') >= 0 then
-    begin
-      Arr := Root.Arrays['crons'];
+    Arr := Root.ChildArray('crons');
+    if Arr <> nil then
+    try
       SetLength(Crons, Arr.Count);
       for i := 0 to Arr.Count - 1 do
       begin
-        Obj := TJSONObject(Arr[i]);
-        Crons[i].Id      := Obj.Get('id',      '');
-        Crons[i].Spec    := Obj.Get('spec',    '');
-        Crons[i].Skill   := Obj.Get('skill',   '');
-        Crons[i].Args    := Obj.Get('args',    '');
-        Crons[i].Enabled := Obj.Get('enabled', True);
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          Crons[i].Id      := Item.GetStr ('id',      '');
+          Crons[i].Spec    := Item.GetStr ('spec',    '');
+          Crons[i].Skill   := Item.GetStr ('skill',   '');
+          Crons[i].Args    := Item.GetStr ('args',    '');
+          Crons[i].Enabled := Item.GetBool('enabled', True);
+        finally
+          Item.Free;
+        end;
       end;
+    finally
+      Arr.Free;
     end;
 
-    if Root.IndexOfName('skills') >= 0 then
-    begin
-      Arr := Root.Arrays['skills'];
+    Arr := Root.ChildArray('skills');
+    if Arr <> nil then
+    try
       SetLength(Skills, Arr.Count);
       for i := 0 to Arr.Count - 1 do
       begin
-        Obj := TJSONObject(Arr[i]);
-        Skills[i].Name    := Obj.Get('name',    '');
-        Skills[i].Source  := Obj.Get('source',  '');
-        Skills[i].Enabled := Obj.Get('enabled', True);
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          Skills[i].Name    := Item.GetStr ('name',    '');
+          Skills[i].Source  := Item.GetStr ('source',  '');
+          Skills[i].Enabled := Item.GetBool('enabled', True);
+        finally
+          Item.Free;
+        end;
       end;
+    finally
+      Arr.Free;
     end;
   finally
     Root.Free;
   end;
-end;
-
-procedure ReadProviders(Arr: TJSONArray; var Dest: array of TProviderConfig);
-begin
-  { stub helper retained for forward decl; logic inlined above }
 end;
 
 function GetHome: string;
