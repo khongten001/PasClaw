@@ -1,0 +1,19 @@
+PasClaw vendors the following Apache-2.0 licensed source files in
+src/pkg/vendor/dmvcframework/:
+
+  MVCFramework.Console.pas
+  dmvcframework.inc
+      Copyright (c) 2010-2026 Daniele Teti and the DMVCFramework Team
+      https://github.com/danieleteti/delphimvcframework
+
+  LoggerPro.AnsiColors.pas
+      Copyright (c) 2010-2026 Daniele Teti
+      https://github.com/danieleteti/loggerpro
+
+Both projects are distributed under the Apache License, Version 2.0
+(http://www.apache.org/licenses/LICENSE-2.0). The PasClaw build links
+these units verbatim under the Delphi build path (FPC builds use the
+fallback line-based TUI in PasClaw.TUI and do not require these files).
+
+No modifications were made to the upstream sources beyond placing them
+in this directory. Updates can be re-vendored from upstream.
