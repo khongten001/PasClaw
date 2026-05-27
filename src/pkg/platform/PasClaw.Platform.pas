@@ -93,7 +93,7 @@ uses
     Winapi.Windows
   {$ELSE}
     Posix.Base, Posix.Unistd, Posix.Stdlib, Posix.SysWait,
-    Posix.Fcntl, Posix.Signal, Posix.SysTypes
+    Posix.Fcntl, Posix.Signal, Posix.SysTypes, Posix.SysSelect
   {$ENDIF}{$ENDIF};
 
 {$IFDEF FPC}
@@ -394,6 +394,7 @@ var
   Buf: array[0..ReadBufferSize - 1] of Byte;
   Total, N: Integer;
   Acc: TMemoryStream;
+  Bytes: TBytes;
 begin
   Result := -1;
   Output := '';
@@ -418,8 +419,13 @@ begin
     WaitForSingleObject(P.FProcHandle, INFINITE);
     P.Running;   { latches ExitCode via the side effect }
     Result := P.ExitCode;
-    SetLength(Output, Acc.Size);
-    if Acc.Size > 0 then begin Acc.Position := 0; Acc.ReadBuffer(Output[1], Acc.Size); end;
+    if Acc.Size > 0 then
+    begin
+      SetLength(Bytes, Acc.Size);
+      Acc.Position := 0;
+      Acc.ReadBuffer(Bytes[0], Acc.Size);
+      Output := TEncoding.UTF8.GetString(Bytes);
+    end;
   finally
     Acc.Free;
     Args.Free;
@@ -435,7 +441,12 @@ const
   STDOUT_FILENO = 1;
   STDERR_FILENO = 2;
 
-function pipe(fildes: array of Integer): Integer; cdecl;
+type
+  { Fixed-size pipe fd pair; pass by var so the C ABI receives a bare pointer,
+    not the (High,Ptr) pair that Delphi's open-array convention would send. }
+  TPipeFDs = array[0..1] of Integer;
+
+function pipe(var pipefds: TPipeFDs): Integer; cdecl;
   external libc name _PU + 'pipe';
 function execvp(const path: PAnsiChar; const argv: PPAnsiChar): Integer; cdecl;
   external libc name _PU + 'execvp';
@@ -458,11 +469,11 @@ end;
 
 function TStdioProcess.Spawn(const Cmd: string; Args: TStrings): Boolean;
 var
-  StdinPipe, StdoutPipe: array[0..1] of Integer;
+  StdinPipe, StdoutPipe: TPipeFDs;
   Pid: pid_t;
   i: Integer;
   Argv: array of Pointer;
-  Argv0, ArgsI: TArray<RawByteString>;
+  ArgsI: array of RawByteString;
   Path: AnsiString;
 begin
   if FStarted then Exit(False);
@@ -576,6 +587,7 @@ var
   Buf: array[0..ReadBufferSize - 1] of Byte;
   Total, N, Status: Integer;
   Acc: TMemoryStream;
+  Bytes: TBytes;
 begin
   Result := -1;
   Output := '';
@@ -599,8 +611,13 @@ begin
     end;
     waitpid(P.FPid, Status, 0);
     if WIFEXITED(Status) then Result := WEXITSTATUS(Status) else Result := -1;
-    SetLength(Output, Acc.Size);
-    if Acc.Size > 0 then begin Acc.Position := 0; Acc.ReadBuffer(Output[1], Acc.Size); end;
+    if Acc.Size > 0 then
+    begin
+      SetLength(Bytes, Acc.Size);
+      Acc.Position := 0;
+      Acc.ReadBuffer(Bytes[0], Acc.Size);
+      Output := TEncoding.UTF8.GetString(Bytes);
+    end;
   finally
     Acc.Free;
     Args.Free;

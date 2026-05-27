@@ -266,4 +266,14 @@
 
     <Import Project="$(BDS)\Bin\CodeGear.Delphi.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Delphi.Targets')"/>
     <Import Project="$(APPDATA)\Embarcadero\$(BDSAPPDATABASEDIR)\$(PRODUCTVERSION)\UserTools.proj" Condition="Exists('$(APPDATA)\Embarcadero\$(BDSAPPDATABASEDIR)\$(PRODUCTVERSION)\UserTools.proj')"/>
+
+    <!--
+      Post-import override.  CodeGear.Delphi.Targets may reset DCC_Namespace
+      with its own defaults; re-assert ours here so bare unit names like
+      "SysUtils" or "Classes" always resolve to their qualified counterparts
+      ("System.SysUtils", "System.Classes") regardless of IDE version.
+    -->
+    <PropertyGroup Condition="'$(Base)'!=''">
+        <DCC_Namespace>System;System.Net;System.Win;Xml;Data;Datasnap;Web;Soap;Winapi;Posix</DCC_Namespace>
+    </PropertyGroup>
 </Project>

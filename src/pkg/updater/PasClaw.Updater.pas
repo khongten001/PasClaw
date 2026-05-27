@@ -210,6 +210,7 @@ var
   Empty: array of THeaderPair;
   Resp: THTTPResult;
   Strm: TFileStream;
+  Bytes: TBytes;
 begin
   ErrMsg := '';
   SetLength(Empty, 0);
@@ -226,7 +227,11 @@ begin
     Strm := TFileStream.Create(DestPath, fmCreate);
     try
       if Resp.Body <> '' then
-        Strm.WriteBuffer(Resp.Body[1], Length(Resp.Body));
+      begin
+        Bytes := TEncoding.UTF8.GetBytes(Resp.Body);
+        if Length(Bytes) > 0 then
+          Strm.WriteBuffer(Bytes[0], Length(Bytes));
+      end;
     finally
       Strm.Free;
     end;
