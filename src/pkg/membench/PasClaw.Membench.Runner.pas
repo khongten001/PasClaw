@@ -119,7 +119,8 @@ begin
 
   SessionId := 'membench-' + FormatDateTime('yyyymmdd-hhnnsszzz', Now);
   Log := NewMemoryLog(Home, SessionId);
-  Path := IncludeTrailingPathDelimiter(Home) + 'workspace/memory/' + SessionId + '.ndjson';
+  { Match the path NewMemoryLog actually wrote — native separators throughout. }
+  Path := JoinPath(JoinPath(JoinPath(Home, 'workspace'), 'memory'), SessionId + '.ndjson');
   Result.Path := Path;
 
   Payload := MakePayload(Opts.ContentSize);

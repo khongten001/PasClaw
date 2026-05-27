@@ -58,7 +58,11 @@ function NewMemoryLog(const HomeDir, SessionId: string): TMemoryLog;
 var
   Dir, Path: string;
 begin
-  Dir := JoinPath(HomeDir, 'workspace/memory');
+  { Build with two JoinPath calls so each separator uses the native
+    PathDelim. A literal 'workspace/memory' would leave a forward slash
+    inside an otherwise-backslash path on Windows, and ForceDirectories
+    fails to create the second segment in that case. }
+  Dir := JoinPath(JoinPath(HomeDir, 'workspace'), 'memory');
   EnsureDir(Dir);
   Path := JoinPath(Dir, SessionId + '.ndjson');
   Result := TMemoryLog.Create(Path, SessionId);
