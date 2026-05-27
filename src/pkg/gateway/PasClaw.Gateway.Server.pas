@@ -246,6 +246,7 @@ procedure TGatewayServer.HandleChat(ARequest: TIdHTTPRequestInfo;
                                     AResp: TIdHTTPResponseInfo);
 var
   Body, Prompt: string;
+  Bytes: TBytes;
   Req, RespJ: TJsonObject;
   Msgs: array of TMessage;
   Loop: TToolLoopResult;
@@ -255,9 +256,14 @@ begin
   if ARequest.PostStream <> nil then
   begin
     ARequest.PostStream.Position := 0;
-    SetLength(Body, ARequest.PostStream.Size);
+    SetLength(Bytes, ARequest.PostStream.Size);
     if ARequest.PostStream.Size > 0 then
-      ARequest.PostStream.ReadBuffer(Body[1], ARequest.PostStream.Size);
+    begin
+      ARequest.PostStream.ReadBuffer(Bytes[0], ARequest.PostStream.Size);
+      { Bodies are JSON, by convention UTF-8. Decoding here means the
+        Delphi build sees the same string the FPC build does. }
+      Body := TEncoding.UTF8.GetString(Bytes);
+    end;
   end;
 
   if Trim(Body) = '' then

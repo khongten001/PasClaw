@@ -71,8 +71,10 @@ begin
   StatusCode := 0;
 
   Http := TIdHTTP.Create(nil);
-  Req  := TStringStream.Create(JSON);
-  Resp := TStringStream.Create('');
+  { Explicit UTF-8 — Delphi's TStringStream defaults to ANSI which would
+    mangle the SSE response body and the JSON request body. }
+  Req  := TStringStream.Create(JSON, TEncoding.UTF8);
+  Resp := TStringStream.Create('', TEncoding.UTF8);
   SSL  := nil;
   try
     Http.ConnectTimeout := TimeoutSeconds * 1000;

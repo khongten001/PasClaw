@@ -37,7 +37,10 @@ type
     FProcess: TStdioProcess;
     FCmd, FArgs, FName: string;
     FNextId:  Integer;
-    FBuffer:  string;
+    { FBuffer is a UTF8String (1-byte-per-char in both FPC and Delphi) so
+      byte-level accumulation from the child's stdout works regardless of
+      whether `string` is AnsiString (FPC) or UnicodeString (Delphi). }
+    FBuffer:  UTF8String;
     function  ReadLine(out Line: string; TimeoutMs: Integer): Boolean;
     function  WriteLine(const S: string): Boolean;
     function  RoundTrip(const Method, ParamsJSON: string;
@@ -137,25 +140,27 @@ function TMCPStdioClient.ReadLine(out Line: string; TimeoutMs: Integer): Boolean
 var
   Buf: array[0..4095] of Byte;
   N, Waited, NLPos: Integer;
-  Chunk: string;
+  Chunk, LineUTF8: UTF8String;
 begin
   Line := '';
   Waited := 0;
   if FProcess = nil then Exit(False);
   while True do
   begin
-    NLPos := Pos(#10, FBuffer);
+    NLPos := Pos(UTF8String(#10), FBuffer);
     if NLPos > 0 then
     begin
-      Line    := Copy(FBuffer, 1, NLPos - 1);
-      FBuffer := Copy(FBuffer, NLPos + 1, MaxInt);
+      LineUTF8 := Copy(FBuffer, 1, NLPos - 1);
+      FBuffer  := Copy(FBuffer, NLPos + 1, MaxInt);
+      { UTF8String -> string: AnsiString-identity under FPC, UTF-8 decode under Delphi. }
+      Line := string(LineUTF8);
       Exit(True);
     end;
     N := FProcess.ReadAvailable(Buf, SizeOf(Buf));
     if N > 0 then
     begin
       SetLength(Chunk, N);
-      Move(Buf[0], Chunk[1], N);
+      Move(Buf[0], Chunk[1], N);   { safe: UTF8String is 1 byte per char }
       FBuffer := FBuffer + Chunk;
       Continue;
     end;
