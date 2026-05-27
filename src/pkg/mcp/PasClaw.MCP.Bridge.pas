@@ -53,7 +53,9 @@ var
 function FindBinding(const RegisteredName: string; out Idx: Integer): Boolean; forward;
 
 { Per-slot handlers. We can't generate these dynamically in Pascal, so we
-  hand-roll one per slot and use the slot index to look up the binding. }
+  hand-roll one per slot and use the slot index to look up the binding.
+  The macro template below is FPC-only and documentary — Delphi ignores it. }
+{$IFDEF FPC}
 {$MACRO ON}
 {$DEFINE MAKE_HANDLER :=
 function H_NUM(const ArgsJSON: string; out ErrMsg: string): string;
@@ -72,6 +74,7 @@ begin
   if not Done and (ErrMsg = '') then ErrMsg := 'mcp call failed';
 end;
 }
+{$ENDIF}
 
 { Slot handlers: we emit one per index so the function table is fixed at
   compile time. If you raise MaxBindings, extend this block to match. }
