@@ -92,12 +92,13 @@ begin
 end;
 
 function SplitArgs(const S: string): TStringList;
-{ Shell-lite tokenizer: splits on unquoted whitespace, honors paired
-  single/double quotes, and recognizes \\ and \<quote> as escape
-  sequences (anywhere outside single quotes — single-quoted strings
-  stay literal, matching POSIX shell convention). Good enough for the
-  typical MCP `cmd args` line; for anything more complex, an array-form
-  config will eventually replace string parsing. }
+{ Tokenize a `cmd args...` string for direct-to-argv handoff to
+  TStdioProcess.Spawn (no shell is involved). Splits on unquoted
+  whitespace and honors paired single/double quotes; everything else,
+  including backslashes, is taken literally. That keeps Windows paths
+  intact — most importantly UNC roots like \\server\share — which a
+  POSIX-style \\-escape rule would mangle. When richer escaping is
+  needed, an array-form config will eventually replace this entirely. }
 var
   i, n: Integer;
   inQuote: Boolean;
@@ -114,25 +115,12 @@ begin
   begin
     if inQuote then
     begin
-      if (qc = '"') and (S[i] = '\') and (i < n) and
-         ((S[i + 1] = '"') or (S[i + 1] = '\')) then
-      begin
-        cur := cur + S[i + 1];
-        Inc(i);
-      end
-      else if S[i] = qc then inQuote := False
+      if S[i] = qc then inQuote := False
       else cur := cur + S[i];
     end
     else
     begin
-      if (S[i] = '\') and (i < n) and
-         ((S[i + 1] = '"') or (S[i + 1] = '''') or
-          (S[i + 1] = '\') or (S[i + 1] = ' ')) then
-      begin
-        cur := cur + S[i + 1];
-        Inc(i);
-      end
-      else if (S[i] = '"') or (S[i] = '''') then
+      if (S[i] = '"') or (S[i] = '''') then
       begin
         inQuote := True;
         qc := S[i];
