@@ -24,9 +24,9 @@ procedure RegisterShellTool(R: TToolRegistry);
 implementation
 
 uses
-  {$IFDEF FPC} Process, {$ENDIF}
   PasClaw.JSON,
-  PasClaw.Logger;
+  PasClaw.Logger,
+  PasClaw.Platform;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -64,76 +64,10 @@ begin
     (Pos('shutdown -h', L) > 0);
 end;
 
-{$IFDEF FPC}
-function RunShell(const Cmd: string; out ExitCode: Integer): string;
-var
-  P: TProcess;
-  M: TMemoryStream;
-  Buf: array[0..4095] of Byte;
-  N, Total: Integer;
-  Args: TStringList;
-begin
-  Result := '';
-  ExitCode := -1;
-  P := TProcess.Create(nil);
-  M := TMemoryStream.Create;
-  Args := TStringList.Create;
-  try
-    {$IFDEF MSWINDOWS}
-    P.Executable := 'cmd.exe';
-    Args.Add('/C'); Args.Add(Cmd);
-    {$ELSE}
-    P.Executable := '/bin/sh';
-    Args.Add('-c'); Args.Add(Cmd);
-    {$ENDIF}
-    P.Parameters.AddStrings(Args);
-    P.Options := [poUsePipes, poStderrToOutPut];
-    P.Execute;
-    Total := 0;
-    while P.Running or (P.Output.NumBytesAvailable > 0) do
-    begin
-      while P.Output.NumBytesAvailable > 0 do
-      begin
-        N := P.Output.Read(Buf, SizeOf(Buf));
-        if N > 0 then
-        begin
-          M.WriteBuffer(Buf, N);
-          Inc(Total, N);
-        end;
-        if Total > 1024 * 1024 then  { 1 MiB cap }
-        begin
-          P.Terminate(124);
-          Break;
-        end;
-      end;
-      Sleep(20);
-    end;
-    ExitCode := P.ExitStatus;
-    SetLength(Result, M.Size);
-    if M.Size > 0 then
-    begin
-      M.Position := 0;
-      M.ReadBuffer(Result[1], M.Size);
-    end;
-  finally
-    Args.Free;
-    M.Free;
-    P.Free;
-  end;
-end;
-{$ELSE}
 function RunShell(const Cmd: string; out ExitCode: Integer): string;
 begin
-  { Delphi-native shell exec stub.
-    A real Delphi build needs to call CreateProcess (Windows) or
-    Posix.Spawn / fork+execve (Linux/macOS). Until that's ported the
-    shell_exec tool returns a clear error so the agent loop can
-    surface it. }
-  ExitCode := 127;
-  Result := '(shell_exec not implemented in Delphi build yet — see ' +
-            'src/pkg/tools/PasClaw.Tools.Shell.pas)';
+  ExitCode := RunOneShot(Cmd, Result);
 end;
-{$ENDIF}
 
 function Tool_Shell(const ArgsJSON: string; out ErrMsg: string): string;
 var

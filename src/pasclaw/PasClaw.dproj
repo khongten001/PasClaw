@@ -70,7 +70,7 @@
         <Manifest_File>None</Manifest_File>
         <DCC_UsePackage>$(DCC_UsePackage)</DCC_UsePackage>
         <!-- Every src/pkg/* directory + src/cmd, relative to src/pasclaw/ -->
-        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\cron;..\pkg\skills;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\cron;..\pkg\skills;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base_Win32)'!=''">
         <DCC_UsePackage>vcl;rtl;$(DCC_UsePackage)</DCC_UsePackage>
@@ -192,6 +192,9 @@
 
         <!-- pkg/tui -->
         <DCCReference Include="..\pkg\tui\PasClaw.TUI.pas"/>
+
+        <!-- pkg/platform -->
+        <DCCReference Include="..\pkg\platform\PasClaw.Platform.pas"/>
 
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

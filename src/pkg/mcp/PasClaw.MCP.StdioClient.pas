@@ -28,13 +28,13 @@ interface
 
 uses
   SysUtils, Classes,
-  {$IFDEF FPC} Process, {$ENDIF}
-  PasClaw.MCP.Types;
+  PasClaw.MCP.Types,
+  PasClaw.Platform;
 
 type
   TMCPStdioClient = class(TMCPBaseClient)
   private
-    {$IFDEF FPC} FProcess: TProcess; {$ENDIF}
+    FProcess: TStdioProcess;
     FCmd, FArgs, FName: string;
     FNextId:  Integer;
     FBuffer:  string;
@@ -75,26 +75,18 @@ begin
   inherited Destroy;
 end;
 
-{$IFDEF FPC}
 procedure TMCPStdioClient.Close;
 begin
   if FProcess <> nil then
   begin
     try
-      if FProcess.Running then
-        FProcess.Terminate(0);
+      if FProcess.Running then FProcess.Terminate;
     except
       { ignore — we're tearing down }
     end;
     FreeAndNil(FProcess);
   end;
 end;
-{$ELSE}
-procedure TMCPStdioClient.Close;
-begin
-  { Delphi build: nothing was spawned. }
-end;
-{$ENDIF}
 
 function SplitArgs(const S: string): TStringList;
 var
@@ -135,19 +127,10 @@ begin
   if cur <> '' then Result.Add(cur);
 end;
 
-{$IFDEF FPC}
 function TMCPStdioClient.WriteLine(const S: string): Boolean;
-var
-  Buf: string;
 begin
   if (FProcess = nil) or not FProcess.Running then Exit(False);
-  Buf := S + #10;
-  try
-    FProcess.Input.Write(Buf[1], Length(Buf));
-    Result := True;
-  except
-    Result := False;
-  end;
+  Result := FProcess.WriteLineUTF8(S);
 end;
 
 function TMCPStdioClient.ReadLine(out Line: string; TimeoutMs: Integer): Boolean;
@@ -168,37 +151,19 @@ begin
       FBuffer := Copy(FBuffer, NLPos + 1, MaxInt);
       Exit(True);
     end;
-    if not FProcess.Running and (FProcess.Output.NumBytesAvailable = 0) then
-      Exit(False);
-    if FProcess.Output.NumBytesAvailable > 0 then
+    N := FProcess.ReadAvailable(Buf, SizeOf(Buf));
+    if N > 0 then
     begin
-      N := FProcess.Output.Read(Buf, SizeOf(Buf));
-      if N > 0 then
-      begin
-        SetLength(Chunk, N);
-        Move(Buf[0], Chunk[1], N);
-        FBuffer := FBuffer + Chunk;
-      end;
-    end
-    else
-    begin
-      Sleep(20);
-      Inc(Waited, 20);
-      if Waited >= TimeoutMs then Exit(False);
+      SetLength(Chunk, N);
+      Move(Buf[0], Chunk[1], N);
+      FBuffer := FBuffer + Chunk;
+      Continue;
     end;
+    if not FProcess.Running then Exit(False);
+    Inc(Waited, 50);   { ReadAvailable already slept up to ~50 ms }
+    if Waited >= TimeoutMs then Exit(False);
   end;
 end;
-{$ELSE}
-function TMCPStdioClient.WriteLine(const S: string): Boolean;
-begin
-  Result := False;
-end;
-function TMCPStdioClient.ReadLine(out Line: string; TimeoutMs: Integer): Boolean;
-begin
-  Line := '';
-  Result := False;
-end;
-{$ENDIF}
 
 function TMCPStdioClient.RoundTrip(const Method, ParamsJSON: string;
                                    TimeoutMs: Integer;
@@ -246,37 +211,23 @@ function TMCPStdioClient.Connect(TimeoutMs: Integer; out ErrMsg: string): Boolea
 var
   Params, Caps, ClientInfo, RespObj, ResultObj, Inner: TJsonObject;
   Resp: string;
-  {$IFDEF FPC}
   ArgList: TStringList;
-  i: Integer;
-  {$ENDIF}
 begin
   ErrMsg := '';
   if FCmd = '' then begin ErrMsg := 'no command configured'; Exit(False); end;
 
-  {$IFDEF FPC}
-  FProcess := TProcess.Create(nil);
-  FProcess.Executable := FCmd;
+  FProcess := TStdioProcess.Create;
   ArgList := SplitArgs(FArgs);
   try
-    for i := 0 to ArgList.Count - 1 do FProcess.Parameters.Add(ArgList[i]);
+    if not FProcess.Spawn(FCmd, ArgList) then
+    begin
+      ErrMsg := 'failed to spawn ' + FCmd;
+      FreeAndNil(FProcess);
+      Exit(False);
+    end;
   finally
     ArgList.Free;
   end;
-  FProcess.Options := [poUsePipes];
-  try
-    FProcess.Execute;
-  except
-    on E: Exception do
-    begin
-      ErrMsg := 'failed to spawn ' + FCmd + ': ' + E.Message;
-      Exit(False);
-    end;
-  end;
-  {$ELSE}
-  ErrMsg := 'stdio MCP not supported in Delphi build yet (use HTTP MCP)';
-  Exit(False);
-  {$ENDIF}
 
   { initialize }
   Params := TJsonObject.Create;
