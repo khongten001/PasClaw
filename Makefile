@@ -35,6 +35,7 @@ UNIT_DIRS = \
 	src/pkg/membench \
 	src/pkg/tui \
 	src/pkg/platform \
+	src/pkg/hashline \
 	src/cmd
 
 # Indy unit + include dirs (only used when building under FPC).
