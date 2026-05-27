@@ -10,7 +10,7 @@ function Cmd_Auth_Run(const Argv: array of string): Integer;
 implementation
 
 uses
-  SysUtils, PasClaw.Config, PasClaw.Utils, PasClaw.CliUI, PasClaw.Logger;
+  SysUtils, StrUtils, PasClaw.Config, PasClaw.Utils, PasClaw.CliUI, PasClaw.Logger;
 
 procedure Help;
 begin
@@ -31,7 +31,7 @@ begin
     end;
     for i := 0 to High(Cfg.Providers) do
       WriteLn(Cfg.Providers[i].Name:14, '  key: ',
-        BoolToStr(Cfg.Providers[i].APIKey <> '', 'present', 'missing'));
+        IfThen(Cfg.Providers[i].APIKey <> '', 'present', 'missing'));
     Result := 0;
   finally
     Cfg.Free;
