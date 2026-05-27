@@ -24,6 +24,7 @@ uses
   PasClaw.Cmd.Agent,
   PasClaw.Cmd.Auth,
   PasClaw.Cmd.Gateway,
+  PasClaw.Cmd.Serve,
   PasClaw.Cmd.Status,
   PasClaw.Cmd.Version,
   PasClaw.Cmd.Cron,
@@ -89,23 +90,24 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 16);
+  SetLength(Sub, 17);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
   Sub[3]  := 'tui          Chat in the full-screen TUI';
   Sub[4]  := 'auth         Authenticate with providers';
   Sub[5]  := 'gateway      Start the HTTP gateway + web UI';
-  Sub[6]  := 'status       Show status';
-  Sub[7]  := 'cron         Manage scheduled tasks';
-  Sub[8]  := 'mcp          Manage MCP servers';
-  Sub[9]  := 'migrate      Migrate data from older versions';
-  Sub[10] := 'skills       Manage skill extensions';
-  Sub[11] := 'model        View or switch the default model';
-  Sub[12] := 'post         Send a one-shot message to a channel';
-  Sub[13] := 'membench     Benchmark the memory log subsystem';
-  Sub[14] := 'update       Self-update PasClaw';
-  Sub[15] := 'version      Show version info';
+  Sub[6]  := 'serve        Start the OpenAI-compatible API server (/v1/chat/completions)';
+  Sub[7]  := 'status       Show status';
+  Sub[8]  := 'cron         Manage scheduled tasks';
+  Sub[9]  := 'mcp          Manage MCP servers';
+  Sub[10] := 'migrate      Migrate data from older versions';
+  Sub[11] := 'skills       Manage skill extensions';
+  Sub[12] := 'model        View or switch the default model';
+  Sub[13] := 'post         Send a one-shot message to a channel';
+  Sub[14] := 'membench     Benchmark the memory log subsystem';
+  Sub[15] := 'update       Self-update PasClaw';
+  Sub[16] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -149,6 +151,7 @@ begin
     else if Cmd = 'agent'    then Result := Cmd_Agent_Run(ArgArr)
     else if Cmd = 'auth'     then Result := Cmd_Auth_Run(ArgArr)
     else if Cmd = 'gateway'  then Result := Cmd_Gateway_Run(ArgArr)
+    else if Cmd = 'serve'    then Result := Cmd_Serve_Run(ArgArr)
     else if Cmd = 'status'   then Result := Cmd_Status_Run(ArgArr)
     else if Cmd = 'cron'     then Result := Cmd_Cron_Run(ArgArr)
     else if Cmd = 'mcp'      then Result := Cmd_MCP_Run(ArgArr)
