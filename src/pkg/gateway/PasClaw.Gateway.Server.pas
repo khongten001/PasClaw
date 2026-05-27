@@ -429,18 +429,18 @@ end;
 
 procedure TGatewayServer.HandleChatCompletions(ARequest: TIdHTTPRequestInfo;
                                                 AResp: TIdHTTPResponseInfo);
-{ OpenAI Chat Completions API. Accepts the standard request shape:
-    {model, messages: [{role, content, ...}], temperature?, max_tokens?,
-     stream?, tools?}.
-  Routes through the existing tool loop. When stream:true is set we emit
-  the completed content as a single SSE chunk + [DONE]; the tool loop
-  runs server-side first, so clients see the same final text as in the
-  non-streaming response — just framed for an SSE-aware client (chatgpt.js,
-  LangChain, autogen, openai-python with stream=True, etc.). }
+(* OpenAI Chat Completions API. Accepts the standard request shape
+   (model, messages array of role/content objects, optional temperature,
+   max_tokens, stream, tools) and routes through the existing tool loop.
+   When stream:true is set we emit the completed content as a single SSE
+   chunk followed by [DONE]; the tool loop runs server-side first, so
+   clients see the same final text as in the non-streaming response —
+   just framed for an SSE-aware client (chatgpt.js, LangChain, autogen,
+   openai-python with stream=True, etc.). *)
 var
   Body, ReqModel, FinishReason, CompId: string;
   Bytes: TBytes;
-  Req, MsgObj, ErrObj, ErrInner: TJsonObject;
+  Req, MsgObj: TJsonObject;
   MsgArr: TJsonArray;
   Msgs: array of TMessage;
   i: Integer;
