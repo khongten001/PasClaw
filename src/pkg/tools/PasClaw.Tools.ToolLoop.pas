@@ -68,7 +68,7 @@ function RunToolLoop(const Cfg: TToolLoopConfig;
                      out Loop: TToolLoopResult): Boolean;
 var
   Iter, i: Integer;
-  Tools: array of TToolDefinition;
+  Tools: TToolDefinitionArray;
   Resp: TLLMResponse;
   Hist: array of TMessage;
   ResultText, Err: string;
