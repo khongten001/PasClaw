@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{9A0F2E70-1FE6-4D2A-9B07-44D8C75A1E29}</ProjectGuid>
+        <ProjectVersion>20.2</ProjectVersion>
+        <FrameworkType>None</FrameworkType>
+        <MainSource>PasClaw.dpr</MainSource>
+        <Base>True</Base>
+        <Config Condition="'$(Config)'==''">Debug</Config>
+        <Platform Condition="'$(Platform)'==''">Win64</Platform>
+        <TargetedPlatforms>33</TargetedPlatforms>
+        <AppType>Console</AppType>
+    </PropertyGroup>
+
+    <!-- Platform fan-out -->
+    <PropertyGroup Condition="'$(Config)'=='Base' or '$(Base)'!=''">
+        <Base>true</Base>
+    </PropertyGroup>
+    <PropertyGroup Condition="('$(Platform)'=='Win32' and '$(Base)'=='true') or '$(Base_Win32)'!=''">
+        <Base_Win32>true</Base_Win32>
+        <CfgParent>Base</CfgParent>
+        <Base>true</Base>
+    </PropertyGroup>
+    <PropertyGroup Condition="('$(Platform)'=='Win64' and '$(Base)'=='true') or '$(Base_Win64)'!=''">
+        <Base_Win64>true</Base_Win64>
+        <CfgParent>Base</CfgParent>
+        <Base>true</Base>
+    </PropertyGroup>
+    <PropertyGroup Condition="('$(Platform)'=='Linux64' and '$(Base)'=='true') or '$(Base_Linux64)'!=''">
+        <Base_Linux64>true</Base_Linux64>
+        <CfgParent>Base</CfgParent>
+        <Base>true</Base>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(Config)'=='Debug' or '$(Cfg_1)'!=''">
+        <Cfg_1>true</Cfg_1>
+        <CfgParent>Base</CfgParent>
+        <Base>true</Base>
+    </PropertyGroup>
+    <PropertyGroup Condition="('$(Platform)'=='Win32' and '$(Cfg_1)'=='true') or '$(Cfg_1_Win32)'!=''">
+        <Cfg_1_Win32>true</Cfg_1_Win32>
+        <CfgParent>Cfg_1</CfgParent>
+        <Cfg_1>true</Cfg_1>
+        <Base>true</Base>
+    </PropertyGroup>
+    <PropertyGroup Condition="('$(Platform)'=='Win64' and '$(Cfg_1)'=='true') or '$(Cfg_1_Win64)'!=''">
+        <Cfg_1_Win64>true</Cfg_1_Win64>
+        <CfgParent>Cfg_1</CfgParent>
+        <Cfg_1>true</Cfg_1>
+        <Base>true</Base>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(Config)'=='Release' or '$(Cfg_2)'!=''">
+        <Cfg_2>true</Cfg_2>
+        <CfgParent>Base</CfgParent>
+        <Base>true</Base>
+    </PropertyGroup>
+
+    <!-- Shared compile/link settings -->
+    <PropertyGroup Condition="'$(Base)'!=''">
+        <DCC_E>false</DCC_E>
+        <DCC_F>false</DCC_F>
+        <DCC_K>false</DCC_K>
+        <DCC_N>false</DCC_N>
+        <DCC_S>false</DCC_S>
+        <DCC_DependencyCheckOutputName>pasclaw.dcc_dep</DCC_DependencyCheckOutputName>
+        <DCC_ExeOutput>..\..\build\delphi\$(Platform)\$(Config)</DCC_ExeOutput>
+        <DCC_DcuOutput>..\..\build\delphi\$(Platform)\$(Config)\dcu</DCC_DcuOutput>
+        <DCC_BplOutput>..\..\build\delphi\$(Platform)\$(Config)\bpl</DCC_BplOutput>
+        <DCC_DcpOutput>..\..\build\delphi\$(Platform)\$(Config)\dcp</DCC_DcpOutput>
+        <SanitizedProjectName>PasClaw</SanitizedProjectName>
+        <Manifest_File>None</Manifest_File>
+        <DCC_UsePackage>$(DCC_UsePackage)</DCC_UsePackage>
+        <!-- Every src/pkg/* directory + src/cmd, relative to src/pasclaw/ -->
+        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\cron;..\pkg\skills;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(Base_Win32)'!=''">
+        <DCC_UsePackage>vcl;rtl;$(DCC_UsePackage)</DCC_UsePackage>
+        <BT_BuildType>Debug</BT_BuildType>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(Base_Win64)'!=''">
+        <DCC_UsePackage>vcl;rtl;$(DCC_UsePackage)</DCC_UsePackage>
+        <BT_BuildType>Debug</BT_BuildType>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(Base_Linux64)'!=''">
+        <DCC_UsePackage>rtl;$(DCC_UsePackage)</DCC_UsePackage>
+        <VerInfo_Locale>1033</VerInfo_Locale>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(Cfg_1)'!=''">
+        <DCC_Define>DEBUG;$(DCC_Define)</DCC_Define>
+        <DCC_DebugInformation>2</DCC_DebugInformation>
+        <DCC_GenerateStackFrames>true</DCC_GenerateStackFrames>
+        <DCC_Optimize>false</DCC_Optimize>
+        <DCC_DebugInfoInExe>true</DCC_DebugInfoInExe>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(Cfg_2)'!=''">
+        <DCC_Define>RELEASE;$(DCC_Define)</DCC_Define>
+        <DCC_LocalDebugSymbols>false</DCC_LocalDebugSymbols>
+        <DCC_Optimize>true</DCC_Optimize>
+        <DCC_SymbolReferenceInfo>0</DCC_SymbolReferenceInfo>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <DelphiCompile Include="$(MainSource)">
+            <MainSource>MainSource</MainSource>
+        </DelphiCompile>
+
+        <!-- cmd dispatchers -->
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Root.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Onboard.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Agent.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Auth.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Gateway.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Status.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Version.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Cron.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.MCP.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Migrate.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Skills.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Model.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Config_.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Update.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Post.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Membench.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.TUI.pas"/>
+
+        <!-- pkg/cliui -->
+        <DCCReference Include="..\pkg\cliui\PasClaw.CliUI.pas"/>
+
+        <!-- pkg/utils -->
+        <DCCReference Include="..\pkg\utils\PasClaw.Utils.pas"/>
+
+        <!-- pkg/logger -->
+        <DCCReference Include="..\pkg\logger\PasClaw.Logger.pas"/>
+
+        <!-- pkg/config -->
+        <DCCReference Include="..\pkg\config\PasClaw.Config.pas"/>
+
+        <!-- pkg/json -->
+        <DCCReference Include="..\pkg\json\PasClaw.JSON.pas"/>
+
+        <!-- pkg/providers -->
+        <DCCReference Include="..\pkg\providers\PasClaw.Providers.Types.pas"/>
+        <DCCReference Include="..\pkg\providers\PasClaw.Providers.Intf.pas"/>
+        <DCCReference Include="..\pkg\providers\PasClaw.Providers.HTTP.pas"/>
+        <DCCReference Include="..\pkg\providers\PasClaw.Providers.Anthropic.pas"/>
+        <DCCReference Include="..\pkg\providers\PasClaw.Providers.OpenAI.pas"/>
+        <DCCReference Include="..\pkg\providers\PasClaw.Providers.Factory.pas"/>
+        <DCCReference Include="..\pkg\providers\PasClaw.Providers.Stream.pas"/>
+
+        <!-- pkg/tokenizer -->
+        <DCCReference Include="..\pkg\tokenizer\PasClaw.Tokenizer.pas"/>
+
+        <!-- pkg/tools -->
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.Types.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.Registry.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.FS.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.Shell.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.ToolLoop.pas"/>
+
+        <!-- pkg/mcp -->
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Types.pas"/>
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.StdioClient.pas"/>
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.HttpClient.pas"/>
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Bridge.pas"/>
+
+        <!-- pkg/gateway -->
+        <DCCReference Include="..\pkg\gateway\PasClaw.Gateway.Server.pas"/>
+        <DCCReference Include="..\pkg\gateway\PasClaw.Gateway.WebUI.pas"/>
+        <None Include="..\pkg\gateway\webui.rc"/>
+        <None Include="..\pkg\gateway\webui.html"/>
+        <RcCompile Include="..\pkg\gateway\webui.rc"/>
+
+        <!-- pkg/channels -->
+        <DCCReference Include="..\pkg\channels\PasClaw.Channels.Telegram.pas"/>
+        <DCCReference Include="..\pkg\channels\PasClaw.Channels.Discord.pas"/>
+        <DCCReference Include="..\pkg\channels\PasClaw.Channels.Slack.pas"/>
+
+        <!-- pkg/cron -->
+        <DCCReference Include="..\pkg\cron\PasClaw.Cron.Expr.pas"/>
+        <DCCReference Include="..\pkg\cron\PasClaw.Cron.Scheduler.pas"/>
+
+        <!-- pkg/skills -->
+        <DCCReference Include="..\pkg\skills\PasClaw.Skills.Loader.pas"/>
+
+        <!-- pkg/memory -->
+        <DCCReference Include="..\pkg\memory\PasClaw.Memory.pas"/>
+
+        <!-- pkg/updater -->
+        <DCCReference Include="..\pkg\updater\PasClaw.Updater.pas"/>
+
+        <!-- pkg/membench -->
+        <DCCReference Include="..\pkg\membench\PasClaw.Membench.Runner.pas"/>
+
+        <!-- pkg/tui -->
+        <DCCReference Include="..\pkg\tui\PasClaw.TUI.pas"/>
+
+        <BuildConfiguration Include="Base">
+            <Key>Base</Key>
+        </BuildConfiguration>
+        <BuildConfiguration Include="Debug">
+            <Key>Cfg_1</Key>
+            <CfgParent>Base</CfgParent>
+        </BuildConfiguration>
+        <BuildConfiguration Include="Release">
+            <Key>Cfg_2</Key>
+            <CfgParent>Base</CfgParent>
+        </BuildConfiguration>
+    </ItemGroup>
+
+    <ProjectExtensions>
+        <Borland.Personality>Delphi.Personality.12</Borland.Personality>
+        <Borland.ProjectType>VCLApplication</Borland.ProjectType>
+        <BorlandProject>
+            <Delphi.Personality>
+                <Source>
+                    <Source Name="MainSource">PasClaw.dpr</Source>
+                </Source>
+                <VersionInfo>
+                    <VersionInfo Name="IncludeVerInfo">True</VersionInfo>
+                    <VersionInfo Name="AutoIncBuild">False</VersionInfo>
+                    <VersionInfo Name="MajorVer">0</VersionInfo>
+                    <VersionInfo Name="MinorVer">1</VersionInfo>
+                    <VersionInfo Name="Release">0</VersionInfo>
+                    <VersionInfo Name="Build">0</VersionInfo>
+                    <VersionInfo Name="Debug">False</VersionInfo>
+                    <VersionInfo Name="PreRelease">False</VersionInfo>
+                    <VersionInfo Name="Special">False</VersionInfo>
+                    <VersionInfo Name="Private">False</VersionInfo>
+                    <VersionInfo Name="DLL">False</VersionInfo>
+                    <VersionInfo Name="Locale">1033</VersionInfo>
+                    <VersionInfo Name="CodePage">1252</VersionInfo>
+                </VersionInfo>
+                <VersionInfoKeys>
+                    <VersionInfoKeys Name="CompanyName">PasClaw contributors</VersionInfoKeys>
+                    <VersionInfoKeys Name="FileDescription">PasClaw - personal AI assistant</VersionInfoKeys>
+                    <VersionInfoKeys Name="FileVersion">0.1.0.0</VersionInfoKeys>
+                    <VersionInfoKeys Name="InternalName">PasClaw</VersionInfoKeys>
+                    <VersionInfoKeys Name="LegalCopyright">MIT</VersionInfoKeys>
+                    <VersionInfoKeys Name="OriginalFilename">pasclaw.exe</VersionInfoKeys>
+                    <VersionInfoKeys Name="ProductName">PasClaw</VersionInfoKeys>
+                    <VersionInfoKeys Name="ProductVersion">0.1.0.0</VersionInfoKeys>
+                    <VersionInfoKeys Name="Comments">Delphi port of picoclaw</VersionInfoKeys>
+                </VersionInfoKeys>
+            </Delphi.Personality>
+            <Deployment Version="3"/>
+            <Platforms>
+                <Platform value="Win32">True</Platform>
+                <Platform value="Win64">True</Platform>
+                <Platform value="Linux64">True</Platform>
+            </Platforms>
+        </BorlandProject>
+        <ProjectFileVersion>12</ProjectFileVersion>
+    </ProjectExtensions>
+
+    <Import Project="$(BDS)\Bin\CodeGear.Delphi.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Delphi.Targets')"/>
+    <Import Project="$(APPDATA)\Embarcadero\$(BDSAPPDATABASEDIR)\$(PRODUCTVERSION)\UserTools.proj" Condition="Exists('$(APPDATA)\Embarcadero\$(BDSAPPDATABASEDIR)\$(PRODUCTVERSION)\UserTools.proj')"/>
+</Project>
