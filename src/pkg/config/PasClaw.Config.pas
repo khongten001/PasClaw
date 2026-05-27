@@ -14,10 +14,13 @@ uses
   SysUtils, Classes;
 
 const
-  (* Build-time version. FPC reads the PASCLAW_VERSION environment variable
-     at compile time via the I-percent directive; Delphi falls back to the
-     literal below (override by setting PASCLAW_VERSION_LITERAL via a
-     project define). *)
+  (* Single source of truth for the product version is VersionFallback below;
+     it gets bumped at release time and both compilers see the same value.
+     FPC additionally honors a PASCLAW_VERSION environment variable at
+     compile time (used by `make` to inject the short git SHA into
+     development builds) — if set it overrides VersionFallback at runtime;
+     if empty the fallback wins. Delphi has no env-var equivalent, so
+     Delphi builds always report VersionFallback. *)
   {$IFDEF FPC}
   VersionRaw = {$I %PASCLAW_VERSION%};
   {$ELSE}

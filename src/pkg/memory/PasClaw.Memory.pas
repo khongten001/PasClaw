@@ -124,6 +124,8 @@ end;
 function TMemoryLog.LoadHistory: TMessageArray;
 var
   Reader: TStringList;
+  Bytes: TBytes;
+  SavedPos: Int64;
   i: Integer;
   Obj: TJsonObject;
   RoleStr, Content: string;
@@ -133,7 +135,25 @@ begin
   if not FileExists(FPath) then Exit;
   Reader := TStringList.Create;
   try
-    Reader.LoadFromFile(FPath);
+    { Read via the already-open FStream rather than TStringList.LoadFromFile,
+      which would open a second handle on the same file. On Windows that
+      fails with ERROR_SHARING_VIOLATION (EFOpenError) because our own
+      constructor holds the file open with fmShareDenyWrite for appending. }
+    if FStream <> nil then
+    begin
+      SavedPos := FStream.Position;
+      try
+        FStream.Position := 0;
+        SetLength(Bytes, FStream.Size);
+        if Length(Bytes) > 0 then
+          FStream.ReadBuffer(Bytes[0], Length(Bytes));
+        Reader.Text := TEncoding.UTF8.GetString(Bytes);
+      finally
+        FStream.Position := SavedPos;
+      end;
+    end
+    else
+      Reader.LoadFromFile(FPath);
     for i := 0 to Reader.Count - 1 do
     begin
       if Trim(Reader[i]) = '' then Continue;

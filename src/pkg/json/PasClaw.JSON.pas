@@ -226,17 +226,30 @@ begin
     Result := TJsonArray.CreateWrapping(D, False);
 end;
 
+{ fpjson's Add() appends without checking — repeated writes to the same
+  key would emit a duplicate-keyed JSON object that downstream parsers
+  treat ambiguously. Strip any existing entry with this key first so
+  Put* has clean "last write wins" semantics. }
+procedure RemoveKey(Obj: fpjson.TJSONObject; const Key: string);
+var
+  Idx: Integer;
+begin
+  if Obj = nil then Exit;
+  Idx := Obj.IndexOfName(Key);
+  if Idx >= 0 then Obj.Delete(Idx);
+end;
+
 procedure TJsonObject.PutStr  (const Key, Value: string);
-begin fpjson.TJSONObject(FBacking).Add(Key, Value); end;
+begin RemoveKey(fpjson.TJSONObject(FBacking), Key); fpjson.TJSONObject(FBacking).Add(Key, Value); end;
 
 procedure TJsonObject.PutInt  (const Key: string; Value: Int64);
-begin fpjson.TJSONObject(FBacking).Add(Key, Value); end;
+begin RemoveKey(fpjson.TJSONObject(FBacking), Key); fpjson.TJSONObject(FBacking).Add(Key, Value); end;
 
 procedure TJsonObject.PutBool (const Key: string; Value: Boolean);
-begin fpjson.TJSONObject(FBacking).Add(Key, Value); end;
+begin RemoveKey(fpjson.TJSONObject(FBacking), Key); fpjson.TJSONObject(FBacking).Add(Key, Value); end;
 
 procedure TJsonObject.PutFloat(const Key: string; Value: Double);
-begin fpjson.TJSONObject(FBacking).Add(Key, Value); end;
+begin RemoveKey(fpjson.TJSONObject(FBacking), Key); fpjson.TJSONObject(FBacking).Add(Key, Value); end;
 
 procedure TJsonObject.PutObject(const Key: string; var Obj: TJsonObject);
 var
@@ -247,6 +260,7 @@ begin
   Obj.FOwnsBacking := False;   { parent now owns it }
   Obj.Free;
   Obj := nil;
+  RemoveKey(fpjson.TJSONObject(FBacking), Key);
   fpjson.TJSONObject(FBacking).Add(Key, Inner);
 end;
 
@@ -259,6 +273,7 @@ begin
   Arr.FOwnsBacking := False;
   Arr.Free;
   Arr := nil;
+  RemoveKey(fpjson.TJSONObject(FBacking), Key);
   fpjson.TJSONObject(FBacking).Add(Key, Inner);
 end;
 
@@ -266,6 +281,7 @@ procedure TJsonObject.PutRaw(const Key, RawJSON: string);
 var
   Data: TJSONData;
 begin
+  RemoveKey(fpjson.TJSONObject(FBacking), Key);
   try
     Data := GetJSON(RawJSON);
     fpjson.TJSONObject(FBacking).Add(Key, Data);
@@ -560,17 +576,29 @@ begin
     Result := TJsonArray.CreateWrapping(V, False);
 end;
 
+{ AddPair also appends without checking; mirror the FPC dedup so both
+  backends emit unique-keyed JSON regardless of how many times callers
+  set the same key. }
+procedure RemoveKey(Obj: System.JSON.TJSONObject; const Key: string);
+var
+  Existing: System.JSON.TJSONPair;
+begin
+  if Obj = nil then Exit;
+  Existing := Obj.RemovePair(Key);
+  if Existing <> nil then Existing.Free;
+end;
+
 procedure TJsonObject.PutStr  (const Key, Value: string);
-begin System.JSON.TJSONObject(FBacking).AddPair(Key, Value); end;
+begin RemoveKey(System.JSON.TJSONObject(FBacking), Key); System.JSON.TJSONObject(FBacking).AddPair(Key, Value); end;
 
 procedure TJsonObject.PutInt  (const Key: string; Value: Int64);
-begin System.JSON.TJSONObject(FBacking).AddPair(Key, System.JSON.TJSONNumber.Create(Value)); end;
+begin RemoveKey(System.JSON.TJSONObject(FBacking), Key); System.JSON.TJSONObject(FBacking).AddPair(Key, System.JSON.TJSONNumber.Create(Value)); end;
 
 procedure TJsonObject.PutBool (const Key: string; Value: Boolean);
-begin System.JSON.TJSONObject(FBacking).AddPair(Key, System.JSON.TJSONBool.Create(Value)); end;
+begin RemoveKey(System.JSON.TJSONObject(FBacking), Key); System.JSON.TJSONObject(FBacking).AddPair(Key, System.JSON.TJSONBool.Create(Value)); end;
 
 procedure TJsonObject.PutFloat(const Key: string; Value: Double);
-begin System.JSON.TJSONObject(FBacking).AddPair(Key, System.JSON.TJSONNumber.Create(Value)); end;
+begin RemoveKey(System.JSON.TJSONObject(FBacking), Key); System.JSON.TJSONObject(FBacking).AddPair(Key, System.JSON.TJSONNumber.Create(Value)); end;
 
 procedure TJsonObject.PutObject(const Key: string; var Obj: TJsonObject);
 var
@@ -581,6 +609,7 @@ begin
   Obj.FOwnsBacking := False;
   Obj.Free;
   Obj := nil;
+  RemoveKey(System.JSON.TJSONObject(FBacking), Key);
   System.JSON.TJSONObject(FBacking).AddPair(Key, Inner);
 end;
 
@@ -593,6 +622,7 @@ begin
   Arr.FOwnsBacking := False;
   Arr.Free;
   Arr := nil;
+  RemoveKey(System.JSON.TJSONObject(FBacking), Key);
   System.JSON.TJSONObject(FBacking).AddPair(Key, Inner);
 end;
 
@@ -606,6 +636,7 @@ begin
   except
     V := System.JSON.TJSONObject.Create;
   end;
+  RemoveKey(System.JSON.TJSONObject(FBacking), Key);
   System.JSON.TJSONObject(FBacking).AddPair(Key, V);
 end;
 

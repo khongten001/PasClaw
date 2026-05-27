@@ -14,10 +14,10 @@
   headers are also valid but most MCP servers default to newline-delimited
   JSON, which is what we implement here).
 
-  Process spawn is FPC-only for now (uses fcl-process). The Delphi build
-  provides stubs that report "stdio MCP not supported in Delphi build yet";
-  full Delphi support needs a CreateProcess (Win) / Posix.Spawn (POSIX)
-  shim with bidirectional pipes.
+  Process spawn is delegated to PasClaw.Platform.TStdioProcess, which
+  provides bidirectional pipes on both FPC (via fcl-process) and Delphi
+  (CreateProcess on Windows, fork+pipe on POSIX), so stdio MCP works on
+  both compilers.
 }
 unit PasClaw.MCP.StdioClient;
 
@@ -92,6 +92,12 @@ begin
 end;
 
 function SplitArgs(const S: string): TStringList;
+{ Shell-lite tokenizer: splits on unquoted whitespace, honors paired
+  single/double quotes, and recognizes \\ and \<quote> as escape
+  sequences (anywhere outside single quotes — single-quoted strings
+  stay literal, matching POSIX shell convention). Good enough for the
+  typical MCP `cmd args` line; for anything more complex, an array-form
+  config will eventually replace string parsing. }
 var
   i, n: Integer;
   inQuote: Boolean;
@@ -108,12 +114,25 @@ begin
   begin
     if inQuote then
     begin
-      if S[i] = qc then inQuote := False
+      if (qc = '"') and (S[i] = '\') and (i < n) and
+         ((S[i + 1] = '"') or (S[i + 1] = '\')) then
+      begin
+        cur := cur + S[i + 1];
+        Inc(i);
+      end
+      else if S[i] = qc then inQuote := False
       else cur := cur + S[i];
     end
     else
     begin
-      if (S[i] = '"') or (S[i] = '''') then
+      if (S[i] = '\') and (i < n) and
+         ((S[i + 1] = '"') or (S[i + 1] = '''') or
+          (S[i + 1] = '\') or (S[i + 1] = ' ')) then
+      begin
+        cur := cur + S[i + 1];
+        Inc(i);
+      end
+      else if (S[i] = '"') or (S[i] = '''') then
       begin
         inQuote := True;
         qc := S[i];
