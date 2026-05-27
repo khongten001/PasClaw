@@ -88,7 +88,12 @@ end;
 
 procedure TTUI.ShowHelp;
 var
-  Lines: TStringArray;
+  { Disambiguate: TStringArray is declared by both MVCFramework.Console
+    and PasClaw.Tools.Registry. Without the qualifier dcc64 picks the
+    last-imported (the MVC one) for locals but rejects the assignment
+    from FRegistry.Names below with E2010. Qualify each local with the
+    unit whose API consumes it. }
+  Lines: MVCFramework.Console.TStringArray;
 begin
   SetLength(Lines, 4);
   Lines[0] := '/help    show this panel';
@@ -100,9 +105,9 @@ end;
 
 procedure TTUI.ShowTools;
 var
-  Names: TStringArray;
-  Rows: TStringMatrix;
-  Headers: TStringArray;
+  Names: PasClaw.Tools.Registry.TStringArray;
+  Rows:  MVCFramework.Console.TStringMatrix;
+  Headers: MVCFramework.Console.TStringArray;
   i: Integer;
 begin
   if FRegistry = nil then
