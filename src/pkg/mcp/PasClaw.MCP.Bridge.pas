@@ -16,10 +16,11 @@ uses
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
   PasClaw.MCP.Types,
-  PasClaw.MCP.StdioClient;
+  PasClaw.MCP.StdioClient,
+  PasClaw.MCP.HttpClient;
 
 type
-  TMCPClientList = array of TMCPStdioClient;
+  TMCPClientList = array of TMCPBaseClient;
 
 { Connect every enabled MCP server from the config and register their tools
   into Reg. Returns the list of live clients (caller frees with FreeMCPClients
@@ -38,7 +39,7 @@ type
     procedural type (no closure context). 32 slots is well above any
     reasonable MCP-server-count for a single-user CLI. }
   TMCPBinding = record
-    Client:   TMCPStdioClient;
+    Client:   TMCPBaseClient;
     ToolName: string;
     InUse:    Boolean;
   end;
@@ -137,10 +138,17 @@ begin
   Result := -1;
 end;
 
+function IsHttpUrl(const S: string): Boolean;
+begin
+  Result := (Length(S) >= 7) and
+            ((LowerCase(Copy(S, 1, 7)) = 'http://') or
+             ((Length(S) >= 8) and (LowerCase(Copy(S, 1, 8)) = 'https://')));
+end;
+
 function ConnectMCPServers(Cfg: TConfig; Reg: TToolRegistry): TMCPClientList;
 var
   i, j, slot: Integer;
-  Client: TMCPStdioClient;
+  Client: TMCPBaseClient;
   Tools: TMCPToolArray;
   Err: string;
   ToolEntry: TTool;
@@ -151,9 +159,19 @@ begin
   for i := 0 to High(Cfg.MCPServers) do
   begin
     if not Cfg.MCPServers[i].Enabled then Continue;
-    Client := TMCPStdioClient.Create(Cfg.MCPServers[i].Name,
-                                     Cfg.MCPServers[i].Cmd,
-                                     Cfg.MCPServers[i].Args);
+    if IsHttpUrl(Cfg.MCPServers[i].Cmd) then
+    begin
+      { HTTP transport: Cmd = URL, Args (optional) = "Bearer ..." token }
+      Client := TMCPHttpClient.Create(Cfg.MCPServers[i].Name,
+                                      Cfg.MCPServers[i].Cmd,
+                                      Cfg.MCPServers[i].Args);
+    end
+    else
+    begin
+      Client := TMCPStdioClient.Create(Cfg.MCPServers[i].Name,
+                                       Cfg.MCPServers[i].Cmd,
+                                       Cfg.MCPServers[i].Args);
+    end;
     if not Client.Connect(5000, Err) then
     begin
       LogWarn('mcp[%s] connect failed: %s', [Cfg.MCPServers[i].Name, Err]);

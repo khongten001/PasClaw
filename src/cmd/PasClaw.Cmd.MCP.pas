@@ -13,7 +13,8 @@ uses
   SysUtils,
   PasClaw.Config, PasClaw.CliUI,
   PasClaw.MCP.Types,
-  PasClaw.MCP.StdioClient;
+  PasClaw.MCP.StdioClient,
+  PasClaw.MCP.HttpClient;
 
 procedure Help;
 begin
@@ -125,11 +126,18 @@ begin
   end;
 end;
 
+function IsHttpUrl(const S: string): Boolean;
+begin
+  Result := (Length(S) >= 7) and
+            ((LowerCase(Copy(S, 1, 7)) = 'http://') or
+             ((Length(S) >= 8) and (LowerCase(Copy(S, 1, 8)) = 'https://')));
+end;
+
 function DoTest(const Argv: array of string): Integer;
 var
   Cfg: TConfig;
   i, j: Integer;
-  Client: TMCPStdioClient;
+  Client: TMCPBaseClient;
   Tools: TMCPToolArray;
   Err: string;
 begin
@@ -139,10 +147,20 @@ begin
     for i := 0 to High(Cfg.MCPServers) do
       if SameText(Cfg.MCPServers[i].Name, Argv[1]) then
       begin
-        WriteLn('Spawning ', Cfg.MCPServers[i].Cmd, ' ', Cfg.MCPServers[i].Args, '...');
-        Client := TMCPStdioClient.Create(Cfg.MCPServers[i].Name,
-                                         Cfg.MCPServers[i].Cmd,
-                                         Cfg.MCPServers[i].Args);
+        if IsHttpUrl(Cfg.MCPServers[i].Cmd) then
+        begin
+          WriteLn('Connecting HTTP MCP at ', Cfg.MCPServers[i].Cmd, '...');
+          Client := TMCPHttpClient.Create(Cfg.MCPServers[i].Name,
+                                          Cfg.MCPServers[i].Cmd,
+                                          Cfg.MCPServers[i].Args);
+        end
+        else
+        begin
+          WriteLn('Spawning ', Cfg.MCPServers[i].Cmd, ' ', Cfg.MCPServers[i].Args, '...');
+          Client := TMCPStdioClient.Create(Cfg.MCPServers[i].Name,
+                                           Cfg.MCPServers[i].Cmd,
+                                           Cfg.MCPServers[i].Args);
+        end;
         try
           if not Client.Connect(5000, Err) then
           begin

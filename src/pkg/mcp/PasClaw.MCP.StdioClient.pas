@@ -26,13 +26,12 @@ uses
   PasClaw.MCP.Types;
 
 type
-  TMCPStdioClient = class
+  TMCPStdioClient = class(TMCPBaseClient)
   private
     FProcess: TProcess;
     FCmd, FArgs, FName: string;
     FNextId:  Integer;
     FBuffer:  string;
-    FInfo:    TMCPServerInfo;
     function  ReadLine(out Line: string; TimeoutMs: Integer): Boolean;
     function  WriteLine(const S: string): Boolean;
     function  RoundTrip(const Method, ParamsJSON: string;
@@ -41,13 +40,11 @@ type
     constructor Create(const Name, Cmd, Args: string);
     destructor  Destroy; override;
 
-    function Connect(TimeoutMs: Integer; out ErrMsg: string): Boolean;
-    function ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean;
+    function Connect(TimeoutMs: Integer; out ErrMsg: string): Boolean; override;
+    function ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean; override;
     function CallTool(const ToolName, ArgsJSON: string;
-                      out ResultText, ErrMsg: string): Boolean;
+                      out ResultText, ErrMsg: string): Boolean; override;
     procedure Close;
-
-    property ServerInfo: TMCPServerInfo read FInfo;
   end;
 
 implementation

@@ -26,20 +26,18 @@ uses
   PasClaw.MCP.Types;
 
 type
-  TMCPHttpClient = class
+  TMCPHttpClient = class(TMCPBaseClient)
   private
     FName, FURL, FAuth: string;
     FNextId: Integer;
-    FInfo:   TMCPServerInfo;
     function RoundTrip(const Method, ParamsJSON: string;
                        TimeoutSeconds: Integer; out RespJSON: string): Boolean;
   public
     constructor Create(const Name, URL, AuthHeader: string);
-    function Connect(TimeoutSeconds: Integer; out ErrMsg: string): Boolean;
-    function ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean;
+    function Connect(TimeoutSeconds: Integer; out ErrMsg: string): Boolean; override;
+    function ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean; override;
     function CallTool(const ToolName, ArgsJSON: string;
-                      out ResultText, ErrMsg: string): Boolean;
-    property ServerInfo: TMCPServerInfo read FInfo;
+                      out ResultText, ErrMsg: string): Boolean; override;
   end;
 
 implementation

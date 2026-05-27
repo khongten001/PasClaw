@@ -40,6 +40,19 @@ type
     Caps:    TMCPCapabilities;
   end;
 
+  (* Common base for stdio and HTTP MCP clients. The bridge keeps a list
+     of these and dispatches tool calls polymorphically. *)
+  TMCPBaseClient = class
+  protected
+    FInfo: TMCPServerInfo;
+  public
+    function Connect(TimeoutMs: Integer; out ErrMsg: string): Boolean; virtual; abstract;
+    function ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean; virtual; abstract;
+    function CallTool(const ToolName, ArgsJSON: string;
+                      out ResultText, ErrMsg: string): Boolean; virtual; abstract;
+    property ServerInfo: TMCPServerInfo read FInfo;
+  end;
+
 implementation
 
 end.

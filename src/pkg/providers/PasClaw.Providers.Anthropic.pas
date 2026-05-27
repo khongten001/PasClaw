@@ -46,6 +46,7 @@ implementation
 uses
   fpjson, jsonparser,
   PasClaw.Providers.HTTP,
+  PasClaw.Providers.Stream,
   PasClaw.Logger;
 
 constructor TAnthropicProvider.Create(const APIKey, APIBase, DefaultModel: string);
@@ -78,7 +79,7 @@ end;
 
 function TAnthropicProvider.SupportsStreaming: Boolean;
 begin
-  Result := False;   { Phase 3 wires streaming via SSE. }
+  Result := True;
 end;
 
 function RoleForAnthropic(R: TMsgRole): string;
@@ -327,26 +328,141 @@ begin
   Result.FinishReason := 'error';
 end;
 
+var
+  GStreamCB:   TStreamCallback;
+  GStreamAcc:  string;
+  GStreamLast: TLLMResponse;
+
+procedure HandleAnthropicSSE(const Event, Data: string);
+var
+  Obj: TJSONData;
+  Root, Delta, Usage: TJSONObject;
+  Kind, Text: string;
+  Chunk: TStreamChunk;
+begin
+  if Data = '' then Exit;
+  try
+    Obj := GetJSON(Data);
+  except
+    Exit;
+  end;
+  try
+    if not (Obj is TJSONObject) then Exit;
+    Root := TJSONObject(Obj);
+    Kind := Root.Get('type', Event);
+
+    if Kind = 'content_block_delta' then
+    begin
+      if Root.IndexOfName('delta') < 0 then Exit;
+      Delta := Root.Objects['delta'];
+      if Delta.Get('type', '') = 'text_delta' then
+      begin
+        Text := Delta.Get('text', '');
+        if Text <> '' then
+        begin
+          GStreamAcc := GStreamAcc + Text;
+          Chunk.Kind := 'text';
+          Chunk.Text := Text;
+          if Assigned(GStreamCB) then GStreamCB(Chunk);
+        end;
+      end;
+    end
+    else if Kind = 'message_delta' then
+    begin
+      if Root.IndexOfName('usage') >= 0 then
+      begin
+        Usage := Root.Objects['usage'];
+        GStreamLast.Usage.OutputTokens := Usage.Get('output_tokens', GStreamLast.Usage.OutputTokens);
+      end;
+      if Root.IndexOfName('delta') >= 0 then
+      begin
+        Delta := Root.Objects['delta'];
+        GStreamLast.FinishReason := Delta.Get('stop_reason', GStreamLast.FinishReason);
+      end;
+    end
+    else if Kind = 'message_start' then
+    begin
+      if Root.IndexOfName('message') >= 0 then
+      begin
+        Delta := Root.Objects['message'];
+        GStreamLast.Model := Delta.Get('model', GStreamLast.Model);
+        if Delta.IndexOfName('usage') >= 0 then
+        begin
+          Usage := Delta.Objects['usage'];
+          GStreamLast.Usage.InputTokens := Usage.Get('input_tokens', 0);
+        end;
+      end;
+    end
+    else if Kind = 'message_stop' then
+    begin
+      Chunk.Kind := 'done';
+      Chunk.Text := '';
+      if Assigned(GStreamCB) then GStreamCB(Chunk);
+    end;
+  finally
+    Obj.Free;
+  end;
+end;
+
 function TAnthropicProvider.ChatStream(const Messages: array of TMessage;
                                        const Tools:    array of TToolDefinition;
                                        const Model:    string;
                                        const Options:  TChatOptions;
                                        OnChunk: TStreamCallback): TLLMResponse;
 var
-  C: TStreamChunk;
+  Body, URL, UseModel: string;
+  Headers: array of THeaderPair;
+  Opts: TChatOptions;
+  Status: Integer;
+  Err: string;
+  Root: TJSONObject;
+  Stream: TJSONBoolean;
 begin
-  { Phase 3 will implement true SSE streaming; for now we fall back to the
-    blocking call and emit one synthetic chunk so callers using OnChunk get a
-    sensible signal. }
-  Result := Chat(Messages, Tools, Model, Options);
-  if Assigned(OnChunk) then
-  begin
-    C.Kind := 'text';
-    C.Text := Result.Content;
-    OnChunk(C);
-    C.Kind := 'done';
-    C.Text := '';
-    OnChunk(C);
+  if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
+  URL := FAPIBase + '/v1/messages';
+
+  { Force stream:true in the request body. }
+  Opts := Options;
+  Opts.Stream := True;
+  Body := BuildRequest(Messages, Tools, UseModel, Opts);
+  try
+    Root := TJSONObject(GetJSON(Body));
+    try
+      Stream := TJSONBoolean.Create(True);
+      Root.Add('stream', Stream);
+      Body := Root.AsJSON;
+    finally
+      Root.Free;
+    end;
+  except
+    { fall back to non-stream }
+    Result := Chat(Messages, Tools, UseModel, Options);
+    Exit;
+  end;
+
+  SetLength(Headers, 2);
+  Headers[0] := MakeHeader('x-api-key',         FAPIKey);
+  Headers[1] := MakeHeader('anthropic-version', '2023-06-01');
+
+  GStreamCB  := OnChunk;
+  GStreamAcc := '';
+  FillChar(GStreamLast, SizeOf(GStreamLast), 0);
+  GStreamLast.Model := UseModel;
+  try
+    LogDebug('anthropic SSE POST %s (model=%s)', [URL, UseModel]);
+    PostStreaming(URL, Body, Headers, 120, @HandleAnthropicSSE, Status, Err);
+    Result.Content      := GStreamAcc;
+    Result.FinishReason := GStreamLast.FinishReason;
+    Result.Usage        := GStreamLast.Usage;
+    Result.Model        := GStreamLast.Model;
+    if (Status < 200) or (Status >= 300) then
+    begin
+      if Result.Content = '' then
+        Result.Content := Format('anthropic stream error: status=%d msg=%s', [Status, Err]);
+      Result.FinishReason := 'error';
+    end;
+  finally
+    GStreamCB := nil;
   end;
 end;
 
