@@ -181,21 +181,32 @@ begin
   SetLength(Plans, Length(Sections));
   for i := 0 to High(Sections) do
   begin
+    { Enforce the contract: every section header must carry a #hash so
+      we can verify the file hasn't drifted since the model read it.
+      ParseHashlinePatch accepts hashless ¶path headers for the format
+      library's other consumers (streaming previews, abbreviated diffs),
+      but at the tool layer we refuse them — applying line-anchored
+      edits without verifying the file version is exactly the silent
+      corruption hashline was designed to prevent. }
+    if not Sections[i].HasFileHash then
+    begin
+      ErrMsg := Format('section %d (%s): header is missing %shash; re-read the file with fs_read and use the returned %spath%shash header',
+                       [i + 1, Sections[i].Path,
+                        HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_HASH_SEP]);
+      Exit('');
+    end;
     if not FileExists(Sections[i].Path) then
     begin
       ErrMsg := Format('section %d: no such file: %s', [i + 1, Sections[i].Path]);
       Exit('');
     end;
     FileBody := ReadFileText(Sections[i].Path);
-    if Sections[i].HasFileHash then
+    CurrentHash := ComputeFileHash(FileBody);
+    if CurrentHash <> Sections[i].FileHash then
     begin
-      CurrentHash := ComputeFileHash(FileBody);
-      if CurrentHash <> Sections[i].FileHash then
-      begin
-        ErrMsg := Format('section %d: stale patch for %s (header hash %s, file hash %s) — re-read and rebase',
-                         [i + 1, Sections[i].Path, Sections[i].FileHash, CurrentHash]);
-        Exit('');
-      end;
+      ErrMsg := Format('section %d: stale patch for %s (header hash %s, file hash %s) — re-read and rebase',
+                       [i + 1, Sections[i].Path, Sections[i].FileHash, CurrentHash]);
+      Exit('');
     end;
     if not ApplyHashlineEdits(FileBody, Sections[i].Edits, NewBody, ApplyErr) then
     begin
