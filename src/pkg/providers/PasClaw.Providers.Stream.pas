@@ -86,6 +86,11 @@ begin
       Http.Request.CustomHeaders.AddValue(Headers[i].Name, Headers[i].Value);
     if (Length(URL) >= 8) and SameText(Copy(URL, 1, 8), 'https://') then
     begin
+      if not EnsureOpenSSL(ErrMsg) then
+      begin
+        StatusCode := -1;
+        Exit;
+      end;
       SSL := TIdSSLIOHandlerSocketOpenSSL.Create(Http);
       SSL.SSLOptions.Method := sslvTLSv1_2;
       SSL.SSLOptions.SSLVersions := [sslvTLSv1_2];

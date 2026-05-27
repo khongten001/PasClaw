@@ -4,9 +4,12 @@
   vendors Indy via `make get-indy`; under Delphi it ships with RAD Studio.
 
   HTTPS support requires OpenSSL. On Linux: package "libssl-dev" / runtime
-  "libssl.so.3"; on Windows: copy libeay32/ssleay32 next to the binary (Indy
-  10.6+) or the modern libssl-1_1.dll pair. Indy's IdSSLOpenSSL is wired
-  automatically when an "https://" URL is detected.
+  "libssl.so.3"; on Windows: copy libeay32.dll + ssleay32.dll next to the
+  binary. We probe two search locations before the first HTTPS request:
+    1. $PASCLAW_OPENSSL_DIR (if set)
+    2. the directory holding pasclaw.exe
+  If neither resolves a working OpenSSL pair we surface an actionable
+  error message instead of Indy's cryptic 'Could not load SSL library.'.
 }
 unit PasClaw.Providers.HTTP;
 
@@ -17,7 +20,8 @@ interface
 
 uses
   SysUtils, Classes,
-  IdHTTP, IdSSLOpenSSL, IdGlobal, IdExceptionCore, IdException;
+  IdHTTP, IdSSLOpenSSL, IdSSLOpenSSLHeaders,
+  IdGlobal, IdExceptionCore, IdException;
 
 type
   THTTPResult = record
@@ -37,6 +41,11 @@ function GetJSONURL(const URL: string;
                     const Headers: array of THeaderPair;
                     TimeoutSeconds: Integer): THTTPResult;
 function MakeHeader(const Name, Value: string): THeaderPair;
+
+{ Returns True if Indy can load OpenSSL; otherwise False and ErrMsg
+  contains an actionable message naming the DLLs and the override env
+  var. Safe to call multiple times — probing happens once and caches. }
+function EnsureOpenSSL(out ErrMsg: string): Boolean;
 
 implementation
 
@@ -99,10 +108,57 @@ begin
   end;
 end;
 
-function NewClient(TimeoutSeconds: Integer; HTTPS: Boolean): TIdHTTP;
+var
+  GSSLProbed: Boolean = False;
+  GSSLAvailable: Boolean = False;
+
+procedure ProbeOpenSSL;
+{ Steer Indy's loader at known-good locations before its first SSL call.
+  Side-effecting at unit init was tempting but ParamStr(0) and
+  GetEnvironmentVariable are friendlier inside a regular procedure
+  invoked lazily on the first HTTPS request. }
+var
+  CustomDir: string;
+begin
+  if GSSLProbed then Exit;
+  GSSLProbed := True;
+
+  CustomDir := GetEnvironmentVariable('PASCLAW_OPENSSL_DIR');
+  if CustomDir = '' then
+    CustomDir := ExtractFilePath(ParamStr(0));
+  if (CustomDir <> '') and DirectoryExists(CustomDir) then
+    IdOpenSSLSetLibPath(CustomDir);
+
+  GSSLAvailable := LoadOpenSSLLibrary;
+end;
+
+function OpenSSLHelpMessage: string;
+begin
+  Result :=
+    'TLS support requires OpenSSL but the libraries could not be loaded.' + sLineBreak +
+    'Indy reports: ' + WhichFailedToLoad + sLineBreak +
+    {$IFDEF MSWINDOWS}
+    'On Windows, place libeay32.dll and ssleay32.dll next to pasclaw.exe,' + sLineBreak +
+    'or set PASCLAW_OPENSSL_DIR to a directory containing them.';
+    {$ELSE}
+    'On Linux/macOS, install OpenSSL (libssl + libcrypto) via your package' + sLineBreak +
+    'manager, or set PASCLAW_OPENSSL_DIR to a directory containing them.';
+    {$ENDIF}
+end;
+
+function EnsureOpenSSL(out ErrMsg: string): Boolean;
+begin
+  ProbeOpenSSL;
+  Result := GSSLAvailable;
+  if Result then ErrMsg := '' else ErrMsg := OpenSSLHelpMessage;
+end;
+
+function NewClient(TimeoutSeconds: Integer; HTTPS: Boolean;
+                   out ErrMsg: string): TIdHTTP;
 var
   SSL: TIdSSLIOHandlerSocketOpenSSL;
 begin
+  ErrMsg := '';
   Result := TIdHTTP.Create(nil);
   Result.ConnectTimeout := TimeoutSeconds * 1000;
   Result.ReadTimeout    := TimeoutSeconds * 1000;
@@ -110,6 +166,7 @@ begin
   Result.Request.UserAgent := 'PasClaw/0.1 (+https://github.com/FMXExpress/PasClaw)';
   if HTTPS then
   begin
+    if not EnsureOpenSSL(ErrMsg) then Exit;
     SSL := TIdSSLIOHandlerSocketOpenSSL.Create(Result);
     SSL.SSLOptions.Method  := sslvTLSv1_2;
     SSL.SSLOptions.SSLVersions := [sslvTLSv1_2];
@@ -123,8 +180,17 @@ function PostJSON(const URL, JSON: string;
 var
   Http: TIdHTTP;
   Req: TStringStream;
+  SSLErr: string;
 begin
-  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL));
+  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  if SSLErr <> '' then
+  begin
+    Result.StatusCode := -1;
+    Result.Body       := '';
+    Result.ErrorMsg   := SSLErr;
+    Http.Free;
+    Exit;
+  end;
   { UTF-8 encode the request body; default codepage would corrupt non-ASCII
     JSON values (user names, system prompts, content blocks). }
   Req  := TStringStream.Create(JSON, TEncoding.UTF8);
@@ -145,8 +211,17 @@ function GetJSONURL(const URL: string;
                     TimeoutSeconds: Integer): THTTPResult;
 var
   Http: TIdHTTP;
+  SSLErr: string;
 begin
-  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL));
+  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  if SSLErr <> '' then
+  begin
+    Result.StatusCode := -1;
+    Result.Body       := '';
+    Result.ErrorMsg   := SSLErr;
+    Http.Free;
+    Exit;
+  end;
   try
     Http.Request.Accept := 'application/json';
     ApplyHeaders(Http, Headers);
