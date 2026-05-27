@@ -1,14 +1,15 @@
-{
+(*
   PasClaw.Tools.FS - built-in filesystem tools: fs_read, fs_write, fs_list,
   fs_edit_hashline, fs_grep. Paths are not sandboxed by default; the gateway
   will install a workspace-restricted variant in Phase 4.
 
   fs_read emits hashline-prefixed output by default — each file body is
-  preceded by a `¶path#hash` header and every line is prefixed with
-  `LINENO:`. That format is the input contract for fs_edit_hashline, which
+  preceded by a ¶path#hash header and every line is prefixed with
+  LINENO:. That format is the input contract for fs_edit_hashline, which
   applies anchored diff operations without needing the model to reproduce
-  the original text. Pass `{"plain": true}` to get raw bytes back instead.
-}
+  the original text. Pass plain=true in the JSON args to get raw bytes
+  back instead.
+*)
 unit PasClaw.Tools.FS;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
