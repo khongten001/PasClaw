@@ -133,18 +133,18 @@ end;
 function ReadFileText(const Path: string): string;
 var
   Strm: TFileStream;
-  SS: TStringStream;
+  Bytes: TBytes;
 begin
-  if not FileExists(Path) then Exit('');
+  Result := '';
+  if not FileExists(Path) then Exit;
   Strm := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
   try
-    SS := TStringStream.Create('');
-    try
-      SS.CopyFrom(Strm, 0);
-      Result := SS.DataString;
-    finally
-      SS.Free;
-    end;
+    SetLength(Bytes, Strm.Size);
+    if Strm.Size > 0 then Strm.ReadBuffer(Bytes[0], Strm.Size);
+    { TEncoding.UTF8.GetString round-trips correctly in both FPC and Delphi:
+      under FPC the result is AnsiString-UTF8; under Delphi it's UnicodeString
+      decoded from the UTF-8 bytes. }
+    Result := TEncoding.UTF8.GetString(Bytes);
   finally
     Strm.Free;
   end;
@@ -153,12 +153,16 @@ end;
 procedure WriteFileText(const Path, Content: string);
 var
   Strm: TFileStream;
+  Bytes: TBytes;
 begin
   EnsureDir(ExtractFilePath(Path));
   Strm := TFileStream.Create(Path, fmCreate);
   try
     if Content <> '' then
-      Strm.WriteBuffer(Pointer(Content)^, Length(Content));
+    begin
+      Bytes := TEncoding.UTF8.GetBytes(Content);
+      Strm.WriteBuffer(Bytes[0], Length(Bytes));
+    end;
   finally
     Strm.Free;
   end;

@@ -84,11 +84,15 @@ end;
 
 procedure TMemoryLog.WriteLine(const S: string);
 var
-  Line: string;
+  Bytes: TBytes;
 begin
   if FStream = nil then Exit;
-  Line := S + #10;
-  FStream.WriteBuffer(Line[1], Length(Line));
+  { Encode UTF-8 bytes explicitly. Writing `Line[1]` directly worked under
+    FPC (1-byte AnsiString) but wrote half the bytes under Delphi
+    (2-byte UnicodeString). }
+  Bytes := TEncoding.UTF8.GetBytes(S + #10);
+  if Length(Bytes) > 0 then
+    FStream.WriteBuffer(Bytes[0], Length(Bytes));
 end;
 
 procedure TMemoryLog.Append(Role: TMsgRole; const Content, ToolName: string);
