@@ -461,6 +461,7 @@ type
     procedure WriteRaw(const Data: string);
     procedure WriteChunk(const DeltaContent, FinishReason: string);
     procedure WriteComment(const Note: string);
+    procedure WriteError(const Msg: string);
     procedure NoteToolCall(const Name, ArgsJSON: string);
     procedure NoteToolResult(const Name, ResultText, Err: string);
     procedure Finalize(const Content, FinishReason: string);
@@ -500,12 +501,45 @@ begin
 end;
 
 procedure TSSEStreamer.WriteComment(const Note: string);
+var
+  Clean: string;
 begin
-  { Lines starting with `:` are SSE comments per the spec — every
-    compliant client (and openai-python, anthropic-sdk, langchain,
-    autogen) skips them silently. Useful for keepalive without
-    polluting visible content. }
-  WriteRaw(': ' + Note + #10#10);
+  (* Lines starting with `:` are SSE comments per the spec — every
+     compliant client (openai-python, anthropic-sdk, langchain,
+     autogen) skips them silently.
+
+     IMPORTANT: callers pass arbitrary content here (tool argsJSON,
+     tool result text). If the body contains a newline followed by
+     `data: ...` or another SSE field, a naive `: ' + Note + #10#10`
+     would let that line be parsed as a real event, terminating or
+     corrupting the stream. Strip CR and prefix EVERY line of the
+     body with `: ` so the whole thing stays inside the comment, then
+     append the empty-line terminator. *)
+  Clean := StringReplace(Note, #13, '', [rfReplaceAll]);
+  Clean := StringReplace(Clean, #10, #10': ', [rfReplaceAll]);
+  WriteRaw(': ' + Clean + #10#10);
+end;
+
+procedure TSSEStreamer.WriteError(const Msg: string);
+var
+  Root, Err: TJsonObject;
+begin
+  (* Stream-mode error after headers are already on the wire. We can't
+     change the status, but we can send an OpenAI-style error frame
+     followed by [DONE] so clients that recognize streaming errors
+     surface them properly instead of treating an assistant turn that
+     says "tool loop failed" as a normal completion. *)
+  Root := TJsonObject.Create;
+  try
+    Err := TJsonObject.Create;
+    Err.PutStr('message', Msg);
+    Err.PutStr('type',    'server_error');
+    Root.PutObject('error', Err);
+    WriteRaw('data: ' + Root.ToJSON + #10#10);
+  finally
+    Root.Free;
+  end;
+  WriteRaw('data: [DONE]'#10#10);
 end;
 
 procedure TSSEStreamer.NoteToolCall(const Name, ArgsJSON: string);
@@ -690,7 +724,10 @@ begin
     begin
       if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
       if WantsStream then
-        Streamer.Finalize('(tool loop failed)', 'stop')
+        { Headers already went out as 200 OK; send an OpenAI-style
+          error frame + [DONE] rather than disguising the failure as
+          a normal assistant completion. }
+        Streamer.WriteError('tool loop failed')
       else
         WriteJSON(AResp, 502,
           '{"error":{"message":"tool loop failed","type":"server_error"}}');
