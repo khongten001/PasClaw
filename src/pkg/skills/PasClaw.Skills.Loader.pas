@@ -108,19 +108,11 @@ function H_13 (const A: string; out E: string): string; begin Result := RunShell
 function H_14 (const A: string; out E: string): string; begin Result := RunShellSkill(14, A, E); end;
 function H_15 (const A: string; out E: string): string; begin Result := RunShellSkill(15, A, E); end;
 
-const
-  SkillHandlers: array[0..MaxSkills - 1] of TToolHandler = (
-    @H_0,  @H_1,  @H_2,  @H_3,  @H_4,  @H_5,  @H_6,  @H_7,
-    @H_8,  @H_9,  @H_10, @H_11, @H_12, @H_13, @H_14, @H_15,
-    { 16..63 left nil; raising MaxSkills above 16 requires extending the
-      handler block. We log a warning if anyone tries. }
-    nil, nil, nil, nil, nil, nil, nil, nil,
-    nil, nil, nil, nil, nil, nil, nil, nil,
-    nil, nil, nil, nil, nil, nil, nil, nil,
-    nil, nil, nil, nil, nil, nil, nil, nil,
-    nil, nil, nil, nil, nil, nil, nil, nil,
-    nil, nil, nil, nil, nil, nil, nil, nil
-  );
+{ Delphi rejects @FunctionName as a constant expression in typed-constant
+  array initializers; populate the first 16 slots in the initialization
+  section below. Slots 16..63 stay nil — RunShellSkill guards against that. }
+var
+  SkillHandlers: array[0..MaxSkills - 1] of TToolHandler;
 
 function RenderTemplate(const Template, ArgsJSON: string): string;
 var
@@ -293,5 +285,9 @@ end;
 
 initialization
   { all slots free }
+  SkillHandlers[0]  := @H_0;   SkillHandlers[1]  := @H_1;   SkillHandlers[2]  := @H_2;   SkillHandlers[3]  := @H_3;
+  SkillHandlers[4]  := @H_4;   SkillHandlers[5]  := @H_5;   SkillHandlers[6]  := @H_6;   SkillHandlers[7]  := @H_7;
+  SkillHandlers[8]  := @H_8;   SkillHandlers[9]  := @H_9;   SkillHandlers[10] := @H_10;  SkillHandlers[11] := @H_11;
+  SkillHandlers[12] := @H_12;  SkillHandlers[13] := @H_13;  SkillHandlers[14] := @H_14;  SkillHandlers[15] := @H_15;
 
 end.
