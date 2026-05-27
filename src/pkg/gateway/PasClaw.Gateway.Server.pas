@@ -53,7 +53,9 @@ type
     procedure HandleStatus(AResp: TIdHTTPResponseInfo);
     procedure HandleTools(AResp: TIdHTTPResponseInfo);
     procedure HandleChat(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
-    procedure HandleChatCompletions(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+    procedure HandleChatCompletions(AContext: TIdContext;
+                                    ARequest: TIdHTTPRequestInfo;
+                                    AResp: TIdHTTPResponseInfo);
     procedure HandleModels(AResp: TIdHTTPResponseInfo);
     procedure WriteJSON(AResp: TIdHTTPResponseInfo; Code: Integer; const Body: string);
     procedure WriteSSE(AResp: TIdHTTPResponseInfo; const Body: string);
@@ -188,7 +190,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/status')  then HandleStatus(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/tools')   then HandleTools(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/chat')    then HandleChat(ARequest, AResponse)
-    else if (ARequest.Command = 'POST') and (Doc = '/v1/chat/completions') then HandleChatCompletions(ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/chat/completions') then HandleChatCompletions(AContext, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/models')  then HandleModels(AResponse)
     else if Doc = '/' then
     begin
@@ -438,16 +440,120 @@ begin
   end;
 end;
 
-procedure TGatewayServer.HandleChatCompletions(ARequest: TIdHTTPRequestInfo;
+type
+  (* Helper that streams SSE chunks directly to the TCP connection
+     while the tool loop is still running. Indy's TIdHTTPResponseInfo
+     normally buffers the entire body into a ContentStream and flushes
+     at the end of the handler — that's fine for /v1/chat (one
+     response per call) but with /v1/chat/completions stream:true and
+     a long tool loop the client sees no bytes for many seconds. We
+     issue WriteHeader once up front so the headers go on the wire,
+     then write per-iteration chunks through the IOHandler so the
+     client renders tool progress in real time. CloseConnection=True
+     terminates the response when the handler returns; no
+     Content-Length is needed. *)
+  TSSEStreamer = class
+  private
+    FContext: TIdContext;
+    FId, FModel: string;
+  public
+    constructor Create(AContext: TIdContext; const Id, Model: string);
+    procedure WriteRaw(const Data: string);
+    procedure WriteChunk(const DeltaContent, FinishReason: string);
+    procedure WriteComment(const Note: string);
+    procedure NoteToolCall(const Name, ArgsJSON: string);
+    procedure NoteToolResult(const Name, ResultText, Err: string);
+    procedure Finalize(const Content, FinishReason: string);
+  end;
+
+constructor TSSEStreamer.Create(AContext: TIdContext; const Id, Model: string);
+begin
+  inherited Create;
+  FContext := AContext;
+  FId      := Id;
+  FModel   := Model;
+end;
+
+procedure TSSEStreamer.WriteRaw(const Data: string);
+var
+  Bytes: TIdBytes;
+  Utf8: TBytes;
+  i: Integer;
+begin
+  if (FContext = nil) or (FContext.Connection = nil) or
+     (not FContext.Connection.Connected) then
+    Exit;
+  Utf8 := TEncoding.UTF8.GetBytes(Data);
+  SetLength(Bytes, Length(Utf8));
+  for i := 0 to High(Utf8) do Bytes[i] := Utf8[i];
+  try
+    FContext.Connection.IOHandler.Write(Bytes);
+  except
+    { Client disconnected or write failed; swallow so the tool loop
+      can still complete server-side bookkeeping cleanly. }
+  end;
+end;
+
+procedure TSSEStreamer.WriteChunk(const DeltaContent, FinishReason: string);
+begin
+  WriteRaw(BuildOpenAIChunk(FId, FModel, DeltaContent, FinishReason));
+end;
+
+procedure TSSEStreamer.WriteComment(const Note: string);
+begin
+  { Lines starting with `:` are SSE comments per the spec — every
+    compliant client (and openai-python, anthropic-sdk, langchain,
+    autogen) skips them silently. Useful for keepalive without
+    polluting visible content. }
+  WriteRaw(': ' + Note + #10#10);
+end;
+
+procedure TSSEStreamer.NoteToolCall(const Name, ArgsJSON: string);
+var
+  Preview: string;
+begin
+  { One visible delta with a small bracketed marker so the client
+    actually shows progress, plus a comment with the args for any
+    consumer that wants to log structured tool activity. The visible
+    delta is the bit that turns the long silence into a heartbeat the
+    user can see in their chat UI. }
+  Preview := ArgsJSON;
+  if Length(Preview) > 200 then Preview := Copy(Preview, 1, 200) + '...';
+  WriteChunk(#10'[tool: ' + Name + ']'#10, '');
+  WriteComment('tool_call name=' + Name + ' args=' + Preview);
+end;
+
+procedure TSSEStreamer.NoteToolResult(const Name, ResultText, Err: string);
+var
+  Status: string;
+begin
+  if Err <> '' then Status := 'err: ' + Err
+  else if Length(ResultText) < 80 then Status := ResultText
+  else Status := IntToStr(Length(ResultText)) + ' bytes';
+  WriteComment('tool_result name=' + Name + ' ' + Status);
+end;
+
+procedure TSSEStreamer.Finalize(const Content, FinishReason: string);
+begin
+  WriteChunk(Content, '');
+  WriteChunk('', FinishReason);
+  WriteRaw('data: [DONE]'#10#10);
+end;
+
+procedure TGatewayServer.HandleChatCompletions(AContext: TIdContext;
+                                                ARequest: TIdHTTPRequestInfo;
                                                 AResp: TIdHTTPResponseInfo);
 (* OpenAI Chat Completions API. Accepts the standard request shape
    (model, messages array of role/content objects, optional temperature,
    max_tokens, stream, tools) and routes through the existing tool loop.
-   When stream:true is set we emit the completed content as a single SSE
-   chunk followed by [DONE]; the tool loop runs server-side first, so
-   clients see the same final text as in the non-streaming response —
-   just framed for an SSE-aware client (chatgpt.js, LangChain, autogen,
-   openai-python with stream=True, etc.). *)
+
+   When stream:true is set we flush response headers immediately, then
+   write SSE chunks to the connection as the tool loop progresses —
+   one visible delta per tool call so the client renders activity in
+   real time, plus structured SSE comments any consumer can log. After
+   the loop completes we write the final content delta, a finish-reason
+   chunk, and the [DONE] terminator. The non-streaming path is
+   unchanged: build the full chat.completion JSON and reply once. *)
 var
   Body, ReqModel, FinishReason, CompId: string;
   Bytes: TBytes;
@@ -460,8 +566,9 @@ var
   LoopCfg: TToolLoopConfig;
   RawTemp: Double;
   ReplyObj: TJsonObject;
-  Buf: string;
+  Streamer: TSSEStreamer;
 begin
+  Streamer := nil;
   Body := '';
   if ARequest.PostStream <> nil then
   begin
@@ -557,15 +664,39 @@ begin
     LoopCfg.OnToolCall    := nil;
     LoopCfg.OnToolResult  := nil;
 
+    CompId := GenChatCompletionId;
+
+    if WantsStream then
+    begin
+      { Stream path: flush SSE headers up front and hook the tool loop
+        so chunks reach the client as each tool call happens. The loop
+        itself still runs synchronously in this thread; the difference
+        is the response body now drains incrementally instead of all
+        at once at the end. }
+      AResp.ResponseNo  := 200;
+      AResp.ContentType := 'text/event-stream; charset=utf-8';
+      AResp.CharSet     := 'utf-8';
+      AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
+      AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
+      AResp.CloseConnection := True;
+      AResp.WriteHeader;
+      Streamer := TSSEStreamer.Create(AContext, CompId, ReqModel);
+      LoopCfg.OnToolCall   := Streamer.NoteToolCall;
+      LoopCfg.OnToolResult := Streamer.NoteToolResult;
+      Streamer.WriteComment('connected');
+    end;
+
     if not RunToolLoop(LoopCfg, Msgs, Loop) then
     begin
       if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
-      WriteJSON(AResp, 502,
-        '{"error":{"message":"tool loop failed","type":"server_error"}}');
+      if WantsStream then
+        Streamer.Finalize('(tool loop failed)', 'stop')
+      else
+        WriteJSON(AResp, 502,
+          '{"error":{"message":"tool loop failed","type":"server_error"}}');
       Exit;
     end;
 
-    CompId := GenChatCompletionId;
     if Loop.LastResp.FinishReason <> '' then
       FinishReason := Loop.LastResp.FinishReason
     else
@@ -614,11 +745,8 @@ begin
 
     if WantsStream then
     begin
-      Buf := BuildOpenAIChunk(CompId, ReqModel, Loop.Content, '') +
-             BuildOpenAIChunk(CompId, ReqModel, '', FinishReason) +
-             'data: [DONE]' + #10#10;
-      if FDebugIO then LogDebug('chat/completions -> 200 SSE %d bytes', [Length(Buf)]);
-      WriteSSE(AResp, Buf);
+      if FDebugIO then LogDebug('chat/completions -> 200 SSE (final)');
+      Streamer.Finalize(Loop.Content, FinishReason);
     end
     else
     begin
@@ -633,6 +761,7 @@ begin
     end;
   finally
     Req.Free;
+    if Streamer <> nil then Streamer.Free;
   end;
 end;
 
