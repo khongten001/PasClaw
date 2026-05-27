@@ -1,6 +1,6 @@
 { Auth — login/logout/status for configured providers. }
 unit PasClaw.Cmd.Auth;
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

@@ -1,6 +1,6 @@
 { Model — view or switch the default model. }
 unit PasClaw.Cmd.Model;
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

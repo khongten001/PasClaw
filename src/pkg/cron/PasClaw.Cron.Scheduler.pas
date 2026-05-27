@@ -11,7 +11,7 @@
 *)
 unit PasClaw.Cron.Scheduler;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

@@ -9,7 +9,7 @@
 }
 unit PasClaw.Tools.Shell;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

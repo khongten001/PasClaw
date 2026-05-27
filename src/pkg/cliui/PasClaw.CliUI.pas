@@ -4,7 +4,7 @@
 }
 unit PasClaw.CliUI;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

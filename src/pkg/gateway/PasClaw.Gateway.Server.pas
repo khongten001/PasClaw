@@ -14,7 +14,7 @@
 *)
 unit PasClaw.Gateway.Server;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

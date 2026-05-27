@@ -7,7 +7,7 @@
 }
 unit PasClaw.Providers.OpenAI;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

@@ -17,7 +17,7 @@
 *)
 unit PasClaw.JSON;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

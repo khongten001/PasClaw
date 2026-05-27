@@ -5,7 +5,7 @@
 }
 unit PasClaw.Config;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
@@ -14,9 +14,15 @@ uses
   SysUtils, Classes;
 
 const
-  { Build-time version: set the PASCLAW_VERSION environment variable before
-    invoking fpc to override (the Makefile does this from `git describe`). }
+  (* Build-time version. FPC reads the PASCLAW_VERSION environment variable
+     at compile time via the I-percent directive; Delphi falls back to the
+     literal below (override by setting PASCLAW_VERSION_LITERAL via a
+     project define). *)
+  {$IFDEF FPC}
   VersionRaw = {$I %PASCLAW_VERSION%};
+  {$ELSE}
+  VersionRaw = '';
+  {$ENDIF}
   VersionFallback = '0.1.0-dev';
 
   EnvHome   = 'PASCLAW_HOME';
@@ -348,9 +354,18 @@ begin
 end;
 
 function FormatBuildInfo: string;
+{$IFDEF FPC}
+const
+  FpcVer   = {$I %FPCVERSION%};
+  FpcOS    = {$I %FPCTARGETOS%};
+  FpcCPU   = {$I %FPCTARGETCPU%};
 begin
-  Result := Format('pasclaw %s (fpc %s %s/%s)',
-    [FormatVersion, {$I %FPCVERSION%}, {$I %FPCTARGETOS%}, {$I %FPCTARGETCPU%}]);
+  Result := Format('pasclaw %s (fpc %s %s/%s)', [FormatVersion, FpcVer, FpcOS, FpcCPU]);
 end;
+{$ELSE}
+begin
+  Result := Format('pasclaw %s (delphi)', [FormatVersion]);
+end;
+{$ENDIF}
 
 end.

@@ -1,6 +1,6 @@
 { Skills — list/install skill extensions (manifest-only for Phase 1). }
 unit PasClaw.Cmd.Skills;
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

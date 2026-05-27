@@ -1,6 +1,6 @@
 { Cron — list/add/disable/enable/remove scheduled tasks. Real scheduler in Phase 5. }
 unit PasClaw.Cmd.Cron;
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

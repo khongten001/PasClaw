@@ -4,7 +4,7 @@
   and prompts for the default provider's API key.
 }
 unit PasClaw.Cmd.Onboard;
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

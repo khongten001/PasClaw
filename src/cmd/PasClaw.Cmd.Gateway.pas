@@ -9,7 +9,7 @@
   The HTTP API is documented in src/pkg/gateway/PasClaw.Gateway.Server.pas.
 *)
 unit PasClaw.Cmd.Gateway;
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

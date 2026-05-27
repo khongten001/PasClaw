@@ -5,7 +5,7 @@
 }
 unit PasClaw.Providers.Factory;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

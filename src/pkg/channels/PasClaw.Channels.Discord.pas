@@ -21,7 +21,7 @@
 *)
 unit PasClaw.Channels.Discord;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

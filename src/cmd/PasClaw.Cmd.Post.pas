@@ -10,7 +10,7 @@
 *)
 unit PasClaw.Cmd.Post;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface

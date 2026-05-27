@@ -5,7 +5,7 @@
 }
 unit PasClaw.Tools.FS;
 
-{$MODE DELPHI}
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
 interface
