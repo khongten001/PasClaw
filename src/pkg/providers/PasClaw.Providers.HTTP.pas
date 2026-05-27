@@ -67,7 +67,11 @@ begin
   Result.StatusCode := 0;
   Result.Body := '';
   Result.ErrorMsg := '';
-  Resp := TStringStream.Create('');
+  { Force UTF-8 on the response stream. Under Delphi modern, TStringStream
+    defaults to TEncoding.Default (the system codepage), which mangles
+    non-ASCII bytes in JSON responses. Under FPC the encoding arg is
+    accepted and behaves the same. }
+  Resp := TStringStream.Create('', TEncoding.UTF8);
   try
     try
       if IsPost then
@@ -121,7 +125,9 @@ var
   Req: TStringStream;
 begin
   Http := NewClient(TimeoutSeconds, MakeHTTPS(URL));
-  Req  := TStringStream.Create(JSON);
+  { UTF-8 encode the request body; default codepage would corrupt non-ASCII
+    JSON values (user names, system prompts, content blocks). }
+  Req  := TStringStream.Create(JSON, TEncoding.UTF8);
   try
     Http.Request.ContentType    := 'application/json';
     Http.Request.ContentEncoding := 'utf-8';
