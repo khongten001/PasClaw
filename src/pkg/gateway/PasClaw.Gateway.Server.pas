@@ -44,6 +44,7 @@ type
     FStarted:  Boolean;
     FStopFlag: TEvent;
     FDebugIO:  Boolean;
+    FMaxIter:  Integer;
     procedure OnCommandGet(AContext: TIdContext;
                            ARequest: TIdHTTPRequestInfo;
                            AResponse: TIdHTTPResponseInfo);
@@ -63,6 +64,10 @@ type
       and the response body via LogDebug. Off by default; the `serve`
       subcommand flips it on with --debug. }
     property DebugIO: Boolean read FDebugIO write FDebugIO;
+    { Cap on tool-loop iterations for /v1/chat/completions. Defaults to 25
+      to match what typical code agents need for read-debug-edit cycles;
+      legacy /v1/chat keeps its 8-iteration cap unchanged. }
+    property MaxIter: Integer read FMaxIter write FMaxIter;
     procedure Start(const BindAddr: string; Port: Integer);
     procedure Stop;
     procedure WaitForStop;
@@ -84,6 +89,7 @@ begin
   FCfg      := Cfg;
   FProvider := Provider;
   FRegistry := Registry;
+  FMaxIter  := 25;
   FStopFlag := TEvent.Create(nil, True, False, '');
   FHTTP := TIdHTTPServer.Create(nil);
   FHTTP.OnCommandGet := OnCommandGet;
@@ -538,7 +544,7 @@ begin
     LoopCfg.Provider      := FProvider;
     LoopCfg.Registry      := FRegistry;
     LoopCfg.Model         := ReqModel;
-    LoopCfg.MaxIterations := 8;
+    LoopCfg.MaxIterations := FMaxIter;
     LoopCfg.Options       := DefaultChatOptions;
     { Temperature: only forward if the client actually set it (>0). Avoids
       the deprecated-field 400 from newer Claude models when the OpenAI
@@ -564,6 +570,33 @@ begin
       FinishReason := Loop.LastResp.FinishReason
     else
       FinishReason := 'stop';
+
+    { Synthesize a message when the loop exhausted MaxIterations on a
+      tool-use turn — Loop.Content is empty in that case because the
+      final assistant turn was tool calls, not text. Without this the
+      SSE stream goes out with an empty delta and clients (correctly)
+      report "stream ended without any text deltas." Surface the cap
+      hit as visible content + a synthetic finish_reason so the client
+      knows why it didn't get a real answer. }
+    if (Loop.Content = '') and (Loop.Iterations >= FMaxIter) then
+    begin
+      Loop.Content := Format(
+        '(reached MaxIterations=%d while the model was still calling tools; '+
+        'last finish_reason=%s — raise the --max-iter cap on `pasclaw serve` '+
+        'or reduce the task scope.)',
+        [FMaxIter, FinishReason]);
+      FinishReason := 'length';
+      LogWarn('chat/completions: tool loop hit MaxIterations=%d with no final text', [FMaxIter]);
+    end
+    else if Loop.Content = '' then
+    begin
+      { Empty content for any other reason still confuses streaming clients;
+        give them something so they can decide what to do. }
+      Loop.Content := Format('(no content returned by the model; finish_reason=%s)',
+                              [FinishReason]);
+      LogWarn('chat/completions: empty content with finish=%s iterations=%d',
+              [FinishReason, Loop.Iterations]);
+    end;
 
     if FDebugIO then
       LogDebug('chat/completions: tool loop done iterations=%d in=%d out=%d finish=%s content=%s',
