@@ -71,6 +71,16 @@
         <DCC_UsePackage>$(DCC_UsePackage)</DCC_UsePackage>
         <!-- Every src/pkg/* directory + src/cmd, relative to src/pasclaw/ -->
         <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\cron;..\pkg\skills;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <!--
+          DCC_Namespace lets dcc32/dcc64 resolve bare unit names ("SysUtils",
+          "Classes", "Windows") back to their fully qualified modern names
+          ("System.SysUtils", "System.Classes", "Winapi.Windows"). Without
+          this, Delphi emits F2613 Unit 'SysUtils' not found because the
+          RTL only ships System.SysUtils.dcu on modern Delphi.
+          Posix is included for the Delphi/Linux64 build; harmless on Windows.
+        -->
+        <DCC_Namespace>System;System.Net;System.Win;Xml;Data;Datasnap;Web;Soap;Winapi;Posix;$(DCC_Namespace)</DCC_Namespace>
+        <DCC_UnitAlias>WinTypes=Winapi.Windows;WinProcs=Winapi.Windows;$(DCC_UnitAlias)</DCC_UnitAlias>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base_Win32)'!=''">
         <DCC_UsePackage>vcl;rtl;$(DCC_UsePackage)</DCC_UsePackage>
