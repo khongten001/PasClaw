@@ -119,6 +119,7 @@
         <DCCReference Include="..\cmd\PasClaw.Cmd.Agent.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Auth.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Gateway.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Serve.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Status.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Version.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Cron.pas"/>
