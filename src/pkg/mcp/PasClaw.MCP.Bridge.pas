@@ -111,13 +111,10 @@ function H_29(const A: string; out E: string): string; var D: Boolean; begin E:=
 function H_30(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[30].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[30].Client.CallTool(GBindings[30].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
 function H_31(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[31].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[31].Client.CallTool(GBindings[31].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
 
-const
-  Handlers: array[0..MaxBindings - 1] of TToolHandler = (
-    @H_0,  @H_1,  @H_2,  @H_3,  @H_4,  @H_5,  @H_6,  @H_7,
-    @H_8,  @H_9,  @H_10, @H_11, @H_12, @H_13, @H_14, @H_15,
-    @H_16, @H_17, @H_18, @H_19, @H_20, @H_21, @H_22, @H_23,
-    @H_24, @H_25, @H_26, @H_27, @H_28, @H_29, @H_30, @H_31
-  );
+{ Delphi rejects @FunctionName as a constant expression in typed-constant
+  array initializers; populate the table at startup instead. }
+var
+  Handlers: array[0..MaxBindings - 1] of TToolHandler;
 
 function FindBinding(const RegisteredName: string; out Idx: Integer): Boolean;
 var
@@ -230,5 +227,13 @@ end;
 
 initialization
   { all bindings start free }
+  Handlers[0]  := @H_0;   Handlers[1]  := @H_1;   Handlers[2]  := @H_2;   Handlers[3]  := @H_3;
+  Handlers[4]  := @H_4;   Handlers[5]  := @H_5;   Handlers[6]  := @H_6;   Handlers[7]  := @H_7;
+  Handlers[8]  := @H_8;   Handlers[9]  := @H_9;   Handlers[10] := @H_10;  Handlers[11] := @H_11;
+  Handlers[12] := @H_12;  Handlers[13] := @H_13;  Handlers[14] := @H_14;  Handlers[15] := @H_15;
+  Handlers[16] := @H_16;  Handlers[17] := @H_17;  Handlers[18] := @H_18;  Handlers[19] := @H_19;
+  Handlers[20] := @H_20;  Handlers[21] := @H_21;  Handlers[22] := @H_22;  Handlers[23] := @H_23;
+  Handlers[24] := @H_24;  Handlers[25] := @H_25;  Handlers[26] := @H_26;  Handlers[27] := @H_27;
+  Handlers[28] := @H_28;  Handlers[29] := @H_29;  Handlers[30] := @H_30;  Handlers[31] := @H_31;
 
 end.
