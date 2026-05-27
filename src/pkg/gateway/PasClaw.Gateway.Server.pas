@@ -571,27 +571,36 @@ begin
     else
       FinishReason := 'stop';
 
-    { Synthesize a message when the loop exhausted MaxIterations on a
-      tool-use turn — Loop.Content is empty in that case because the
-      final assistant turn was tool calls, not text. Without this the
-      SSE stream goes out with an empty delta and clients (correctly)
-      report "stream ended without any text deltas." Surface the cap
-      hit as visible content + a synthetic finish_reason so the client
-      knows why it didn't get a real answer. }
-    if (Loop.Content = '') and (Loop.Iterations >= FMaxIter) then
+    { Tag cap-exhausted turns regardless of whether the model produced
+      pre-tool narration. The discriminator is the presence of pending
+      tool calls in the last response: RunToolLoop only exits via the
+      cap when the last turn had ToolCalls (otherwise it early-returns
+      cleanly). Iterations >= FMaxIter alone is ambiguous since a clean
+      completion on the very last allowed turn also reports that count.
+
+      When the cap is hit:
+        - empty Content -> the cap note is the whole message
+        - non-empty Content (model said "Let me check..." then called a
+          tool) -> keep the partial text and append the cap note. Set
+          finish_reason=length so clients don't treat a truncated tool
+          loop as a completed answer. }
+    if Length(Loop.LastResp.ToolCalls) > 0 then
     begin
-      Loop.Content := Format(
+      Loop.Content := Trim(Loop.Content);
+      if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
+      Loop.Content := Loop.Content + Format(
         '(reached MaxIterations=%d while the model was still calling tools; '+
-        'last finish_reason=%s — raise the --max-iter cap on `pasclaw serve` '+
-        'or reduce the task scope.)',
-        [FMaxIter, FinishReason]);
+        'last finish_reason=%s, %d pending tool call(s) — raise the --max-iter '+
+        'cap on `pasclaw serve` or reduce the task scope.)',
+        [FMaxIter, FinishReason, Length(Loop.LastResp.ToolCalls)]);
       FinishReason := 'length';
-      LogWarn('chat/completions: tool loop hit MaxIterations=%d with no final text', [FMaxIter]);
+      LogWarn('chat/completions: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
+              [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
     end
     else if Loop.Content = '' then
     begin
-      { Empty content for any other reason still confuses streaming clients;
-        give them something so they can decide what to do. }
+      { Loop exited normally with no pending tool calls but the model
+        produced no text. Some streaming clients can't represent that. }
       Loop.Content := Format('(no content returned by the model; finish_reason=%s)',
                               [FinishReason]);
       LogWarn('chat/completions: empty content with finish=%s iterations=%d',
