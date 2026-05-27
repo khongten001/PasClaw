@@ -140,11 +140,22 @@ end;
 function Tool_FSEditHashline(const ArgsJSON: string; out ErrMsg: string): string;
 { Apply a hashline-format patch to one or more files. The patch text carries
   its own ¶path#hash headers; we read each referenced file, validate the
-  header hash matches what's on disk, apply the edits, and write back. }
+  header hash matches what's on disk, apply the edits to an in-memory
+  buffer, and only write any file once every section has validated and
+  applied successfully. That keeps the stale-or-out-of-range abort path
+  truly all-or-nothing — a later section failing can't leave an earlier
+  section's file mutated. }
+type
+  TPlan = record
+    Path:      string;
+    NewBody:   string;
+    EditCount: Integer;
+  end;
 var
   Patch, ParseErr, ApplyErr, FileBody, NewBody, CurrentHash: string;
   Sections: THLSectionArray;
-  i, FilesWritten: Integer;
+  Plans: array of TPlan;
+  i: Integer;
   Sb: TStringBuilder;
 begin
   ErrMsg := '';
@@ -163,39 +174,52 @@ begin
     ErrMsg := 'patch contained no sections; expected one or more lines starting with ' + HL_FILE_PREFIX + 'path#hash';
     Exit('');
   end;
+
+  { Pass 1: validate every section and stage the new body in memory.
+    No writes happen during this pass, so a stale hash / missing file /
+    out-of-range anchor on any section leaves the disk untouched. }
+  SetLength(Plans, Length(Sections));
+  for i := 0 to High(Sections) do
+  begin
+    if not FileExists(Sections[i].Path) then
+    begin
+      ErrMsg := Format('section %d: no such file: %s', [i + 1, Sections[i].Path]);
+      Exit('');
+    end;
+    FileBody := ReadFileText(Sections[i].Path);
+    if Sections[i].HasFileHash then
+    begin
+      CurrentHash := ComputeFileHash(FileBody);
+      if CurrentHash <> Sections[i].FileHash then
+      begin
+        ErrMsg := Format('section %d: stale patch for %s (header hash %s, file hash %s) — re-read and rebase',
+                         [i + 1, Sections[i].Path, Sections[i].FileHash, CurrentHash]);
+        Exit('');
+      end;
+    end;
+    if not ApplyHashlineEdits(FileBody, Sections[i].Edits, NewBody, ApplyErr) then
+    begin
+      ErrMsg := Format('section %d (%s): %s', [i + 1, Sections[i].Path, ApplyErr]);
+      Exit('');
+    end;
+    Plans[i].Path      := Sections[i].Path;
+    Plans[i].NewBody   := NewBody;
+    Plans[i].EditCount := Length(Sections[i].Edits);
+  end;
+
+  { Pass 2: commit. By now every section is known to apply cleanly.
+    A disk-level write failure can still partially apply, but that's a
+    filesystem-atomicity concern beyond the hashline contract. }
   Sb := TStringBuilder.Create;
   try
-    FilesWritten := 0;
-    for i := 0 to High(Sections) do
+    for i := 0 to High(Plans) do
     begin
-      if not FileExists(Sections[i].Path) then
-      begin
-        ErrMsg := Format('section %d: no such file: %s', [i + 1, Sections[i].Path]);
-        Exit('');
-      end;
-      FileBody := ReadFileText(Sections[i].Path);
-      if Sections[i].HasFileHash then
-      begin
-        CurrentHash := ComputeFileHash(FileBody);
-        if CurrentHash <> Sections[i].FileHash then
-        begin
-          ErrMsg := Format('section %d: stale patch for %s (header hash %s, file hash %s) — re-read and rebase',
-                           [i + 1, Sections[i].Path, Sections[i].FileHash, CurrentHash]);
-          Exit('');
-        end;
-      end;
-      if not ApplyHashlineEdits(FileBody, Sections[i].Edits, NewBody, ApplyErr) then
-      begin
-        ErrMsg := Format('section %d (%s): %s', [i + 1, Sections[i].Path, ApplyErr]);
-        Exit('');
-      end;
-      WriteFileText(Sections[i].Path, NewBody);
-      Inc(FilesWritten);
+      WriteFileText(Plans[i].Path, Plans[i].NewBody);
       Sb.Append(Format('%s: wrote %d bytes (%d edits)',
-                       [Sections[i].Path, Length(NewBody), Length(Sections[i].Edits)]));
+                       [Plans[i].Path, Length(Plans[i].NewBody), Plans[i].EditCount]));
       Sb.Append(sLineBreak);
     end;
-    Result := Format('applied patch to %d file(s)'#10'%s', [FilesWritten, Sb.ToString]);
+    Result := Format('applied patch to %d file(s)'#10'%s', [Length(Plans), Sb.ToString]);
   finally
     Sb.Free;
   end;
