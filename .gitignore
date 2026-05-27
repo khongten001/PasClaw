@@ -1,0 +1,11 @@
+build/
+vendor/
+src/pkg/gateway/webui.res
+*.o
+*.ppu
+*.compiled
+*.lps
+*.bak
+*.exe
+*~
+.DS_Store

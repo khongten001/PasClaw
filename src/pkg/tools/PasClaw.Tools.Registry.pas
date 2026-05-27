@@ -1,0 +1,120 @@
+{
+  PasClaw.Tools.Registry - register/lookup/dispatch built-in and skill-supplied
+  tools. Thread-safety isn't critical for the CLI (single-process), but we keep
+  the same API shape as pkg/tools/registry.go so a multi-channel gateway can
+  use it later.
+}
+unit PasClaw.Tools.Registry;
+
+{$MODE DELPHI}
+{$H+}
+
+interface
+
+uses
+  SysUtils, Classes,
+  PasClaw.Tools.Types,
+  PasClaw.Providers.Types;
+
+type
+  TToolRegistry = class
+  private
+    FTools: TToolList;
+  public
+    constructor Create;
+    procedure Register(const T: TTool);
+    function  Find(const Name: string; out T: TTool): Boolean;
+    function  Names: TStringArray;
+    function  Count: Integer;
+    function  ToProviderDefs: TToolDefinitionArray;
+    function  Dispatch(const Name, ArgsJSON: string; out ErrMsg: string): string;
+  end;
+
+implementation
+
+constructor TToolRegistry.Create;
+begin
+  inherited Create;
+  SetLength(FTools, 0);
+end;
+
+procedure TToolRegistry.Register(const T: TTool);
+var
+  i: Integer;
+begin
+  for i := 0 to High(FTools) do
+    if FTools[i].Name = T.Name then
+    begin
+      FTools[i] := T;
+      Exit;
+    end;
+  SetLength(FTools, Length(FTools) + 1);
+  FTools[High(FTools)] := T;
+end;
+
+function TToolRegistry.Find(const Name: string; out T: TTool): Boolean;
+var
+  i: Integer;
+begin
+  for i := 0 to High(FTools) do
+    if FTools[i].Name = Name then
+    begin
+      T := FTools[i];
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+function TToolRegistry.Names: TStringArray;
+var
+  i: Integer;
+begin
+  SetLength(Result, Length(FTools));
+  for i := 0 to High(FTools) do Result[i] := FTools[i].Name;
+end;
+
+function TToolRegistry.Count: Integer;
+begin
+  Result := Length(FTools);
+end;
+
+function TToolRegistry.ToProviderDefs: TToolDefinitionArray;
+var
+  i: Integer;
+begin
+  SetLength(Result, Length(FTools));
+  for i := 0 to High(FTools) do
+  begin
+    Result[i].Name        := FTools[i].Name;
+    Result[i].Description := FTools[i].Description;
+    Result[i].Schema      := FTools[i].Schema;
+  end;
+end;
+
+function TToolRegistry.Dispatch(const Name, ArgsJSON: string; out ErrMsg: string): string;
+var
+  T: TTool;
+begin
+  ErrMsg := '';
+  if not Find(Name, T) then
+  begin
+    ErrMsg := 'unknown tool: ' + Name;
+    Exit('');
+  end;
+  if not Assigned(T.Handler) then
+  begin
+    ErrMsg := 'tool "' + Name + '" has no handler';
+    Exit('');
+  end;
+  try
+    Result := T.Handler(ArgsJSON, ErrMsg);
+  except
+    on E: Exception do
+    begin
+      ErrMsg := E.ClassName + ': ' + E.Message;
+      Result := '';
+    end;
+  end;
+end;
+
+end.

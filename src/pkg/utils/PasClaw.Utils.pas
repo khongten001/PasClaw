@@ -1,0 +1,187 @@
+{
+  PasClaw.Utils - small helpers used across the codebase.
+  Mirrors pieces of pkg/utils in picoclaw.
+}
+unit PasClaw.Utils;
+
+{$MODE DELPHI}
+{$H+}
+
+interface
+
+uses
+  SysUtils, Classes, DateUtils;
+
+function DupStr(const S: string; Count: Integer): string;
+function VisibleLength(const S: string): Integer;
+function HasPrefix(const S, Prefix: string): Boolean;
+function HasSuffix(const S, Suffix: string): Boolean;
+function TrimQuotes(const S: string): string;
+function EnsureDir(const Path: string): Boolean;
+function ExpandHome(const Path: string): string;
+function HomeDir: string;
+function JoinPath(const A, B: string): string;
+function FileExistsCI(const Path: string): Boolean;
+function ReadFileText(const Path: string): string;
+procedure WriteFileText(const Path, Content: string);
+function SplitToList(const S: string; Sep: Char): TStringList;
+function NowIsoUtc: string;
+
+implementation
+
+function DupStr(const S: string; Count: Integer): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 1 to Count do Result := Result + S;
+end;
+
+function VisibleLength(const S: string): Integer;
+{ Strip ANSI escapes and count display columns; treats UTF-8 multi-byte runs
+  as one column each. This is approximate but adequate for box drawing. }
+var
+  i, n: Integer;
+  c: Byte;
+  inEsc: Boolean;
+begin
+  n := 0;
+  inEsc := False;
+  i := 1;
+  while i <= Length(S) do
+  begin
+    c := Byte(S[i]);
+    if inEsc then
+    begin
+      if c = Ord('m') then inEsc := False;
+      Inc(i);
+      Continue;
+    end;
+    if c = 27 then { ESC }
+    begin
+      inEsc := True;
+      Inc(i);
+      Continue;
+    end;
+    { Skip continuation bytes 10xxxxxx, count lead bytes only. }
+    if (c and $C0) <> $80 then
+      Inc(n);
+    Inc(i);
+  end;
+  Result := n;
+end;
+
+function HasPrefix(const S, Prefix: string): Boolean;
+begin
+  Result := (Length(S) >= Length(Prefix)) and
+            (Copy(S, 1, Length(Prefix)) = Prefix);
+end;
+
+function HasSuffix(const S, Suffix: string): Boolean;
+begin
+  Result := (Length(S) >= Length(Suffix)) and
+            (Copy(S, Length(S) - Length(Suffix) + 1, Length(Suffix)) = Suffix);
+end;
+
+function TrimQuotes(const S: string): string;
+begin
+  Result := S;
+  if (Length(Result) >= 2) and
+     (((Result[1] = '"') and (Result[Length(Result)] = '"')) or
+      ((Result[1] = '''') and (Result[Length(Result)] = ''''))) then
+    Result := Copy(Result, 2, Length(Result) - 2);
+end;
+
+function HomeDir: string;
+begin
+  Result := GetEnvironmentVariable('HOME');
+  if Result = '' then
+    Result := GetEnvironmentVariable('USERPROFILE');
+  if Result = '' then
+    Result := GetCurrentDir;
+end;
+
+function ExpandHome(const Path: string): string;
+begin
+  if (Path <> '') and (Path[1] = '~') then
+    Result := HomeDir + Copy(Path, 2, MaxInt)
+  else
+    Result := Path;
+end;
+
+function JoinPath(const A, B: string): string;
+begin
+  if A = '' then Exit(B);
+  if B = '' then Exit(A);
+  if (A[Length(A)] = PathDelim) or (A[Length(A)] = '/') then
+    Result := A + B
+  else
+    Result := A + PathDelim + B;
+end;
+
+function EnsureDir(const Path: string): Boolean;
+begin
+  if DirectoryExists(Path) then Exit(True);
+  Result := ForceDirectories(Path);
+end;
+
+function FileExistsCI(const Path: string): Boolean;
+begin
+  Result := FileExists(Path);
+end;
+
+function ReadFileText(const Path: string): string;
+var
+  Strm: TFileStream;
+  SS: TStringStream;
+begin
+  if not FileExists(Path) then Exit('');
+  Strm := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
+  try
+    SS := TStringStream.Create('');
+    try
+      SS.CopyFrom(Strm, 0);
+      Result := SS.DataString;
+    finally
+      SS.Free;
+    end;
+  finally
+    Strm.Free;
+  end;
+end;
+
+procedure WriteFileText(const Path, Content: string);
+var
+  Strm: TFileStream;
+begin
+  EnsureDir(ExtractFilePath(Path));
+  Strm := TFileStream.Create(Path, fmCreate);
+  try
+    if Content <> '' then
+      Strm.WriteBuffer(Pointer(Content)^, Length(Content));
+  finally
+    Strm.Free;
+  end;
+end;
+
+function SplitToList(const S: string; Sep: Char): TStringList;
+var
+  i, last: Integer;
+begin
+  Result := TStringList.Create;
+  last := 1;
+  for i := 1 to Length(S) do
+    if S[i] = Sep then
+    begin
+      Result.Add(Copy(S, last, i - last));
+      last := i + 1;
+    end;
+  Result.Add(Copy(S, last, MaxInt));
+end;
+
+function NowIsoUtc: string;
+begin
+  Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"Z"', LocalTimeToUniversal(Now));
+end;
+
+end.
