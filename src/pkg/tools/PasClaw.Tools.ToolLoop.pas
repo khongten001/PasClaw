@@ -46,6 +46,79 @@ uses
   PasClaw.JSON,
   PasClaw.Hashline;
 
+function IsPatchFormatError(const Err: string): Boolean;
+var
+  L: string;
+begin
+  L := LowerCase(Err);
+  Result := (Pos('patch parse:', L) > 0) or
+            (Pos('patch preflight:', L) > 0) or
+            (Pos('unsupported inline payload token', L) > 0);
+end;
+
+function NormalizePatchForCompare(const S: string): string;
+var
+  i: Integer;
+  C: Char;
+begin
+  Result := '';
+  SetLength(Result, Length(S));
+  for i := 1 to Length(S) do
+  begin
+    C := S[i];
+    if (C <> #13) and (C <> #10) and (C <> #9) and (C <> ' ') then
+      Result[i] := C
+    else
+      Result[i] := #0;
+  end;
+  Result := StringReplace(Result, #0, '', [rfReplaceAll]);
+end;
+
+function CanonicalizeHashlinePatch(const Patch: string;
+                                   out Canonical: string;
+                                   out HasUnsupportedTokens: Boolean): Boolean;
+var
+  Sections: THLSectionArray;
+  ParseErr: string;
+  i, j: Integer;
+  E: THLEdit;
+  Sb: TStringBuilder;
+begin
+  Canonical := '';
+  HasUnsupportedTokens := False;
+  if not ParseHashlinePatch(Patch, Sections, ParseErr) then Exit(False);
+  Sb := TStringBuilder.Create;
+  try
+    for i := 0 to High(Sections) do
+    begin
+      if i > 0 then Sb.Append(#10);
+      if Sections[i].HasFileHash then
+        Sb.Append(FormatHashlineHeader(Sections[i].Path, Sections[i].FileHash))
+      else
+        Sb.Append(HL_FILE_PREFIX + Sections[i].Path);
+      Sb.Append(#10);
+      for j := 0 to High(Sections[i].Edits) do
+      begin
+        E := Sections[i].Edits[j];
+        Sb.Append(IntToStr(E.Anchor.LineNum)).Append(HL_LINE_BODY_SEP).Append(#10);
+        case E.PayloadKind of
+          hpkReplace: Sb.Append(HL_PAYLOAD_REPLACE);
+          hpkAbove:   Sb.Append(HL_PAYLOAD_ABOVE);
+          hpkBelow:   Sb.Append(HL_PAYLOAD_BELOW);
+        else
+          HasUnsupportedTokens := True;
+          Sb.Append(HL_PAYLOAD_REPLACE);
+        end;
+        Sb.Append(E.Text).Append(#10);
+      end;
+    end;
+    Canonical := Sb.ToString;
+  finally
+    Sb.Free;
+  end;
+  Result := True;
+end;
+
 function PreflightToolCall(const Name, ArgsJSON: string; out Err: string): Boolean;
 var
   Obj: TJsonObject;
@@ -100,7 +173,9 @@ var
   Tools: TToolDefinitionArray;
   Resp: TLLMResponse;
   Hist: array of TMessage;
-  ResultText, Err: string;
+  ResultText, Err, RetryArgs, Patch, CanonicalPatch, N1, N2: string;
+  ArgsObj: TJsonObject;
+  HasUnsup: Boolean;
 begin
   Loop.Content    := '';
   Loop.Iterations := 0;
@@ -147,14 +222,55 @@ begin
 
       Err := '';
       ResultText := '';
-      if not PreflightToolCall(Resp.ToolCalls[i].Func.Name, Resp.ToolCalls[i].Func.Arguments, Err) then
+      RetryArgs := Resp.ToolCalls[i].Func.Arguments;
+      if not PreflightToolCall(Resp.ToolCalls[i].Func.Name, RetryArgs, Err) then
         ResultText := ''
       else if Cfg.Registry <> nil then
-        ResultText := Cfg.Registry.RunTool(Resp.ToolCalls[i].Func.Name,
-                                            Resp.ToolCalls[i].Func.Arguments,
-                                            Err)
+        ResultText := Cfg.Registry.RunTool(Resp.ToolCalls[i].Func.Name, RetryArgs, Err)
       else
         Err := 'no tool registry';
+
+      if (Resp.ToolCalls[i].Func.Name = 'fs_edit_hashline') and IsPatchFormatError(Err) then
+      begin
+        LogWarn('tool-retry attempt=1 strategy=raw_hashline normalized_patch_len=%d has_unsupported_tokens=%s class=format_error',
+          [Length(NormalizePatchForCompare(RetryArgs)), BoolToStr(False, True)]);
+        ArgsObj := TJsonObject.Parse(RetryArgs);
+        Patch := '';
+        if ArgsObj <> nil then
+        begin
+          try
+            Patch := ArgsObj.GetStr('patch', '');
+          finally
+            ArgsObj.Free;
+          end;
+        end;
+        if (Patch <> '') and CanonicalizeHashlinePatch(Patch, CanonicalPatch, HasUnsup) then
+        begin
+          ArgsObj := TJsonObject.Create;
+          try
+            ArgsObj.Put('patch', CanonicalPatch);
+            RetryArgs := ArgsObj.Stringify;
+          finally
+            ArgsObj.Free;
+          end;
+          N1 := NormalizePatchForCompare(Patch);
+          N2 := NormalizePatchForCompare(CanonicalPatch);
+          LogWarn('tool-retry attempt=2 strategy=strict_hashline_formatter normalized_patch_len=%d has_unsupported_tokens=%s class=format_error',
+            [Length(N2), BoolToStr(HasUnsup, True)]);
+          Err := '';
+          if not PreflightToolCall(Resp.ToolCalls[i].Func.Name, RetryArgs, Err) then
+            ResultText := ''
+          else if Cfg.Registry <> nil then
+            ResultText := Cfg.Registry.RunTool(Resp.ToolCalls[i].Func.Name, RetryArgs, Err)
+          else
+            Err := 'no tool registry';
+          if IsPatchFormatError(Err) and (N1 = N2) then
+            Err := 'format_error: deterministic fallback exhausted; two consecutive retries had equivalent normalized patch content. ' +
+                   'Regenerate patch intent or use safer apply-patch/unified-diff edit path.';
+        end
+        else
+          Err := 'format_error: unable to canonicalize patch for deterministic retry; regenerate patch intent or use safer apply-patch/unified-diff edit path. original=' + Err;
+      end;
 
       if Assigned(Cfg.OnToolResult) then
         Cfg.OnToolResult(Resp.ToolCalls[i].Func.Name, ResultText, Err);
