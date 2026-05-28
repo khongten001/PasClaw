@@ -22,7 +22,7 @@ call :compile_resource || exit /b 1
 
 where msbuild.exe >nul 2>nul
 if not errorlevel 1 (
-  echo Building %DPROJ% with MSBuild (%CONFIG%|%PLATFORM%)...
+  echo Building %DPROJ% with MSBuild ^(%CONFIG%^|%PLATFORM%^)...
   msbuild.exe "%DPROJ%" /t:Build /p:Config=%CONFIG% /p:Platform=%PLATFORM%
   if errorlevel 1 (
     echo ERROR: Delphi MSBuild build failed.
