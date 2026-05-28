@@ -300,7 +300,7 @@ begin
   Cfg.Model         := ModelName;
   Cfg.MaxIterations := FMaxIterations;
   Cfg.Options       := DefaultChatOptions;
-  Cfg.Options.SystemPrompt := BuildSystemPrompt(FConfig, FSystemPrompt);
+  Cfg.Options.SystemPrompt := BuildSystemPrompt(FConfig, FSystemPrompt, FUseTools);
   Cfg.OnText        := ForwardText;
   Cfg.OnToolCall    := ForwardToolCall;
   Cfg.OnToolResult  := ForwardToolResult;
