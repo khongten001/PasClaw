@@ -192,7 +192,35 @@ pasclaw skills install ./my-skill
 pasclaw skills remove my-skill
 ```
 
-Skills are discovered from `workspace/skills` under `PASCLAW_HOME` and can be registered in config with `skills install`.
+Skills live under `$PASCLAW_HOME/workspace/skills/`. PasClaw accepts two layouts:
+
+- **Per-directory `SKILL.md`** (preferred — same format picoclaw, nanobot, ClawHub, and Anthropic agent-skills use):
+
+  ```
+  workspace/skills/my-skill/
+  └── SKILL.md     ← YAML frontmatter + markdown body
+  ```
+
+  ```yaml
+  ---
+  name: my-skill
+  description: One-line summary the model uses to pick the skill
+  # Omit `kind` for knowledge-only skills (most common); set `kind: shell`
+  # or `kind: prompt` to register a callable `skill_<name>` tool.
+  ---
+
+  # My skill
+
+  Markdown body. The system prompt advertises this SKILL.md path; the
+  model loads the full body with `fs_read` when the matching task comes
+  up.
+  ```
+
+  A copy-pasteable starter lives at [`samples/skills/hello/SKILL.md`](samples/skills/hello/SKILL.md).
+
+- **Legacy single `*.json`** (`workspace/skills/<name>.json`) — still loaded for backwards compat. New skills should use the directory layout; per-directory entries shadow same-named JSON entries.
+
+Subsequent phases will add **`pasclaw skills install owner/repo[/path]`** (GitHub fetch + zip extract — Delphi has native `System.Zip` support, so no tar dependency), then a **ClawHub** search/install client, then `scripts/` + `references/` resource loading.
 
 ### Gateway, OpenAI-compatible server, and channels
 
