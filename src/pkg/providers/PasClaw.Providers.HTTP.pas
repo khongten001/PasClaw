@@ -40,6 +40,19 @@ function PostJSON(const URL, JSON: string;
 function GetJSONURL(const URL: string;
                     const Headers: array of THeaderPair;
                     TimeoutSeconds: Integer): THTTPResult;
+
+{ Binary HTTP GET into a caller-owned stream. Use this for zip
+  downloads, embedding fetches, etc. — anything where TStringStream's
+  UTF-8 decoding would corrupt the payload. Caller positions and
+  sizes Stream however they need afterward.
+
+  Returns a THTTPResult with StatusCode and ErrorMsg set; Body stays
+  empty (the bytes went into Stream). HandleRedirects is on so a
+  GitHub codeload 302 -> Amazon S3 URL works transparently. }
+function GetURLToStream(const URL: string; Stream: TStream;
+                        const Headers: array of THeaderPair;
+                        TimeoutSeconds: Integer): THTTPResult;
+
 function MakeHeader(const Name, Value: string): THeaderPair;
 
 { Returns True if Indy can load OpenSSL; otherwise False and ErrMsg
@@ -226,6 +239,47 @@ begin
     Http.Request.Accept := 'application/json';
     ApplyHeaders(Http, Headers);
     Result := DoRequest(Http, URL, nil, False);
+  finally
+    Http.Free;
+  end;
+end;
+
+function GetURLToStream(const URL: string; Stream: TStream;
+                        const Headers: array of THeaderPair;
+                        TimeoutSeconds: Integer): THTTPResult;
+var
+  Http: TIdHTTP;
+  SSLErr: string;
+begin
+  Result.StatusCode := 0;
+  Result.Body       := '';
+  Result.ErrorMsg   := '';
+  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  if SSLErr <> '' then
+  begin
+    Result.StatusCode := -1;
+    Result.ErrorMsg   := SSLErr;
+    Http.Free;
+    Exit;
+  end;
+  try
+    Http.Request.Accept := '*/*';
+    ApplyHeaders(Http, Headers);
+    try
+      Http.Get(URL, Stream);
+      Result.StatusCode := Http.ResponseCode;
+    except
+      on E: EIdHTTPProtocolException do
+      begin
+        Result.StatusCode := E.ErrorCode;
+        Result.ErrorMsg   := E.Message;
+      end;
+      on E: Exception do
+      begin
+        Result.StatusCode := Http.ResponseCode;
+        Result.ErrorMsg   := E.Message;
+      end;
+    end;
   finally
     Http.Free;
   end;

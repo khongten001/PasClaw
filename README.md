@@ -188,8 +188,11 @@ pasclaw cron enable daily-summary
 pasclaw cron remove daily-summary
 
 pasclaw skills list
-pasclaw skills install ./my-skill
-pasclaw skills remove my-skill
+pasclaw skills install owner/repo                         # GitHub: repo root SKILL.md
+pasclaw skills install owner/repo/path/to/skill           # GitHub: subdirectory
+pasclaw skills install owner/repo/path/to/skill@v1.2.3    # GitHub: pinned ref
+pasclaw skills install my-skill                           # Legacy: record name in config.json
+pasclaw skills remove my-skill                            # Deletes workspace dir + config entry
 ```
 
 Skills live under `$PASCLAW_HOME/workspace/skills/`. PasClaw accepts two layouts:
@@ -220,7 +223,11 @@ Skills live under `$PASCLAW_HOME/workspace/skills/`. PasClaw accepts two layouts
 
 - **Legacy single `*.json`** (`workspace/skills/<name>.json`) — still loaded for backwards compat. New skills should use the directory layout; per-directory entries shadow same-named JSON entries.
 
-Subsequent phases will add **`pasclaw skills install owner/repo[/path]`** (GitHub fetch + zip extract — Delphi has native `System.Zip` support, so no tar dependency), then a **ClawHub** search/install client, then `scripts/` + `references/` resource loading.
+**GitHub install** (Phase 2, this release):
+
+`pasclaw skills install owner/repo[/path][@ref]` downloads a zip snapshot from `codeload.github.com`, extracts it via the bundled zip library (`Zipper.TUnZipper` under FPC, `System.Zip.TZipFile` under Delphi — no tar dependency), locates SKILL.md at the requested subpath, validates it through `ParseSkillMD`, and copies the containing directory tree into `$PASCLAW_HOME/workspace/skills/<name>/`. If no `@ref` is given the installer tries `main` then falls back to `master`. The destination directory name defaults to the last segment of the subpath, or the repo name when no subpath was given. Refuses to overwrite an existing skill directory — `pasclaw skills remove <name>` first if you want to reinstall.
+
+Subsequent phases will add a **ClawHub** search/install client (slug-based registry the picoclaw / nanobot ecosystem standardised on), then `scripts/` (callable helpers) + `references/` (lazy-loaded context) runtime support.
 
 ### Gateway, OpenAI-compatible server, and channels
 
