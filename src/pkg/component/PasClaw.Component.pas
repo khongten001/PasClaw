@@ -421,6 +421,8 @@ begin
   if (FThread <> nil) or (FServer <> nil) then Stop;
 
   FConfig := LoadConfig;
+  if FModel <> '' then
+    FConfig.DefaultModel := FModel;
 
   FProvider := nil;
   if (FProviderName <> '') or (FConfig.DefaultProvider <> '') then
