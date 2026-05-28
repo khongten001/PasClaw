@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Gateway.Server - HTTP gateway built on TIdHTTPServer.
   Hosts a small JSON API:
 
@@ -1028,7 +1028,7 @@ end;
 
 function BuildResponsesObject(const Id, Model, Status, Content: string;
                                Usage: TUsageInfo): TJsonObject;
-{ OpenAI Responses-compatible non-streaming response.
+(* OpenAI Responses-compatible non-streaming response.
 
   The openai-python SDK's Pydantic `Response` model marks four fields
   as required (no default) — when any of them is absent from the JSON
@@ -1053,7 +1053,7 @@ function BuildResponsesObject(const Id, Model, Status, Content: string;
   explicit `null` on the success path so the SDK's branch for those
   fields takes the success branch deterministically. The non-success
   path (HandleResponses' RunToolLoop-failed branch) attaches a real
-  `error` object with `code` + `message` per ResponseError schema. }
+  `error` object with `code` + `message` per ResponseError schema. *)
 var
   OutputArr, ContentArr, AnnotationsArr, ToolsArr: TJsonArray;
   MsgObj, TextObj, UsageObj, TextCfgObj, FormatObj: TJsonObject;
@@ -1335,11 +1335,11 @@ begin
     begin
       ReplyObj := BuildResponsesObject(RespId, ReqModel, 'failed', '', Loop.LastResp.Usage);
       try
-        { ResponseError schema is {code, message}. BuildResponsesObject
+        (* ResponseError schema is {code, message}. BuildResponsesObject
           set error: null on the success path; overwrite with the real
           shape here. SDK validators expect `code` to match a known
           enum, with `server_error` covering the "tool loop blew up
-          server-side" case. }
+          server-side" case. *)
         ErrObj := TJsonObject.Create;
         ErrObj.PutStr('code',    'server_error');
         ErrObj.PutStr('message', 'tool loop failed');
