@@ -457,9 +457,13 @@ type
     FContext: TIdContext;
     FId, FModel: string;
     FDebugIO: Boolean;
+    procedure WriteSocketBytes(const Data: TBytes);
   public
     constructor Create(AContext: TIdContext; const Id, Model: string;
                        DebugIO: Boolean);
+    { Emits Data as a single HTTP/1.1 chunked-encoding chunk. Use this
+      for SSE event payloads — every WriteChunk / WriteComment goes
+      through here. }
     procedure WriteRaw(const Data: string);
     procedure WriteChunk(const DeltaContent, FinishReason: string);
     procedure WriteComment(const Note: string);
@@ -467,6 +471,9 @@ type
     procedure NoteToolCall(const Name, ArgsJSON: string);
     procedure NoteToolResult(const Name, ResultText, Err: string);
     procedure Finalize(const Content, FinishReason: string);
+    { Writes the zero-length terminator chunk that ends a chunked
+      transfer-encoding response. Called by Finalize. }
+    procedure CloseStream;
   end;
 
 constructor TSSEStreamer.Create(AContext: TIdContext; const Id, Model: string;
@@ -479,12 +486,12 @@ begin
   FDebugIO := DebugIO;
 end;
 
-procedure TSSEStreamer.WriteRaw(const Data: string);
+procedure TSSEStreamer.WriteSocketBytes(const Data: TBytes);
 var
   Bytes: TIdBytes;
-  Utf8: TBytes;
   i: Integer;
 begin
+  if Length(Data) = 0 then Exit;
   if (FContext = nil) or (FContext.Connection = nil) or
      (not FContext.Connection.Connected) then
   begin
@@ -492,31 +499,58 @@ begin
       LogDebug('sse: connection already closed before write of %d bytes', [Length(Data)]);
     Exit;
   end;
-  Utf8 := TEncoding.UTF8.GetBytes(Data);
-  SetLength(Bytes, Length(Utf8));
-  for i := 0 to High(Utf8) do Bytes[i] := Utf8[i];
+  SetLength(Bytes, Length(Data));
+  for i := 0 to High(Data) do Bytes[i] := Data[i];
   try
     FContext.Connection.IOHandler.Write(Bytes);
-    (* TIdHTTPServer wraps every response in a write buffer to compute
-       Content-Length. AResp.WriteHeader opens its OWN nested buffer on
-       top of that. WriteBufferFlush only flushes the innermost open
-       buffer — the outer server-level one stays open until DoCommandGet
-       returns, which is exactly when the client finally sees everything.
-
-       Loop WriteBufferClose until WriteBufferingActive is False so the
-       entire stack of buffers gets drained and disabled for this
-       connection. After the first chunk this is a no-op (no buffer left
-       to close); the loop only matters for the very first write. *)
+    (* TIdHTTPServer's request handler runs inside WriteBufferOpen so
+       it can compute Content-Length. We don't want that — every byte
+       has to land on the wire as soon as we emit it. Loop
+       WriteBufferClose until WriteBufferingActive is False to drain
+       the nested server + WriteHeader buffer stack. After the first
+       chunk drains it the loop becomes a no-op. *)
     while FContext.Connection.IOHandler.WriteBufferingActive do
       FContext.Connection.IOHandler.WriteBufferClose;
   except
     on E: Exception do
-    begin
       if FDebugIO then LogDebug('sse: write failed: %s', [E.Message]);
-      { Client disconnected or write failed; swallow so the tool loop
-        can still complete server-side bookkeeping cleanly. }
-    end;
   end;
+end;
+
+procedure TSSEStreamer.WriteRaw(const Data: string);
+const
+  CRLF: array[0..1] of Byte = (13, 10);
+var
+  Payload, Header, Frame: TBytes;
+  HeaderStr: string;
+  i, Offset: Integer;
+begin
+  Payload := TEncoding.UTF8.GetBytes(Data);
+  if Length(Payload) = 0 then Exit;
+  (* HTTP/1.1 chunked-transfer chunk: `<hex-length>\r\n<bytes>\r\n`.
+     The response header (set by HandleChatCompletions) carries
+     `Transfer-Encoding: chunked`; the terminator chunk (`0\r\n\r\n`)
+     is written by CloseStream when Finalize runs. Framing each SSE
+     event as its own chunk is what lets the client parse partial
+     responses as they arrive instead of treating the absent
+     Content-Length as a zero-byte body and closing immediately. *)
+  HeaderStr := IntToHex(Length(Payload), 1) + #13#10;
+  Header := TEncoding.UTF8.GetBytes(HeaderStr);
+  SetLength(Frame, Length(Header) + Length(Payload) + 2);
+  Offset := 0;
+  for i := 0 to High(Header)  do begin Frame[Offset] := Header[i];  Inc(Offset); end;
+  for i := 0 to High(Payload) do begin Frame[Offset] := Payload[i]; Inc(Offset); end;
+  Frame[Offset]     := CRLF[0];
+  Frame[Offset + 1] := CRLF[1];
+  WriteSocketBytes(Frame);
+end;
+
+procedure TSSEStreamer.CloseStream;
+var
+  Terminator: TBytes;
+begin
+  Terminator := TEncoding.UTF8.GetBytes('0'#13#10#13#10);
+  WriteSocketBytes(Terminator);
 end;
 
 procedure TSSEStreamer.WriteChunk(const DeltaContent, FinishReason: string);
@@ -564,6 +598,7 @@ begin
     Root.Free;
   end;
   WriteRaw('data: [DONE]'#10#10);
+  CloseStream;
 end;
 
 procedure TSSEStreamer.NoteToolCall(const Name, ArgsJSON: string);
@@ -605,6 +640,7 @@ begin
   WriteChunk(Content, '');
   WriteChunk('', FinishReason);
   WriteRaw('data: [DONE]'#10#10);
+  CloseStream;
 end;
 
 procedure TGatewayServer.HandleChatCompletions(AContext: TIdContext;
@@ -745,7 +781,22 @@ begin
       AResp.CharSet     := 'utf-8';
       AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
       AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
-      AResp.CloseConnection := True;
+      AResp.CustomHeaders.AddValue('Transfer-Encoding', 'chunked');
+      AResp.ContentLength := -1;  { suppress Indy's auto Content-Length header }
+      { Avoid AResp.CloseConnection := True: combined with no
+        Content-Length, Indy was emitting `Content-Length: 0` +
+        `Connection: close`, and OpenAI clients (nanobot, etc.) read
+        the zero-byte body, marked the response complete, and closed
+        the socket immediately — which is why every subsequent SSE
+        chunk hit `connection already closed` in the debug log.
+        Chunked transfer encoding tells the client to keep reading
+        until a zero-length terminator chunk arrives, which
+        TSSEStreamer.CloseStream writes when Finalize / WriteError
+        finishes. Indy still sets a Content-Length header on its own
+        when none is set, so we add the chunked header via
+        CustomHeaders rather than relying on AResp.TransferEncoding
+        which on some Indy builds also tries to auto-frame body
+        writes (and would double-chunk ours). }
       AResp.WriteHeader;
       { Drain every nested write buffer so headers AND subsequent body
         writes go straight to the socket. TIdHTTPServer opens a
