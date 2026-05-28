@@ -1028,11 +1028,35 @@ end;
 
 function BuildResponsesObject(const Id, Model, Status, Content: string;
                                Usage: TUsageInfo): TJsonObject;
-{ Minimal OpenAI Responses-compatible non-streaming response. Modern OpenAI
-  clients look for output[].content[].text rather than choices[].message. }
+{ OpenAI Responses-compatible non-streaming response.
+
+  The openai-python SDK's Pydantic `Response` model marks four fields
+  as required (no default) — when any of them is absent from the JSON
+  the SDK raises ValidationError and the client appears to "choke" on
+  what looks like a valid 200 response:
+
+    parallel_tool_calls : bool
+    tool_choice         : ToolChoice (string "auto"/"none" or object)
+    tools               : List[Tool]
+    output              : List[ResponseOutputItem]
+
+  The first three are emitted with safe defaults (`false`, `"auto"`,
+  `[]`) and the fourth carries the assistant message. The remaining
+  optional fields are emitted as explicit `null` rather than absent —
+  Pydantic treats both the same for `Optional[X] = None`, but newer
+  SDK versions have shipped stricter validators in the past, and
+  explicit `null` keeps the response shape stable against future
+  releases.
+
+  `text` is emitted as `{"format": {"type": "text"}}` (the Responses
+  API formatting config). `error` and `incomplete_details` are
+  explicit `null` on the success path so the SDK's branch for those
+  fields takes the success branch deterministically. The non-success
+  path (HandleResponses' RunToolLoop-failed branch) attaches a real
+  `error` object with `code` + `message` per ResponseError schema. }
 var
-  OutputArr, ContentArr, AnnotationsArr: TJsonArray;
-  MsgObj, TextObj, UsageObj: TJsonObject;
+  OutputArr, ContentArr, AnnotationsArr, ToolsArr: TJsonArray;
+  MsgObj, TextObj, UsageObj, TextCfgObj, FormatObj: TJsonObject;
 begin
   Result := TJsonObject.Create;
   Result.PutStr('id',         Id);
@@ -1040,6 +1064,33 @@ begin
   Result.PutInt('created_at', DateTimeToUnix(Now, False));
   Result.PutStr('model',      Model);
   Result.PutStr('status',     Status);
+
+  { Required by openai-python SDK Pydantic validation. }
+  Result.PutBool('parallel_tool_calls', False);
+  Result.PutStr ('tool_choice',         'auto');
+  ToolsArr := TJsonArray.Create;
+  Result.PutArray('tools', ToolsArr);
+
+  { Optional but emitted as explicit null/empty so older or future
+    stricter SDK versions don't trip on absent keys. }
+  Result.PutRaw('error',              'null');
+  Result.PutRaw('incomplete_details', 'null');
+  Result.PutRaw('instructions',       'null');
+  Result.PutRaw('metadata',           'null');
+  Result.PutRaw('temperature',        'null');
+  Result.PutRaw('top_p',              'null');
+  Result.PutRaw('max_output_tokens',  'null');
+  Result.PutRaw('previous_response_id','null');
+  Result.PutRaw('reasoning',          'null');
+  Result.PutRaw('service_tier',       'null');
+  Result.PutRaw('truncation',         'null');
+  Result.PutRaw('user',               'null');
+
+  TextCfgObj := TJsonObject.Create;
+  FormatObj  := TJsonObject.Create;
+  FormatObj.PutStr('type', 'text');
+  TextCfgObj.PutObject('format', FormatObj);
+  Result.PutObject('text', TextCfgObj);
 
   OutputArr := TJsonArray.Create;
   if Content <> '' then
@@ -1284,9 +1335,14 @@ begin
     begin
       ReplyObj := BuildResponsesObject(RespId, ReqModel, 'failed', '', Loop.LastResp.Usage);
       try
+        { ResponseError schema is {code, message}. BuildResponsesObject
+          set error: null on the success path; overwrite with the real
+          shape here. SDK validators expect `code` to match a known
+          enum, with `server_error` covering the "tool loop blew up
+          server-side" case. }
         ErrObj := TJsonObject.Create;
+        ErrObj.PutStr('code',    'server_error');
         ErrObj.PutStr('message', 'tool loop failed');
-        ErrObj.PutStr('type',    'server_error');
         ReplyObj.PutObject('error', ErrObj);
         WriteJSON(AResp, 502, ReplyObj.ToJSON);
       finally
