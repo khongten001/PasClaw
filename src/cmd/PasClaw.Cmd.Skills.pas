@@ -6,21 +6,25 @@
         Fetch a SKILL.md tree from GitHub (zip via codeload, extract
         with PasClaw.Skills.Zip). Default ref tries main then master.
 
-    pasclaw skills install <slug>[@<version>]
+    pasclaw skills install clawhub:<slug>[@<version>]
         Resolve <slug> on ClawHub (https://clawhub.ai). Picoclaw and
         nanobot's default registry — slug syntax is lowercase
         alphanumerics, '-', and '_'. `@<version>` pins; omitting it
         uses the slug's latestVersion if metadata is available,
-        otherwise 'latest'.
+        otherwise 'latest'. The explicit `clawhub:` prefix is
+        required so a slug-shaped bare name like `my-skill` does
+        not silently swap places with a same-named registry entry
+        — see the docstring on IsClawHubTarget for the backwards
+        compat rationale.
 
     pasclaw skills search <query>
         Hit ClawHub's /api/v1/search and print result rows. No
         install side effects.
 
-  Legacy `pasclaw skills install <name>` (no slash, not a valid
-  slug — e.g. names with capital letters) still records the name in
-  config.json without downloading anything. Kept for backwards
-  compat with older workflows that drove Cfg.Skills directly. }
+  Legacy `pasclaw skills install <name>` (anything not matching the
+  two forms above) still records the name in config.json without
+  downloading anything. Kept for backwards compat with older
+  workflows that drove Cfg.Skills directly. }
 unit PasClaw.Cmd.Skills;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
@@ -43,7 +47,7 @@ begin
   WriteLn;
   WriteLn('  list                                List installed skills.');
   WriteLn('  install owner/repo[/path][@ref]     Install a SKILL.md from GitHub.');
-  WriteLn('  install <slug>[@<version>]          Install from ClawHub (https://clawhub.ai).');
+  WriteLn('  install clawhub:<slug>[@<version>]  Install from ClawHub (https://clawhub.ai).');
   WriteLn('  install <name>                      Legacy: record a name in config.json.');
   WriteLn('  remove <name>                       Remove from config.json + workspace.');
   WriteLn('  search <query>                      Search ClawHub for skills.');
@@ -65,22 +69,35 @@ begin
     if Target[i] = '/' then Exit(True);
 end;
 
-function IsClawHubSlug(const Target: string): Boolean;
-{ ClawHub slugs are lowercase alphanumerics, '-', '_'. Optional
-  `@<version>` suffix permitted but not required. We reject empty
-  and oversize targets here so `pasclaw skills install Foo` (mixed
-  case) falls through to the legacy path with a clear deprecation
-  message rather than 404'ing on ClawHub. }
+const
+  ClawHubPrefix = 'clawhub:';
+
+function IsClawHubTarget(const Target: string; out Slug: string): Boolean;
+{ ClawHub installs require an explicit `clawhub:<slug>[@version]`
+  prefix. Bare slug-shaped names ('my-skill', 'code-review' etc.)
+  stay on the legacy config-only path so pre-existing scripts that
+  used `pasclaw skills install <name>` to record an entry in
+  config.json keep working — they'd otherwise either 404 on
+  ClawHub or, worse, silently install an unrelated registry skill
+  that happened to share the slug.
+
+  Validates the slug after stripping the prefix so e.g.
+  `clawhub:Foo` (mixed case) fails fast here rather than 404'ing
+  on the server. Optional `@<version>` suffix permitted. }
 var
   i, AtPos: Integer;
-  Slug: string;
+  Rest: string;
   C: Char;
 begin
   Result := False;
-  if (Target = '') or (Length(Target) > 128) then Exit;
-  AtPos := Pos('@', Target);
-  if AtPos > 0 then Slug := Copy(Target, 1, AtPos - 1)
-              else Slug := Target;
+  Slug := '';
+  if Length(Target) <= Length(ClawHubPrefix) then Exit;
+  if Copy(Target, 1, Length(ClawHubPrefix)) <> ClawHubPrefix then Exit;
+  Rest := Copy(Target, Length(ClawHubPrefix) + 1, MaxInt);
+  if (Rest = '') or (Length(Rest) > 128) then Exit;
+  AtPos := Pos('@', Rest);
+  if AtPos > 0 then Slug := Copy(Rest, 1, AtPos - 1)
+              else Slug := Rest;
   if Slug = '' then Exit;
   for i := 1 to Length(Slug) do
   begin
@@ -89,6 +106,7 @@ begin
              ((C >= '0') and (C <= '9')) or
              (C = '-') or (C = '_') ) then Exit;
   end;
+  Slug := Rest;   { hand the full "<slug>[@version]" back to caller }
   Result := True;
 end;
 
@@ -203,12 +221,20 @@ begin
 end;
 
 function DoInstall(const Argv: array of string): Integer;
+var
+  ClawHubSlug: string;
 begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
-  if IsGitHubTarget(Argv[1]) then
+  { Check the explicit `clawhub:` prefix before the GitHub
+    owner/repo sniff so a (theoretical) target like
+    `clawhub:owner/repo` routes to the ClawHub validator, which
+    rejects the slash and falls through to legacy. With the old
+    order GitHub's IsGitHubTarget would have eaten the slash and
+    tried to fetch `clawhub:owner/repo`. }
+  if IsClawHubTarget(Argv[1], ClawHubSlug) then
+    Result := DoInstallClawHub(ClawHubSlug)
+  else if IsGitHubTarget(Argv[1]) then
     Result := DoInstallGitHub(Argv[1])
-  else if IsClawHubSlug(Argv[1]) then
-    Result := DoInstallClawHub(Argv[1])
   else
     Result := DoInstallLegacy(Argv);
 end;

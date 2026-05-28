@@ -186,13 +186,28 @@ begin
   LogDebug('clawhub: GET %s', [URL]);
   if not DoGetJSON(URL, Body, ErrMsg) then Exit;
 
-  Root := TJsonObject.Parse(Body);
-  if Root = nil then
-  begin
-    ErrMsg := 'malformed JSON response';
-    Exit;
-  end;
+  { Same EPasClawJSON guard as FetchMetadata: TJsonObject.Parse
+    raises rather than returning nil, so a bad-bytes-from-server
+    case would otherwise propagate up to Cmd.Skills as an
+    unhandled exception. Here a parse failure IS a search error
+    (unlike the metadata path, which is best-effort), so surface
+    it through ErrMsg. }
+  Root := nil;
   try
+    try
+      Root := TJsonObject.Parse(Body);
+    except
+      on E: Exception do
+      begin
+        ErrMsg := 'malformed JSON response: ' + E.Message;
+        Exit;
+      end;
+    end;
+    if Root = nil then
+    begin
+      ErrMsg := 'malformed JSON response';
+      Exit;
+    end;
     Arr := Root.ChildArray('results');
     if Arr = nil then Exit(True);   { empty result set, not an error }
     try
@@ -241,9 +256,23 @@ begin
     LogDebug('clawhub: metadata fetch failed (%s) — proceeding without it', [Err]);
     Exit;
   end;
-  Root := TJsonObject.Parse(Body);
-  if Root = nil then Exit;
+  { TJsonObject.Parse raises EPasClawJSON on malformed JSON rather
+    than returning nil. The metadata fetch is best-effort — a
+    parsing failure should leave LatestVersion / Blocked /
+    Suspicious at their defaults and let the install continue. }
+  Root := nil;
   try
+    try
+      Root := TJsonObject.Parse(Body);
+    except
+      on E: Exception do
+      begin
+        LogDebug('clawhub: metadata JSON parse failed (%s) — proceeding without it',
+                 [E.Message]);
+        Exit;
+      end;
+    end;
+    if Root = nil then Exit;
     LV := Root.ChildObject('latestVersion');
     if LV <> nil then
     try
