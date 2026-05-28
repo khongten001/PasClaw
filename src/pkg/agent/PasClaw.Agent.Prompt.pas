@@ -151,10 +151,37 @@ begin
   end;
 end;
 
+function ScriptInvocation(const Path: string): string;
+{ Returns the model-facing invocation string for one script. cmd.exe
+  (the Windows shell PasClaw.Platform.RunOneShot wraps) has no native
+  way to execute .sh — the script file has no extension association
+  by default, and even if the user has git-bash installed the shebang
+  line is not honored by Win32. Prefix .sh paths with `bash` so the
+  model emits a command that resolves through git-bash, WSL, or MSYS
+  if any of those are on PATH. Same dance for .ps1 -> powershell.
+  POSIX hosts return the bare path; the executable bit and shebang
+  do the work there. Recognised extensions are matched
+  case-insensitively. }
+var
+  Ext: string;
+begin
+  Ext := LowerCase(ExtractFileExt(Path));
+  {$IFDEF MSWINDOWS}
+  if Ext = '.sh' then
+    Result := 'bash ' + Path
+  else if Ext = '.ps1' then
+    Result := 'powershell -ExecutionPolicy Bypass -File ' + Path
+  else
+    Result := Path;
+  {$ELSE}
+  Result := Path;
+  {$ENDIF}
+end;
+
 function BuildSkillsSection: string;
 var
   Skills: TSkillSpecArray;
-  i: Integer;
+  i, j: Integer;
   Lines: TStringList;
   Desc, K: string;
   HasCallable, HasKnowledge: Boolean;
@@ -209,6 +236,34 @@ begin
           Lines.Add('- **' + Skills[i].Name + '**: read `' + Skills[i].Source + '`')
         else
           Lines.Add('- **' + Skills[i].Name + '** — ' + Desc + '. Read `' + Skills[i].Source + '` for the full instructions.');
+      end;
+      { Phase 4: surface scripts/, references/, and assets/ contents so
+        the model knows what bundled resources exist without having to
+        fs_list the skill directory. scripts/ are listed with an
+        OS-appropriate invocation hint (see ScriptInvocation below);
+        references/ are listed for fs_read on demand. Empty subdirs
+        print nothing. }
+      if Length(Skills[i].Scripts) > 0 then
+      begin
+        {$IFDEF MSWINDOWS}
+        Lines.Add('    scripts (invoke via shell_exec; .sh requires bash via git-bash, WSL, or MSYS on PATH; .ps1 requires powershell):');
+        {$ELSE}
+        Lines.Add('    scripts (invoke via shell_exec; executable bit is set on install):');
+        {$ENDIF}
+        for j := 0 to High(Skills[i].Scripts) do
+          Lines.Add('      - `' + ScriptInvocation(Skills[i].Scripts[j]) + '`');
+      end;
+      if Length(Skills[i].References) > 0 then
+      begin
+        Lines.Add('    references (read with fs_read as needed):');
+        for j := 0 to High(Skills[i].References) do
+          Lines.Add('      - `' + Skills[i].References[j] + '`');
+      end;
+      if Length(Skills[i].Assets) > 0 then
+      begin
+        Lines.Add('    assets:');
+        for j := 0 to High(Skills[i].Assets) do
+          Lines.Add('      - `' + Skills[i].Assets[j] + '`');
       end;
     end;
     Result := Lines.Text;

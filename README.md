@@ -236,7 +236,19 @@ Skills live under `$PASCLAW_HOME/workspace/skills/`. PasClaw accepts two layouts
 
 `pasclaw skills search <query>` queries `/api/v1/search` and prints slug / version / display-name / summary rows.
 
-Subsequent phases will add `scripts/` (callable helpers) + `references/` (lazy-loaded context) runtime support.
+**Skill bundle layout** (Phase 4, this release):
+
+```
+workspace/skills/<name>/
+├── SKILL.md
+├── scripts/      ← executables the model invokes via shell_exec
+├── references/   ← markdown the model loads on demand via fs_read
+└── assets/       ← templates / fixtures / images bundled with the skill
+```
+
+`LoadSkillManifests` walks `scripts/`, `references/`, and `assets/` after parsing each SKILL.md (`ScanSkillSubdir` in `PasClaw.Skills.Loader`), and `BuildSkillsSection` (in `PasClaw.Agent.Prompt`) prints each file's absolute path under the skill's bullet in the system prompt. The model discovers the bundled resources without having to `fs_list` the skill directory; `scripts/*` are invoked via `shell_exec` (subject to the sandbox policy), `references/*` via `fs_read` when SKILL.md's body points the model there. See [`samples/skills/hello/`](samples/skills/hello/) for the canonical layout — it ships a `scripts/greet.sh` and a `references/style-guide.md` alongside its SKILL.md.
+
+**Cross-platform scripts:** the GitHub and ClawHub installers `chmod 755` every file under `scripts/` on POSIX hosts so freshly installed bash scripts run directly (`TFileStream`-based `CopyTree` doesn't preserve permissions). Windows has no execute bit and `cmd.exe` can't run `.sh` natively, so `BuildSkillsSection` advertises `.sh` paths prefixed with `bash ` (resolves through git-bash, WSL, or MSYS on `PATH`) and `.ps1` paths with `powershell -ExecutionPolicy Bypass -File `. POSIX hosts get the bare path; the shebang line + executable bit handle dispatch.
 
 ### Gateway, OpenAI-compatible server, and channels
 

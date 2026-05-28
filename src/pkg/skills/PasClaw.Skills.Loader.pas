@@ -65,6 +65,11 @@ uses
   PasClaw.Tools.Registry;
 
 type
+  { Local alias — same shape as PasClaw.Tools.Registry.TStringArray and
+    FPC SysUtils' TStringArray, declared here so we don't pull a tools
+    unit into the skills layer for one type. }
+  TSkillStringArray = array of string;
+
   TSkillSpec = record
     Name:        string;
     Description: string;
@@ -78,6 +83,17 @@ type
     Source:      string;   { absolute path to SKILL.md or the .json file —
                              used by the system prompt so the model can
                              fs_read for the full body }
+    Scripts:     TSkillStringArray;   { absolute paths under <Dir>/scripts/.
+                                        Surfaced in the system prompt so the
+                                        model can invoke them via shell_exec
+                                        (subject to the sandbox policy). }
+    References:  TSkillStringArray;   { absolute paths under <Dir>/references/.
+                                        Surfaced for fs_read on demand —
+                                        Anthropic agent-skills' "lazy context"
+                                        pattern. }
+    Assets:      TSkillStringArray;   { absolute paths under <Dir>/assets/.
+                                        Templates / fixtures / images the
+                                        skill bundles. }
   end;
 
   TSkillSpecArray = array of TSkillSpec;
@@ -263,6 +279,12 @@ begin
     Spec.Body        := '';
     Spec.Dir         := ExtractFileDir(Path);
     Spec.Source      := Path;
+    { Legacy .json skills have no per-skill directory, so no
+      scripts / references / assets. Initialise the arrays so the
+      prompt builder iterates them cleanly via High()/Length(). }
+    SetLength(Spec.Scripts,    0);
+    SetLength(Spec.References, 0);
+    SetLength(Spec.Assets,     0);
     Schema := Obj.ChildObject('schema');
     if Schema <> nil then
     begin
@@ -295,6 +317,44 @@ begin
        ((Value[1] = '''') and (Value[Length(Value)] = '''')) ) then
     Value := Copy(Value, 2, Length(Value) - 2);
   Result := Key <> '';
+end;
+
+function ScanSkillSubdir(const SkillDir, SubName: string): TSkillStringArray;
+{ Lists files (not subdirs) directly under SkillDir/SubName, sorted
+  by name for stable system-prompt output. Returns absolute paths so
+  the model can pass them straight to shell_exec / fs_read with no
+  further joining. Missing subdir or no files returns an empty
+  array — the common case for skills with only a SKILL.md. }
+var
+  SR: TSearchRec;
+  SubDir: string;
+  Names: TStringList;
+  i: Integer;
+begin
+  SetLength(Result, 0);
+  if (SkillDir = '') or (SubName = '') then Exit;
+  SubDir := JoinPath(SkillDir, SubName);
+  if not DirectoryExists(SubDir) then Exit;
+
+  Names := TStringList.Create;
+  try
+    if FindFirst(JoinPath(SubDir, '*'), faAnyFile, SR) <> 0 then Exit;
+    try
+      repeat
+        if (SR.Attr and faDirectory) <> 0 then Continue;
+        if (SR.Name = '') or (SR.Name = '.') or (SR.Name = '..') then Continue;
+        Names.Add(SR.Name);
+      until FindNext(SR) <> 0;
+    finally
+      FindClose(SR);
+    end;
+    Names.Sort;
+    SetLength(Result, Names.Count);
+    for i := 0 to Names.Count - 1 do
+      Result[i] := JoinPath(SubDir, Names[i]);
+  finally
+    Names.Free;
+  end;
 end;
 
 function ParseSkillMD(const FilePath: string; out Spec: TSkillSpec;
@@ -407,6 +467,14 @@ begin
       ErrMsg := 'missing required frontmatter field `name`';
       Exit;
     end;
+
+    { Phase 4: walk scripts/, references/, assets/ siblings of SKILL.md.
+      Missing subdirs are normal — most skills have none. Surfaced in
+      the system prompt so the model can call shell_exec on scripts
+      and fs_read on references / assets when the task calls for it. }
+    Spec.Scripts    := ScanSkillSubdir(Spec.Dir, 'scripts');
+    Spec.References := ScanSkillSubdir(Spec.Dir, 'references');
+    Spec.Assets     := ScanSkillSubdir(Spec.Dir, 'assets');
 
     Result := True;
   finally
