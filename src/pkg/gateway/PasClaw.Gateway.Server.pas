@@ -456,8 +456,10 @@ type
   private
     FContext: TIdContext;
     FId, FModel: string;
+    FDebugIO: Boolean;
   public
-    constructor Create(AContext: TIdContext; const Id, Model: string);
+    constructor Create(AContext: TIdContext; const Id, Model: string;
+                       DebugIO: Boolean);
     procedure WriteRaw(const Data: string);
     procedure WriteChunk(const DeltaContent, FinishReason: string);
     procedure WriteComment(const Note: string);
@@ -467,12 +469,14 @@ type
     procedure Finalize(const Content, FinishReason: string);
   end;
 
-constructor TSSEStreamer.Create(AContext: TIdContext; const Id, Model: string);
+constructor TSSEStreamer.Create(AContext: TIdContext; const Id, Model: string;
+                                DebugIO: Boolean);
 begin
   inherited Create;
   FContext := AContext;
   FId      := Id;
   FModel   := Model;
+  FDebugIO := DebugIO;
 end;
 
 procedure TSSEStreamer.WriteRaw(const Data: string);
@@ -489,6 +493,16 @@ begin
   for i := 0 to High(Utf8) do Bytes[i] := Utf8[i];
   try
     FContext.Connection.IOHandler.Write(Bytes);
+    (* TIdHTTPServer opens a per-connection write buffer on the
+       response socket so it can compute Content-Length before
+       flushing at the end of the handler. For SSE we need every chunk
+       to land on the wire immediately, so explicitly flush after each
+       write. Without this, the client sees no bytes until the handler
+       returns — defeating the whole point of incremental streaming.
+
+       WriteBufferFlush is a no-op when no buffer is open, so it's
+       safe even on Indy builds that don't auto-buffer responses. *)
+    FContext.Connection.IOHandler.WriteBufferFlush;
   except
     { Client disconnected or write failed; swallow so the tool loop
       can still complete server-side bookkeeping cleanly. }
@@ -546,24 +560,33 @@ procedure TSSEStreamer.NoteToolCall(const Name, ArgsJSON: string);
 var
   Preview: string;
 begin
-  { One visible delta with a small bracketed marker so the client
-    actually shows progress, plus a comment with the args for any
-    consumer that wants to log structured tool activity. The visible
-    delta is the bit that turns the long silence into a heartbeat the
-    user can see in their chat UI. }
+  (* One visible delta with a small bracketed marker so the client
+     actually shows progress, plus a comment with the args for any
+     consumer that wants to log structured tool activity. The visible
+     delta is the bit that turns the long silence into a heartbeat the
+     user can see in their chat UI. *)
   Preview := ArgsJSON;
   if Length(Preview) > 200 then Preview := Copy(Preview, 1, 200) + '...';
+  if FDebugIO then
+    LogDebug('chat/completions tool_call: name=%s args=%s', [Name, ArgsJSON]);
   WriteChunk(#10'[tool: ' + Name + ']'#10, '');
   WriteComment('tool_call name=' + Name + ' args=' + Preview);
 end;
 
 procedure TSSEStreamer.NoteToolResult(const Name, ResultText, Err: string);
 var
-  Status: string;
+  Status, Preview: string;
 begin
   if Err <> '' then Status := 'err: ' + Err
   else if Length(ResultText) < 80 then Status := ResultText
   else Status := IntToStr(Length(ResultText)) + ' bytes';
+  if FDebugIO then
+  begin
+    Preview := ResultText;
+    if Length(Preview) > 4000 then Preview := Copy(Preview, 1, 4000) + '...';
+    LogDebug('chat/completions tool_result: name=%s err=%s result=%s',
+             [Name, Err, Preview]);
+  end;
   WriteComment('tool_result name=' + Name + ' ' + Status);
 end;
 
@@ -714,7 +737,13 @@ begin
       AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
       AResp.CloseConnection := True;
       AResp.WriteHeader;
-      Streamer := TSSEStreamer.Create(AContext, CompId, ReqModel);
+      { Flush headers to the wire immediately so the client knows the
+        connection is alive even before the first chunk. Without this,
+        Indy's response buffer would hold the headers until the first
+        body write — which itself wouldn't ship until the buffer was
+        flushed — and the client would see nothing until handler exit. }
+      AContext.Connection.IOHandler.WriteBufferFlush;
+      Streamer := TSSEStreamer.Create(AContext, CompId, ReqModel, FDebugIO);
       LoopCfg.OnToolCall   := Streamer.NoteToolCall;
       LoopCfg.OnToolResult := Streamer.NoteToolResult;
       Streamer.WriteComment('connected');
