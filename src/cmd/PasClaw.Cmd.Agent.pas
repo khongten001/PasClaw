@@ -155,7 +155,13 @@ begin
   Result.Model         := Model;
   Result.MaxIterations := A.MaxIterations;
   Result.Options       := DefaultChatOptions;
-  Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt, not A.NoTools);
+  { ToolsEnabled tracks the registry we are about to hand RunToolLoop
+    so the system prompt stays in sync with what the model can
+    actually call. Reg is nil when --no-tools is set (RunBuilder
+    passes nil; see Run* call sites above) — deriving from the
+    registry, not from A.NoTools, also handles the case where future
+    callers nil out Reg for other reasons. }
+  Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt, Reg <> nil);
   Result.Options.ThinkingLevel := A.Thinking;
   if A.MaxTokens > 0 then Result.Options.MaxTokens := A.MaxTokens;
   Result.OnText        := nil;

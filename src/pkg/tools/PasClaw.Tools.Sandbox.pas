@@ -29,21 +29,31 @@
   Reason into an error string the model sees so it can adjust its
   next turn instead of looping on a silent failure.
 
-  Glob style: AllowReadPaths / AllowWritePaths use simple '*' and
-  '?' wildcards rather than full regex. Picoclaw uses regex via
-  Go's regexp package but PasClaw has no bundled regex engine that
-  works under both FPC and Delphi without an extra unit dependency,
-  and globs cover the documented use cases (/tmp/*, ~/.cache/*,
-  /usr/share/*).
+  Allowlist style: AllowReadPaths / AllowWritePaths are real PCRE
+  regex patterns. PasClaw.Tools.Regex wraps FPC's RegExpr and
+  Delphi's System.RegularExpressions behind one call so config.json
+  takes the same syntax as picoclaw's tools.allow_read_paths /
+  tools.allow_write_paths — anchors (^ $), character classes,
+  alternation, etc. Empty / invalid patterns fall through to the
+  workspace boundary instead of crashing the agent.
 
-  Shell denylist style: same trade-off — the implementation is a
-  list of "forbidden tokens" matched against the command's
-  whitespace-split tokens, plus a list of "forbidden substrings"
-  matched against the lowercased command. Together they cover the
-  same surface as picoclaw's 35-pattern regex set, expressed as
-  plain Pascal so there is no runtime regex compilation. Coverage
-  is documented inline next to each token / substring; adding a
-  case requires only one array entry.
+  Shell denylist style: a list of "forbidden tokens" matched against
+  the command's whitespace-split tokens (sudo, rm, cd, del, format,
+  ...) plus a list of "forbidden substrings" matched against the
+  lowercased command (dd if=, $( , | sh, powershell -e, ...). The
+  token list and substring list cover both POSIX shells and cmd /
+  PowerShell, so the policy is consistent regardless of where
+  shell_exec eventually lands. Coverage is documented inline next
+  to each entry; adding a case requires only one array entry.
+
+  Workspace pinning: when RestrictToWorkspace is on, Tool_Shell
+  passes CurrentWorkspace into RunOneShot so the child shell starts
+  inside the workspace. Combined with the cd / chdir / pushd / popd
+  token denylist and the '..' traversal check, this closes the
+  relative-path bypass — a model that says "cat ../secret" hits the
+  refusal before the process spawns, and even if a pattern slips
+  through the denylist, the shell's cwd is the workspace, not
+  whatever directory the user happened to invoke pasclaw from.
 
   Canonicalization: ExpandFileName resolves '..' and relative
   references against the current working directory. Symlinks
@@ -70,15 +80,28 @@ function CanReadPath (const Path: string; out Reason: string): Boolean;
 function CanWritePath(const Path: string; out Reason: string): Boolean;
 function ShellAllowed(const Cmd:  string; out Reason: string): Boolean;
 
+{ The configured workspace directory in canonical form. The shell
+  tool reads this to bind RunOneShot's working directory when
+  RestrictToWorkspace is on, so a model that managed to slip a
+  relative path past ShellAllowed cannot reference files outside
+  the workspace by virtue of where the shell starts. Returns '' if
+  ConfigureSandbox has not been called yet. }
+function CurrentWorkspace: string;
+
 { True iff Path canonicalises to a child of Workspace. Exposed for
   testing and for the rare caller that wants to know without going
   through the policy layer. }
 function PathInsideDirectory(const Path, Directory: string): Boolean;
 
+{ True iff the workspace boundary is currently being enforced.
+  Tool_Shell consults this to decide whether to pin cwd. }
+function RestrictionActive: Boolean;
+
 implementation
 
 uses
-  PasClaw.Logger;
+  PasClaw.Logger,
+  PasClaw.Tools.Regex;
 
 var
   GPolicy:    TSandboxPolicy;
@@ -98,6 +121,16 @@ begin
     LogDebug('sandbox: restrict_to_workspace=true workspace=%s', [GWorkspace]);
 end;
 
+function CurrentWorkspace: string;
+begin
+  Result := GWorkspace;
+end;
+
+function RestrictionActive: Boolean;
+begin
+  Result := GPolicy.RestrictToWorkspace;
+end;
+
 { -------- path helpers -------- }
 
 function Canonicalize(const Path: string): string;
@@ -106,67 +139,54 @@ begin
   Result := ExcludeTrailingPathDelimiter(Result);
 end;
 
+function PathsEqual(const A, B: string): Boolean; inline;
+begin
+  { On case-sensitive filesystems (Linux, macOS with HFS+ case-sensitive,
+    most BSDs) "/tmp/workspace" and "/tmp/Workspace" are different
+    directories — using SameText here would treat them as one and let
+    the model escape the boundary by varying the case of a path that
+    happens to also exist with a different casing. On Windows
+    filesystems are case-insensitive at the OS level, so SameText is
+    the correct comparison. }
+  {$IFDEF MSWINDOWS}
+  Result := SameText(A, B);
+  {$ELSE}
+  Result := A = B;
+  {$ENDIF}
+end;
+
 function PathInsideDirectory(const Path, Directory: string): Boolean;
 var
-  P, D: string;
+  P, D, DTrim: string;
 begin
   Result := False;
   if (Path = '') or (Directory = '') then Exit;
   P := Canonicalize(Path);
   D := IncludeTrailingPathDelimiter(Canonicalize(Directory));
-  if SameText(P, ExcludeTrailingPathDelimiter(D)) then Exit(True);
-  { Case sensitivity: on Linux paths are case-sensitive; on Windows
-    they are not. SameText handles both via the RTL's locale rules. }
-  Result := (Length(P) > Length(D)) and SameText(Copy(P, 1, Length(D)), D);
+  DTrim := ExcludeTrailingPathDelimiter(D);
+  if PathsEqual(P, DTrim) then Exit(True);
+  Result := (Length(P) > Length(D)) and PathsEqual(Copy(P, 1, Length(D)), D);
 end;
 
-function GlobMatches(const Pattern, S: string): Boolean;
-{ Minimal '*' + '?' glob, matched against the canonicalised path.
-  '*' matches any run of characters (including separators), '?'
-  matches exactly one character. Comparison is case-insensitive on
-  Windows, case-sensitive elsewhere. Implementation is a simple
-  recursive-descent matcher — patterns are short (a handful of
-  characters) and the call rate is tool-call frequency, not loop
-  frequency, so the algorithmic shape does not matter. }
+function AnyRegexMatches(const S: string; const Patterns: array of string): Boolean;
+{ True iff S matches at least one of the regex patterns. Empty
+  pattern list returns False. PasClaw.Tools.Regex wraps FPC's
+  RegExpr and Delphi's System.RegularExpressions behind one call,
+  so the patterns in config.json are real PCRE expressions:
 
-  function MatchAt(pi, si: Integer): Boolean;
-  var
-    PC, SC: Char;
-  begin
-    while pi <= Length(Pattern) do
-    begin
-      PC := Pattern[pi];
-      if PC = '*' then
-      begin
-        { Skip consecutive '*'s. }
-        while (pi <= Length(Pattern)) and (Pattern[pi] = '*') do Inc(pi);
-        if pi > Length(Pattern) then Exit(True);
-        while si <= Length(S) do
-        begin
-          if MatchAt(pi, si) then Exit(True);
-          Inc(si);
-        end;
-        Exit(False);
-      end;
-      if si > Length(S) then Exit(False);
-      SC := S[si];
-      if (PC <> '?') and (UpCase(PC) <> UpCase(SC)) then Exit(False);
-      Inc(pi);
-      Inc(si);
-    end;
-    Result := si > Length(S);
-  end;
+    allow_read_paths:  ["^/tmp/.*", "^/usr/(include|share)/.*"]
 
-begin
-  Result := MatchAt(1, 1);
-end;
-
-function AnyGlobMatches(const S: string; const Patterns: array of string): Boolean;
+  Compared with the earlier glob matcher (just '*' and '?'), this
+  gives users character classes, anchors, alternation, etc. — the
+  set picoclaw's `allow_read_paths` accepts, since picoclaw is also
+  PCRE-style. Migration note for any config that used the old
+  globs: '/tmp/*' becomes '^/tmp/.*' (anchor the prefix, replace
+  '*' with '.*'). README documents the change. }
 var
   i: Integer;
 begin
   for i := 0 to High(Patterns) do
-    if GlobMatches(Patterns[i], S) then Exit(True);
+    if (Patterns[i] <> '') and RegexMatch(Patterns[i], S) then Exit(True);
   Result := False;
 end;
 
@@ -181,10 +201,10 @@ begin
   if GPolicy.AllowReadOutsideWorkspace then Exit(True);
   Canon := Canonicalize(Path);
   if PathInsideDirectory(Canon, GWorkspace) then Exit(True);
-  if AnyGlobMatches(Canon, GPolicy.AllowReadPaths) then Exit(True);
+  if AnyRegexMatches(Canon, GPolicy.AllowReadPaths) then Exit(True);
   Reason := 'refused: path "' + Canon + '" is outside the workspace ' +
             '"' + GWorkspace + '" and does not match any allow_read_paths ' +
-            'glob (sandbox.restrict_to_workspace=true)';
+            'pattern (sandbox.restrict_to_workspace=true)';
   Result := False;
 end;
 
@@ -196,10 +216,10 @@ begin
   if not GPolicy.RestrictToWorkspace then Exit(True);
   Canon := Canonicalize(Path);
   if PathInsideDirectory(Canon, GWorkspace) then Exit(True);
-  if AnyGlobMatches(Canon, GPolicy.AllowWritePaths) then Exit(True);
+  if AnyRegexMatches(Canon, GPolicy.AllowWritePaths) then Exit(True);
   Reason := 'refused: path "' + Canon + '" is outside the workspace ' +
             '"' + GWorkspace + '" and does not match any allow_write_paths ' +
-            'glob (sandbox.restrict_to_workspace=true)';
+            'pattern (sandbox.restrict_to_workspace=true)';
   Result := False;
 end;
 
@@ -215,7 +235,21 @@ const
     too. That is intentional: the model can write the file and the
     human can chmod it. Override per-config via custom_shell_deny
     if a specific case is needed. }
-  ForbiddenTokens: array[0..14] of string = (
+  (*  Tokens that, when found as a whitespace-separated word, abort the
+      call. Mostly POSIX-flavoured but the Windows-specific ones
+      (del / erase / rd / rmdir / format / attrib / takeown / icacls /
+       cacls / runas / reg) live in the same list because cmd.exe and
+      PowerShell both interpret them when shell_exec runs on Windows.
+      A few names overlap with legitimate non-shell uses (e.g. "kill"
+      can appear inside a file path); the cost is acceptable since the
+      tokenizer splits on whitespace + shell metacharacters, so only
+      stand-alone tokens trigger the match.
+
+      cd / chdir / pushd / popd are in here because the workspace
+      restriction below binds the shell's cwd to GWorkspace and runs
+      the abs-path scanner on the rest of the command; letting the
+      model chdir would defeat both. *)
+  ForbiddenTokens: array[0..27] of string = (
     'sudo',
     'su',
     'rm',          { all rm — too easy to escape -rf detection }
@@ -230,7 +264,20 @@ const
     'halt',
     'eval',
     'mkfs',
-    'diskpart'
+    'diskpart',
+    'cd',          { workspace-escape via cwd change }
+    'chdir',
+    'pushd',
+    'popd',
+    { Windows additions } 'del',
+    'erase',
+    'rd',
+    'rmdir',
+    'format',
+    'attrib',
+    'takeown',
+    'icacls',
+    'runas'
   );
 
   { Substrings that, when present anywhere in the lowercased command,
@@ -238,7 +285,7 @@ const
     plain literals — adequate because the patterns themselves are
     just punctuation runs ($(...), `...`, etc.) or fixed token
     sequences (apt install, npm install -g, etc.). }
-  ForbiddenSubstrings: array[0..28] of string = (
+  ForbiddenSubstrings: array[0..45] of string = (
     'dd if=',
     ':(){:|',         { fork bomb }
     '<<eof',
@@ -267,7 +314,29 @@ const
     'docker exec',
     'git push',
     'git force',
-    'format c:'
+    'format c:',
+    { Windows-specific patterns — picoclaw lists these in its
+      windowsDenyPatterns group. They are checked unconditionally
+      since shell_exec on Windows pipes through cmd.exe /C, and
+      letting them through "because we are on Linux right now"
+      breaks portability of the policy across deploys. }
+    'del /f',
+    'del /q',
+    'del /s',
+    'rd /s',
+    'rmdir /s',
+    'format /q',
+    'powershell -e ',     { -EncodedCommand (base64 cmd) }
+    'powershell -en ',
+    'powershell -enc ',
+    'powershell -ec ',
+    '-encodedcommand',
+    'iex (',              { Invoke-Expression }
+    'invoke-expression',
+    '[convert]::frombase64',
+    '[text.encoding]',
+    '.getstring([byte[]',
+    'set-executionpolicy'
   );
 
   { Patterns specifically for writes to block devices. These cause
@@ -372,6 +441,42 @@ begin
   Result := False;
 end;
 
+function HasTraversalToken(const Cmd: string; out OffendingToken: string): Boolean;
+{ Catches relative path-traversal references that the absolute-path
+  scanner below would miss. When the shell starts in GWorkspace
+  (we now pin cwd to it on every Tool_Shell call), a command like
+  `cat ../secret` would otherwise read outside the workspace even
+  though no '/' token shows up.
+
+  We flag any token containing '..' anywhere. False positives like
+  `git log v1.0..v2.0` (a git range) get rejected too — that is an
+  acceptable trade-off; a sandboxed agent should be writing absolute
+  paths or relative paths that stay inside the workspace, and the
+  rare git-range case can be replaced by something else or run with
+  restrict_to_workspace=false on a trusted host. }
+var
+  Tokens: TStringList;
+  i: Integer;
+  T: string;
+begin
+  Result := False;
+  OffendingToken := '';
+  Tokens := TokenizeCommand(Cmd);
+  try
+    for i := 0 to Tokens.Count - 1 do
+    begin
+      T := Tokens[i];
+      if Pos('..', T) > 0 then
+      begin
+        OffendingToken := T;
+        Exit(True);
+      end;
+    end;
+  finally
+    Tokens.Free;
+  end;
+end;
+
 function HasOutsideAbsolutePath(const Cmd: string; out OffendingPath: string): Boolean;
 var
   i, Start: Integer;
@@ -395,8 +500,8 @@ begin
                    SameText(Token, '/dev/stdin')   or SameText(Token, '/dev/stdout') or
                    SameText(Token, '/dev/stderr');
       if (not IsSafeDev) and (not PathInsideDirectory(Token, GWorkspace)) and
-         (not AnyGlobMatches(Token, GPolicy.AllowReadPaths)) and
-         (not AnyGlobMatches(Token, GPolicy.AllowWritePaths)) then
+         (not AnyRegexMatches(Token, GPolicy.AllowReadPaths)) and
+         (not AnyRegexMatches(Token, GPolicy.AllowWritePaths)) then
       begin
         OffendingPath := Token;
         Exit(True);
@@ -436,14 +541,25 @@ begin
   end;
 
   if GPolicy.RestrictToWorkspace then
+  begin
     if HasOutsideAbsolutePath(Cmd, Path) then
     begin
       Reason := 'refused: command references absolute path "' + Path +
                 '" which is outside the workspace "' + GWorkspace +
-                '" and does not match any allow_*_paths glob ' +
+                '" and does not match any allow_*_paths pattern ' +
                 '(sandbox.restrict_to_workspace=true)';
       Exit(False);
     end;
+    if HasTraversalToken(Cmd, Path) then
+    begin
+      Reason := 'refused: command contains path-traversal token "' + Path +
+                '". Tool_Shell pins the working directory to the workspace, ' +
+                'so .. would escape it. Rewrite with absolute paths that ' +
+                'stay inside "' + GWorkspace + '" or list the target under ' +
+                'sandbox.allow_read_paths / allow_write_paths.';
+      Exit(False);
+    end;
+  end;
 
   Result := True;
 end;

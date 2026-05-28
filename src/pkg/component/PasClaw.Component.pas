@@ -300,7 +300,15 @@ begin
   Cfg.Model         := ModelName;
   Cfg.MaxIterations := FMaxIterations;
   Cfg.Options       := DefaultChatOptions;
-  Cfg.Options.SystemPrompt := BuildSystemPrompt(FConfig, FSystemPrompt, FUseTools);
+  { Derive ToolsEnabled from the registry we are about to hand to
+    RunToolLoop, NOT from FUseTools. EnsureRegistry caches FRegistry
+    across calls and only checks FUseTools when the registry is
+    nil — so a component used with UseTools=True, then flipped to
+    UseTools=False, would otherwise send the model a "No tools in
+    this session" prompt while RunToolLoop still received the cached
+    registry. The single source of truth is Cfg.Registry. }
+  Cfg.Options.SystemPrompt := BuildSystemPrompt(FConfig, FSystemPrompt,
+                                                Cfg.Registry <> nil);
   Cfg.OnText        := ForwardText;
   Cfg.OnToolCall    := ForwardToolCall;
   Cfg.OnToolResult  := ForwardToolResult;

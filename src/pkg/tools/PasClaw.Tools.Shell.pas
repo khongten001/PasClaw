@@ -55,14 +55,9 @@ begin
   end;
 end;
 
-function RunShell(const Cmd: string; out ExitCode: Integer): string;
-begin
-  ExitCode := RunOneShot(Cmd, Result);
-end;
-
 function Tool_Shell(const ArgsJSON: string; out ErrMsg: string): string;
 var
-  Cmd, Reason: string;
+  Cmd, Reason, WorkDir: string;
   ExitCode: Integer;
   Out_: string;
 begin
@@ -77,8 +72,19 @@ begin
     ErrMsg := Reason;
     Exit('');
   end;
-  LogDebug('shell exec: %s', [Cmd]);
-  Out_ := RunShell(Cmd, ExitCode);
+  { Pin the shell's cwd to the workspace when restriction is on. Paired
+    with the cd / chdir / pushd / popd token denylist and the '..'
+    traversal check in ShellAllowed, this closes the relative-path
+    bypass: a sandboxed model has no way to read or write files
+    outside the workspace via shell_exec. When restriction is off,
+    WorkDir is empty and RunOneShot inherits the parent's cwd
+    (legacy behaviour, byte-identical to the previous release). }
+  if RestrictionActive then
+    WorkDir := CurrentWorkspace
+  else
+    WorkDir := '';
+  LogDebug('shell exec (cwd=%s): %s', [WorkDir, Cmd]);
+  ExitCode := RunOneShot(Cmd, WorkDir, Out_);
   Result := Format('exit=%d'#10'%s', [ExitCode, Out_]);
 end;
 
