@@ -85,6 +85,7 @@ uses
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
+  PasClaw.Agent.Prompt,
   PasClaw.Gateway.WebUI;
 
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
@@ -358,6 +359,7 @@ begin
   LoopCfg.Model         := FCfg.DefaultModel;
   LoopCfg.MaxIterations := 8;
   LoopCfg.Options       := DefaultChatOptions;
+  LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '');
   LoopCfg.OnText        := nil;
   LoopCfg.OnToolCall    := nil;
   LoopCfg.OnToolResult  := nil;
@@ -799,6 +801,13 @@ begin
     LoopCfg.Model         := ReqModel;
     LoopCfg.MaxIterations := FMaxIter;
     LoopCfg.Options       := DefaultChatOptions;
+    { Inject the composed PasClaw system prompt — but only if the client
+      didn't already supply one of their own. Third-party tooling calling
+      /v1/chat/completions with its own persona/system message should win;
+      bare-bones clients that send only a user message get our identity
+      preamble for free. }
+    if not HasSystemMessage(Msgs) then
+      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '');
     { Temperature: only forward if the client actually set it (>0). Avoids
       the deprecated-field 400 from newer Claude models when the OpenAI
       client library defaults to 1.0. }
