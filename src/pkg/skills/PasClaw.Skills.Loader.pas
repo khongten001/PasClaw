@@ -319,11 +319,37 @@ begin
 
     (* Locate the frontmatter block. The first non-empty line must be `---`;
        the closing `---` marks the end. We allow leading blank lines to
-       tolerate editors that prepend a BOM or stray whitespace. *)
+       tolerate editors that prepend stray whitespace, and explicitly
+       strip a UTF-8 BOM at the start of the first line — Trim only
+       handles ASCII whitespace, so a SKILL.md saved by a Windows editor
+       with BOM would otherwise be rejected here with `no YAML
+       frontmatter`. ReadFileText returns AnsiString-UTF8 under FPC and
+       UnicodeString under Delphi, so the BOM lives as different
+       sequences on each toolchain:
+
+         FPC AnsiString  : three bytes EF BB BF at positions 1..3
+         Delphi UnicodeString : one Char #$FEFF at position 1
+                                (TEncoding.UTF8.GetString decodes the
+                                 three UTF-8 bytes to that codepoint,
+                                 it does not silently strip them).
+
+       Handle both. *)
     StartIdx := -1;
     for i := 0 to Lines.Count - 1 do
     begin
-      Line := Trim(Lines[i]);
+      Line := Lines[i];
+      if i = 0 then
+      begin
+        {$IFDEF FPC}
+        if (Length(Line) >= 3) and
+           (Byte(Line[1]) = $EF) and (Byte(Line[2]) = $BB) and (Byte(Line[3]) = $BF) then
+          Line := Copy(Line, 4, MaxInt);
+        {$ELSE}
+        if (Length(Line) >= 1) and (Line[1] = #$FEFF) then
+          Line := Copy(Line, 2, MaxInt);
+        {$ENDIF}
+      end;
+      Line := Trim(Line);
       if Line = '' then Continue;
       if Line = '---' then begin StartIdx := i; Break; end;
       Break;
