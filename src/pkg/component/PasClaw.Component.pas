@@ -154,6 +154,7 @@ uses
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
   PasClaw.Skills.Loader,
+  PasClaw.Agent.Prompt,
   PasClaw.Tools.ToolLoop;
 
 var
@@ -291,7 +292,7 @@ begin
   Cfg.Model         := ModelName;
   Cfg.MaxIterations := FMaxIterations;
   Cfg.Options       := DefaultChatOptions;
-  if FSystemPrompt <> '' then Cfg.Options.SystemPrompt := FSystemPrompt;
+  Cfg.Options.SystemPrompt := BuildSystemPrompt(FConfig, FSystemPrompt);
   Cfg.OnText        := ForwardText;
   Cfg.OnToolCall    := ForwardToolCall;
   Cfg.OnToolResult  := ForwardToolResult;

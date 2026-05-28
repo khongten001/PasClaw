@@ -30,6 +30,7 @@ UNIT_DIRS = \
 	src/pkg/channels \
 	src/pkg/cron \
 	src/pkg/skills \
+	src/pkg/agent \
 	src/pkg/memory \
 	src/pkg/updater \
 	src/pkg/membench \

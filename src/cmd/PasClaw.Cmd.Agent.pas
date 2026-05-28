@@ -29,7 +29,8 @@ uses
   PasClaw.Tools.Shell,
   PasClaw.Tools.ToolLoop,
   PasClaw.MCP.Bridge,
-  PasClaw.Skills.Loader;
+  PasClaw.Skills.Loader,
+  PasClaw.Agent.Prompt;
 
 type
   TAgentArgs = record
@@ -143,7 +144,8 @@ begin
   Result := ConnectMCPServers(Cfg, Reg);
 end;
 
-function BuildLoopConfig(Provider: ILLMProvider; Reg: TToolRegistry;
+function BuildLoopConfig(const Cfg: TConfig;
+                         Provider: ILLMProvider; Reg: TToolRegistry;
                          const Model: string; const A: TAgentArgs;
                          Handlers: TLoopHandlers): TToolLoopConfig;
 begin
@@ -152,7 +154,7 @@ begin
   Result.Model         := Model;
   Result.MaxIterations := A.MaxIterations;
   Result.Options       := DefaultChatOptions;
-  Result.Options.SystemPrompt  := A.SystemPrompt;
+  Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt);
   Result.Options.ThinkingLevel := A.Thinking;
   if A.MaxTokens > 0 then Result.Options.MaxTokens := A.MaxTokens;
   Result.OnText        := nil;
@@ -189,7 +191,7 @@ begin
     Msgs[0] := MakeMessage(mrUser, Prompt);
 
     if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
-    LoopCfg := BuildLoopConfig(Provider, Reg, Model, A, Handlers);
+    LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
 
     WriteLn(Ansi.Cyan, 'assistant', Ansi.Reset, ' (', Provider.GetName, '/', Model, '):');
     if RunToolLoop(LoopCfg, Msgs, Loop) then
@@ -272,7 +274,7 @@ begin
         Continue;
       end;
 
-      LoopCfg := BuildLoopConfig(Provider, Reg, Model, A, Handlers);
+      LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
       if RunToolLoop(LoopCfg, Msgs, Loop) then
       begin
         WriteLn(Ansi.Cyan, 'assistant', Ansi.Reset, ' (', Provider.GetName, '/', Model, '):');
