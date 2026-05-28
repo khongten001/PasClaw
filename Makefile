@@ -57,7 +57,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke print-version get-indy webui-res
+.PHONY: all clean run test smoke test-hashline print-version get-indy webui-res
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -116,4 +116,9 @@ smoke: $(BIN)
 	NO_COLOR=1 $(BIN) membench --records 100   >/dev/null && echo "  membench  OK" ; \
 	echo "smoke: all commands OK"
 
-test: smoke
+test-hashline: $(WEBUI_RES) | $(BUILDDIR) $(INDY_DIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/hashline_patch_tests.pas -o$(BUILDDIR)/hashline_patch_tests
+	@$(BUILDDIR)/hashline_patch_tests
+
+test: smoke test-hashline
