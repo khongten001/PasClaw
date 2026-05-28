@@ -45,6 +45,13 @@ begin
   if A <> '' then Result := A else Result := B;
 end;
 
+function NormalizeProviderKind(const Kind: string): string;
+begin
+  Result := LowerCase(Trim(Kind));
+  if Result = 'openai-compat' then
+    Result := 'openai';
+end;
+
 function NewProviderFromConfig(Cfg: TConfig; const ProviderName: string;
                                out Provider: ILLMProvider; out ErrMsg: string): Boolean;
 var
@@ -61,8 +68,8 @@ begin
     ErrMsg := 'no provider entry for "' + ProviderName + '" — run `pasclaw onboard` or `pasclaw auth login ' + ProviderName + '`';
     Exit(False);
   end;
-  Kind := LowerCase(Cfg.Providers[Idx].Kind);
-  if Kind = '' then Kind := LowerCase(Cfg.Providers[Idx].Name);
+  Kind := NormalizeProviderKind(Cfg.Providers[Idx].Kind);
+  if Kind = '' then Kind := NormalizeProviderKind(Cfg.Providers[Idx].Name);
 
   if not LookupProvider(Kind, Spec) then
   begin

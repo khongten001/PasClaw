@@ -152,7 +152,9 @@ begin
     if Spec.DefaultModel <> '' then
       Model := ReadLineEcho(Format('Default model [%s]: ', [Spec.DefaultModel]))
     else
-      Model := ReadLineEcho('Default model (provider does not advertise one — required): ');
+      repeat
+        Model := ReadLineEcho('Default model (provider does not advertise one — required): ');
+      until Trim(Model) <> '';
     if Trim(Model) = '' then Model := Spec.DefaultModel;
 
     case Spec.Auth.Kind of
