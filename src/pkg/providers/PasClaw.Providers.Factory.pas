@@ -23,7 +23,8 @@ implementation
 
 uses
   PasClaw.Providers.Anthropic,
-  PasClaw.Providers.OpenAI;
+  PasClaw.Providers.OpenAI,
+  PasClaw.Providers.Catalog;
 
 function FindProvider(Cfg: TConfig; const Name: string; out Idx: Integer): Boolean;
 var
@@ -39,11 +40,19 @@ begin
   Result := False;
 end;
 
+function FirstNonEmpty(const A, B: string): string; inline;
+begin
+  if A <> '' then Result := A else Result := B;
+end;
+
 function NewProviderFromConfig(Cfg: TConfig; const ProviderName: string;
                                out Provider: ILLMProvider; out ErrMsg: string): Boolean;
 var
   Idx: Integer;
   Kind: string;
+  Spec: TProviderSpec;
+  Base, Model, APIKey: string;
+  RequiresKey: Boolean;
 begin
   Provider := nil;
   ErrMsg := '';
@@ -52,27 +61,43 @@ begin
     ErrMsg := 'no provider entry for "' + ProviderName + '" — run `pasclaw onboard` or `pasclaw auth login ' + ProviderName + '`';
     Exit(False);
   end;
-  if Cfg.Providers[Idx].APIKey = '' then
+  Kind := LowerCase(Cfg.Providers[Idx].Kind);
+  if Kind = '' then Kind := LowerCase(Cfg.Providers[Idx].Name);
+
+  if not LookupProvider(Kind, Spec) then
+  begin
+    ErrMsg := 'unsupported provider kind "' + Cfg.Providers[Idx].Kind +
+              '" — see `pasclaw onboard` or pkg/providers/PasClaw.Providers.Catalog.pas';
+    Exit(False);
+  end;
+
+  APIKey := Cfg.Providers[Idx].APIKey;
+  RequiresKey := Spec.Auth.Kind <> asNone;
+  if RequiresKey and (APIKey = '') then
   begin
     ErrMsg := 'provider "' + ProviderName + '" has no API key — run `pasclaw auth login ' + ProviderName + '`';
     Exit(False);
   end;
-  Kind := LowerCase(Cfg.Providers[Idx].Kind);
-  if Kind = '' then Kind := LowerCase(Cfg.Providers[Idx].Name);
 
-  if Kind = 'anthropic' then
-    Provider := TAnthropicProvider.Create(
-      Cfg.Providers[Idx].APIKey,
-      Cfg.Providers[Idx].APIBase,
-      Cfg.Providers[Idx].Model)
-  else if (Kind = 'openai') or (Kind = 'openai-compat') or (Kind = 'groq') or (Kind = 'together') or (Kind = 'ollama') then
-    Provider := TOpenAIProvider.Create(
-      Cfg.Providers[Idx].APIKey,
-      Cfg.Providers[Idx].APIBase,
-      Cfg.Providers[Idx].Model)
+  { Effective base / model fall back to the catalog's defaults when the
+    config entry left them blank. Lets a freshly-onboarded provider work
+    immediately with no extra fields to fill in. }
+  Base  := FirstNonEmpty(Cfg.Providers[Idx].APIBase, Spec.DefaultBase);
+  Model := FirstNonEmpty(Cfg.Providers[Idx].Model,   Spec.DefaultModel);
+
+  case Spec.Family of
+    pfAnthropic:
+      Provider := TAnthropicProvider.Create(APIKey, Base, Model);
+    pfOpenAI:
+      Provider := TOpenAIProvider.Create(APIKey, Base, Model, Kind, Spec.Auth);
+    pfPlaceholder:
+      begin
+        ErrMsg := 'provider "' + Spec.DisplayName + '" is in the catalog but ' +
+                  'its protocol implementation is not yet bundled in this build';
+        Exit(False);
+      end;
   else
-  begin
-    ErrMsg := 'unsupported provider kind "' + Cfg.Providers[Idx].Kind + '" (supported: anthropic, openai)';
+    ErrMsg := 'provider "' + Spec.DisplayName + '" has no protocol family wired up';
     Exit(False);
   end;
   Result := True;

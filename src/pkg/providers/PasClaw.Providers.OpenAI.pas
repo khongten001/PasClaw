@@ -1,9 +1,13 @@
 {
-  PasClaw.Providers.OpenAI - OpenAI Chat Completions client (also handles
-  OpenAI-compatible endpoints: Together, Groq, Ollama, etc.).
+  PasClaw.Providers.OpenAI - OpenAI Chat Completions client and the
+  shared implementation for every OpenAI-compatible provider (Groq,
+  DeepSeek, Together, OpenRouter, Ollama, vLLM, Mistral, etc.). Catalog
+  entries in PasClaw.Providers.Catalog point here with their own base
+  URL + auth scheme; this unit doesn't know which provider it's being
+  used for beyond the display name it was created with.
 
   Endpoint: POST <api_base>/v1/chat/completions
-  Auth:     Authorization: Bearer <key>
+  Auth:     Authorization: Bearer <key>  (default; override via TAuthScheme)
 }
 unit PasClaw.Providers.OpenAI;
 
@@ -15,16 +19,28 @@ interface
 uses
   SysUtils, Classes,
   PasClaw.Providers.Types,
-  PasClaw.Providers.Intf;
+  PasClaw.Providers.Intf,
+  PasClaw.Providers.HTTP,
+  PasClaw.Providers.Catalog;
 
 type
   TOpenAIProvider = class(TInterfacedObject, ILLMProvider)
   private
-    FAPIKey:  string;
-    FAPIBase: string;
+    FAPIKey:       string;
+    FAPIBase:      string;
     FDefaultModel: string;
+    FAuth:         TAuthScheme;
+    FDisplayName:  string;   { surface in GetName / log lines }
+    function BuildAuthHeaders: TArray<THeaderPair>;
   public
-    constructor Create(const APIKey, APIBase, DefaultModel: string);
+    { Backwards-compatible constructor: assumes Bearer auth and the
+      'openai' display name. Existing call sites stay byte-identical. }
+    constructor Create(const APIKey, APIBase, DefaultModel: string); overload;
+    { Catalog-aware constructor used by the factory. DisplayName surfaces
+      in GetName (so 'groq' returns 'groq', not 'openai'); Auth controls
+      how the API key is sent (Bearer / none / custom header). }
+    constructor Create(const APIKey, APIBase, DefaultModel, DisplayName: string;
+                       const Auth: TAuthScheme); overload;
     function Chat(const Messages: array of TMessage;
                   const Tools:    array of TToolDefinition;
                   const Model:    string;
@@ -45,19 +61,59 @@ implementation
 
 uses
   PasClaw.JSON,
-  PasClaw.Providers.HTTP,
   PasClaw.Logger;
 
 constructor TOpenAIProvider.Create(const APIKey, APIBase, DefaultModel: string);
+var
+  Bearer: TAuthScheme;
+begin
+  Bearer.Kind       := asBearer;
+  Bearer.HeaderName := '';
+  Create(APIKey, APIBase, DefaultModel, 'openai', Bearer);
+end;
+
+constructor TOpenAIProvider.Create(const APIKey, APIBase, DefaultModel, DisplayName: string;
+                                    const Auth: TAuthScheme);
 begin
   inherited Create;
   FAPIKey := APIKey;
   if APIBase <> '' then FAPIBase := APIBase else FAPIBase := 'https://api.openai.com';
   if DefaultModel <> '' then FDefaultModel := DefaultModel else FDefaultModel := 'gpt-4o-mini';
+  if DisplayName <> '' then FDisplayName := DisplayName else FDisplayName := 'openai';
+  FAuth := Auth;
+end;
+
+function TOpenAIProvider.BuildAuthHeaders: TArray<THeaderPair>;
+begin
+  case FAuth.Kind of
+    asNone:
+      SetLength(Result, 0);
+    asHeader:
+      begin
+        if (FAuth.HeaderName = '') or (FAPIKey = '') then
+        begin
+          SetLength(Result, 0);
+          Exit;
+        end;
+        SetLength(Result, 1);
+        Result[0] := MakeHeader(FAuth.HeaderName, FAPIKey);
+      end;
+  else
+    { asBearer is the default — and the safety net for any future enum
+      value we forget to handle here. Skip emitting the header when the
+      key is empty (local providers misconfigured as Bearer still work). }
+    if FAPIKey = '' then
+      SetLength(Result, 0)
+    else
+    begin
+      SetLength(Result, 1);
+      Result[0] := MakeHeader('Authorization', 'Bearer ' + FAPIKey);
+    end;
+  end;
 end;
 
 function TOpenAIProvider.GetDefaultModel: string;     begin Result := FDefaultModel; end;
-function TOpenAIProvider.GetName: string;             begin Result := 'openai'; end;
+function TOpenAIProvider.GetName: string;             begin Result := FDisplayName;  end;
 function TOpenAIProvider.SupportsThinking: Boolean;   begin Result := False; end;
 function TOpenAIProvider.SupportsNativeSearch: Boolean; begin Result := False; end;
 function TOpenAIProvider.SupportsStreaming: Boolean;  begin Result := False; end;
@@ -235,16 +291,15 @@ function TOpenAIProvider.Chat(const Messages: array of TMessage;
 var
   Body, URL, UseModel: string;
   Resp: THTTPResult;
-  Headers: array of THeaderPair;
+  Headers: TArray<THeaderPair>;
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1/chat/completions';
   Body := BuildOAIRequest(Messages, Tools, UseModel, Options);
 
-  SetLength(Headers, 1);
-  Headers[0] := MakeHeader('Authorization', 'Bearer ' + FAPIKey);
+  Headers := BuildAuthHeaders;
 
-  LogDebug('openai POST %s (model=%s, body=%d bytes)', [URL, UseModel, Length(Body)]);
+  LogDebug('%s POST %s (model=%s, body=%d bytes)', [FDisplayName, URL, UseModel, Length(Body)]);
   Resp := PostJSON(URL, Body, Headers, 120);
 
   Result.Content := '';
@@ -254,9 +309,9 @@ begin
   else
   begin
     if Resp.Body <> '' then
-      Result.Content := Format('openai error %d: %s', [Resp.StatusCode, Resp.Body])
+      Result.Content := Format('%s error %d: %s', [FDisplayName, Resp.StatusCode, Resp.Body])
     else
-      Result.Content := Format('openai error: status=%d msg=%s', [Resp.StatusCode, Resp.ErrorMsg]);
+      Result.Content := Format('%s error: status=%d msg=%s', [FDisplayName, Resp.StatusCode, Resp.ErrorMsg]);
     Result.FinishReason := 'error';
   end;
 end;
