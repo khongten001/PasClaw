@@ -153,6 +153,7 @@ uses
   PasClaw.Providers.Factory,
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
+  PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
   PasClaw.Tools.ToolLoop;
@@ -194,7 +195,14 @@ end;
 
 procedure TPasClawAgent.EnsureConfig;
 begin
-  if FConfig = nil then FConfig := LoadConfig;
+  if FConfig = nil then
+  begin
+    FConfig := LoadConfig;
+    { Apply the sandbox policy to the shared module-level state.
+      The component sits next to the CLI in one process so this is
+      the same global state Cmd.Agent / Cmd.Serve seed at startup. }
+    ConfigureSandbox(FConfig.Sandbox, '');
+  end;
 end;
 
 procedure TPasClawAgent.EnsureProvider;
@@ -422,6 +430,7 @@ begin
   if (FThread <> nil) or (FServer <> nil) then Stop;
 
   FConfig := LoadConfig;
+  ConfigureSandbox(FConfig.Sandbox, '');
   if FModel <> '' then
     FConfig.DefaultModel := FModel;
 

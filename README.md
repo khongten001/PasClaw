@@ -353,6 +353,50 @@ Minimal local provider examples:
 }
 ```
 
+## 🔒 Security / sandbox
+
+PasClaw's filesystem and shell tools are guarded by an opt-in workspace boundary plus an always-on shell denylist (`src/pkg/tools/PasClaw.Tools.Sandbox.pas`). Configure via the `sandbox` block in `~/.pasclaw/config.json`:
+
+```json
+"sandbox": {
+  "restrict_to_workspace":        true,
+  "allow_read_outside_workspace": false,
+  "workspace":                    "/home/me/my-project",
+  "allow_read_paths":  ["^/usr/(include|share)/.*"],
+  "allow_write_paths": ["^/tmp/agent/.*"],
+  "custom_shell_deny": ["scp ", "rsync "],
+  "shell_deny_enabled":           true
+}
+```
+
+| Field | Default | Effect |
+|---|---|---|
+| `restrict_to_workspace` | `false` | When `true`, `fs_read` / `fs_write` / `fs_list` / `fs_edit_hashline` / `fs_grep` refuse paths outside `workspace`. `shell_exec` refuses absolute paths outside it AND tokens containing `..`, pins the shell's cwd to the workspace, and bans `cd` / `chdir` / `pushd` / `popd`. |
+| `allow_read_outside_workspace` | `false` | When `true`, reads are allowed anywhere even while writes stay restricted. Useful for letting the agent pull from `/usr/include/` while still locking down writes. |
+| `workspace` | `""` (cwd at startup) | Absolute path the agent may operate inside. Empty means "use the current working directory at the time `pasclaw` was invoked", which is the picoclaw / Claude Code convention. |
+| `allow_read_paths` | `[]` | **PCRE regex** patterns that *also* count as readable. Same syntax picoclaw's `tools.allow_read_paths` accepts — anchors (`^` `$`), character classes, alternation. |
+| `allow_write_paths` | `[]` | Same for writes. |
+| `custom_shell_deny` | `[]` | Extra substrings appended to the built-in shell denylist. Case-insensitive. |
+| `shell_deny_enabled` | `true` | Master switch for the shell denylist. Set `false` only for trusted automation — doing so re-enables `sudo`, `rm`, `dd`, `mkfs`, `$( )`, `curl \| sh`, `format c:`, PowerShell `-EncodedCommand`, etc. |
+
+**Cross-target regex**: `PasClaw.Tools.Regex` wraps FPC's `RegExpr` and Delphi's `System.RegularExpressions` behind one call, so `allow_*_paths` patterns are full PCRE on either toolchain. Invalid patterns return False (the sandbox falls through to the workspace boundary) rather than crashing.
+
+**Built-in shell denylist** (always on unless `shell_deny_enabled` is false):
+
+- **POSIX tokens**: `sudo`, `su`, `rm`, `chmod`, `chown`, `pkill`, `killall`, `kill`, `shutdown`, `reboot`, `poweroff`, `halt`, `eval`, `mkfs`, `diskpart`.
+- **Windows tokens**: `del`, `erase`, `rd`, `rmdir`, `format`, `attrib`, `takeown`, `icacls`, `runas`.
+- **cwd-change tokens** (when `restrict_to_workspace`): `cd`, `chdir`, `pushd`, `popd`. Any token containing `..` is also rejected.
+- **Substrings**: `dd if=`, `:(){:|`, `<<EOF`, `$( )`, `${ }`, backticks, `| sh`, `| bash`, `apt install/remove/purge`, `yum install/remove`, `dnf install/remove`, `npm install -g`, `pip install --user`, `docker run/exec`, `git push`, `git force`, `format c:`.
+- **PowerShell** (matched lowercased): `powershell -e/-en/-enc/-ec`, `-encodedcommand`, `iex (`, `invoke-expression`, `[convert]::frombase64`, `[text.encoding]`, `.getstring([byte[]`, `set-executionpolicy`.
+- **Device writes**: `> /dev/sd*` / `/hd*` / `/vd*` / `/xvd*` / `/nvme*` / `/mmcblk*` / `/loop*` / `/md*`.
+- **Always-safe paths**: `/dev/null`, `/dev/zero`, `/dev/{,u}random`, `/dev/std{in,out,err}` — picoclaw's `safePaths`.
+
+**Workspace-pin**: when `restrict_to_workspace=true`, `Tool_Shell` invokes `RunOneShot` with `WorkingDir = workspace` so the child shell starts inside the boundary. Combined with the `cd` token ban and `..` traversal check, a sandboxed model has no relative-path escape — even if a future denylist gap let a command through, the shell still starts in the workspace, not wherever `pasclaw` was launched from.
+
+**Known limitation**: path canonicalisation uses `ExpandFileName`, which resolves `..` but not symlinks. Picoclaw's equivalent (`os.OpenRoot` in Go 1.24+) enforces the boundary at the syscall layer; PasClaw runs on FPC and Delphi RTLs that have no equivalent. **Do not place symlinks inside `workspace` that point outside it** — they would let the agent escape.
+
+**`--no-tools`** remains the strongest option: it disables the tool registry entirely, so neither `fs_*` nor `shell_exec` is registered. The system prompt automatically reflects this (no SKILLS section, no "ALWAYS use tools" rule).
+
 ## Repository layout
 
 ```text

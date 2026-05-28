@@ -165,6 +165,7 @@
         <!-- pkg/tools -->
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Types.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Registry.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.Sandbox.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.FS.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Shell.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.ToolLoop.pas"/>

@@ -30,7 +30,8 @@ uses
   PasClaw.Tools.ToolLoop,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
-  PasClaw.Agent.Prompt;
+  PasClaw.Agent.Prompt,
+  PasClaw.Tools.Sandbox;
 
 type
   TAgentArgs = record
@@ -304,6 +305,7 @@ begin
   end;
 
   Cfg := LoadConfig;
+  ConfigureSandbox(Cfg.Sandbox, '');
   try
     if A.Message <> '' then RunSingleTurn(Cfg, A, A.Message)
     else                    RunInteractive(Cfg, A);

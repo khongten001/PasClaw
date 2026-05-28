@@ -39,6 +39,7 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
+  PasClaw.Tools.Sandbox,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Gateway.Server;
@@ -94,6 +95,7 @@ var
   BaseURL: string;
 begin
   Cfg := LoadConfig;
+  ConfigureSandbox(Cfg.Sandbox, '');
   try
     Args := ParseServe(Argv, Cfg);
 
