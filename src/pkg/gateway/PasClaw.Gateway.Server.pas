@@ -487,25 +487,35 @@ var
 begin
   if (FContext = nil) or (FContext.Connection = nil) or
      (not FContext.Connection.Connected) then
+  begin
+    if FDebugIO then
+      LogDebug('sse: connection already closed before write of %d bytes', [Length(Data)]);
     Exit;
+  end;
   Utf8 := TEncoding.UTF8.GetBytes(Data);
   SetLength(Bytes, Length(Utf8));
   for i := 0 to High(Utf8) do Bytes[i] := Utf8[i];
   try
     FContext.Connection.IOHandler.Write(Bytes);
-    (* TIdHTTPServer opens a per-connection write buffer on the
-       response socket so it can compute Content-Length before
-       flushing at the end of the handler. For SSE we need every chunk
-       to land on the wire immediately, so explicitly flush after each
-       write. Without this, the client sees no bytes until the handler
-       returns — defeating the whole point of incremental streaming.
+    (* TIdHTTPServer wraps every response in a write buffer to compute
+       Content-Length. AResp.WriteHeader opens its OWN nested buffer on
+       top of that. WriteBufferFlush only flushes the innermost open
+       buffer — the outer server-level one stays open until DoCommandGet
+       returns, which is exactly when the client finally sees everything.
 
-       WriteBufferFlush is a no-op when no buffer is open, so it's
-       safe even on Indy builds that don't auto-buffer responses. *)
-    FContext.Connection.IOHandler.WriteBufferFlush;
+       Loop WriteBufferClose until WriteBufferingActive is False so the
+       entire stack of buffers gets drained and disabled for this
+       connection. After the first chunk this is a no-op (no buffer left
+       to close); the loop only matters for the very first write. *)
+    while FContext.Connection.IOHandler.WriteBufferingActive do
+      FContext.Connection.IOHandler.WriteBufferClose;
   except
-    { Client disconnected or write failed; swallow so the tool loop
-      can still complete server-side bookkeeping cleanly. }
+    on E: Exception do
+    begin
+      if FDebugIO then LogDebug('sse: write failed: %s', [E.Message]);
+      { Client disconnected or write failed; swallow so the tool loop
+        can still complete server-side bookkeeping cleanly. }
+    end;
   end;
 end;
 
@@ -737,12 +747,19 @@ begin
       AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
       AResp.CloseConnection := True;
       AResp.WriteHeader;
-      { Flush headers to the wire immediately so the client knows the
-        connection is alive even before the first chunk. Without this,
-        Indy's response buffer would hold the headers until the first
-        body write — which itself wouldn't ship until the buffer was
-        flushed — and the client would see nothing until handler exit. }
-      AContext.Connection.IOHandler.WriteBufferFlush;
+      { Drain every nested write buffer so headers AND subsequent body
+        writes go straight to the socket. TIdHTTPServer opens a
+        connection-level buffer per request to compute Content-Length;
+        WriteHeader opens another inside that to write its own bytes.
+        WriteBufferFlush only flushes one level at a time and is a no-op
+        when no buffer is open — so loop until WriteBufferingActive is
+        False. After this, subsequent IOHandler.Write calls hit the
+        socket immediately. }
+      while AContext.Connection.IOHandler.WriteBufferingActive do
+        AContext.Connection.IOHandler.WriteBufferClose;
+      if FDebugIO then
+        LogDebug('sse: headers flushed, connection still up=%s',
+                 [BoolToStr(AContext.Connection.Connected, True)]);
       Streamer := TSSEStreamer.Create(AContext, CompId, ReqModel, FDebugIO);
       LoopCfg.OnToolCall   := Streamer.NoteToolCall;
       LoopCfg.OnToolResult := Streamer.NoteToolResult;
