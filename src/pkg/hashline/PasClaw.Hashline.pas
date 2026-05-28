@@ -105,6 +105,8 @@ function StripHashlinePrefixes(var Lines: TStringList): Boolean;
 function ParseHashlinePatch(const PatchText: string;
                             out Sections: THLSectionArray;
                             out ErrMsg: string): Boolean;
+function ValidateHashlinePatchGrammar(const PatchText: string;
+                                      out ErrMsg: string): Boolean;
 function ApplyHashlineEdits(const Original: string;
                             const Edits: THLEditArray;
                             out NewText: string;
@@ -595,6 +597,45 @@ begin
     begin
       FlushBlock(Block, CurEdits);
       Sections[SectionIdx].Edits := CurEdits;
+    end;
+    Result := True;
+  finally
+    Lines.Free;
+  end;
+end;
+
+function ValidateHashlinePatchGrammar(const PatchText: string;
+                                      out ErrMsg: string): Boolean;
+var
+  Lines: TStringList;
+  i, p, j: Integer;
+  L: string;
+begin
+  Result := False;
+  ErrMsg := '';
+  Lines := TStringList.Create;
+  try
+    Lines.LineBreak := #10;
+    Lines.StrictDelimiter := True;
+    Lines.Text := StringReplace(PatchText, #13, '', [rfReplaceAll]);
+    for i := 0 to Lines.Count - 1 do
+    begin
+      L := Lines[i];
+      p := Pos(':', L);
+      if p <= 0 then Continue;
+      if (p < Length(L)) and ((L[p + 1] = HL_PAYLOAD_ABOVE) or
+                              (L[p + 1] = HL_PAYLOAD_BELOW) or
+                              (L[p + 1] = HL_PAYLOAD_REPLACE)) then
+      begin
+        j := p - 1;
+        while (j >= 1) and (L[j] in ['0'..'9']) do Dec(j);
+        if (j = 0) or ((j >= 1) and (L[j] = '-')) then
+        begin
+          ErrMsg := Format('line %d: unsupported inline payload token near "%s"; use canonical grammar with anchor on its own line and payload lines beginning with %s/%s/%s',
+                           [i + 1, Copy(L, p, 2), HL_PAYLOAD_REPLACE, HL_PAYLOAD_ABOVE, HL_PAYLOAD_BELOW]);
+          Exit;
+        end;
+      end;
     end;
     Result := True;
   finally

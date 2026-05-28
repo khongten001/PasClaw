@@ -42,7 +42,36 @@ function RunToolLoop(const Cfg: TToolLoopConfig;
 implementation
 
 uses
-  PasClaw.Logger;
+  PasClaw.Logger,
+  PasClaw.JSON,
+  PasClaw.Hashline;
+
+function PreflightToolCall(const Name, ArgsJSON: string; out Err: string): Boolean;
+var
+  Obj: TJsonObject;
+  Patch, VErr: string;
+begin
+  Result := True;
+  Err := '';
+  if Name <> 'fs_edit_hashline' then Exit;
+  Obj := TJsonObject.Parse(ArgsJSON);
+  if Obj = nil then
+  begin
+    Err := 'invalid JSON arguments for fs_edit_hashline';
+    Exit(False);
+  end;
+  try
+    Patch := Obj.GetStr('patch', '');
+  finally
+    Obj.Free;
+  end;
+  if Patch = '' then Exit;
+  if not ValidateHashlinePatchGrammar(Patch, VErr) then
+  begin
+    Err := 'patch preflight: ' + VErr + ' (remediation: regenerate patch with ¶path#hash header, anchor line like "N:" or "N-M:", then payload lines prefixed by |/↑/↓ only)';
+    Exit(False);
+  end;
+end;
 
 function MakeAssistantWithToolCalls(const Content: string;
                                     const Calls: array of TToolCall): TMessage;
@@ -118,7 +147,9 @@ begin
 
       Err := '';
       ResultText := '';
-      if Cfg.Registry <> nil then
+      if not PreflightToolCall(Resp.ToolCalls[i].Func.Name, Resp.ToolCalls[i].Func.Arguments, Err) then
+        ResultText := ''
+      else if Cfg.Registry <> nil then
         ResultText := Cfg.Registry.RunTool(Resp.ToolCalls[i].Func.Name,
                                             Resp.ToolCalls[i].Func.Arguments,
                                             Err)
