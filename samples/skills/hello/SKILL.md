@@ -45,7 +45,24 @@ conditions that match your actual workflow.
 3. Stop.
 
 That is the whole skill. Real skills are usually 10–100 lines of
-procedural knowledge, with optional `scripts/` (executables the model
-can call) and `references/` (deeper documentation) directories
-alongside this SKILL.md — Phase 4 of the skills overhaul will wire
-those in. For now, SKILL.md + frontmatter + body is the contract.
+procedural knowledge, with optional `scripts/`, `references/`, and
+`assets/` directories alongside this SKILL.md:
+
+- `scripts/` — executables the model invokes via `shell_exec`
+  (sandbox-aware: workspace-pinned, denylist-checked). The model sees
+  each script's absolute path in the system prompt's SKILLS section
+  and decides when to run it. `scripts/greet.sh` next to this file
+  demonstrates the layout.
+
+- `references/` — markdown documentation the model loads on demand via
+  `fs_read`. Use this for project-specific conventions, domain knowledge,
+  or worked examples the model can pull in when SKILL.md's body points
+  it here. `references/style-guide.md` next to this file is the sample.
+
+- `assets/` — templates, fixtures, images, etc. that the skill bundles.
+  PasClaw advertises their paths so the model knows they exist.
+
+PasClaw walks these subdirectories during `LoadSkillManifests` and
+emits each file's absolute path in the system prompt — the model
+discovers what's available without having to `fs_list` the skill
+directory.

@@ -154,7 +154,7 @@ end;
 function BuildSkillsSection: string;
 var
   Skills: TSkillSpecArray;
-  i: Integer;
+  i, j: Integer;
   Lines: TStringList;
   Desc, K: string;
   HasCallable, HasKnowledge: Boolean;
@@ -209,6 +209,29 @@ begin
           Lines.Add('- **' + Skills[i].Name + '**: read `' + Skills[i].Source + '`')
         else
           Lines.Add('- **' + Skills[i].Name + '** — ' + Desc + '. Read `' + Skills[i].Source + '` for the full instructions.');
+      end;
+      { Phase 4: surface scripts/, references/, and assets/ contents so
+        the model knows what bundled resources exist without having to
+        fs_list the skill directory. scripts/ are listed with a hint to
+        invoke via shell_exec (subject to the sandbox); references/ are
+        listed for fs_read on demand. Empty subdirs print nothing. }
+      if Length(Skills[i].Scripts) > 0 then
+      begin
+        Lines.Add('    scripts (invoke via shell_exec):');
+        for j := 0 to High(Skills[i].Scripts) do
+          Lines.Add('      - `' + Skills[i].Scripts[j] + '`');
+      end;
+      if Length(Skills[i].References) > 0 then
+      begin
+        Lines.Add('    references (read with fs_read as needed):');
+        for j := 0 to High(Skills[i].References) do
+          Lines.Add('      - `' + Skills[i].References[j] + '`');
+      end;
+      if Length(Skills[i].Assets) > 0 then
+      begin
+        Lines.Add('    assets:');
+        for j := 0 to High(Skills[i].Assets) do
+          Lines.Add('      - `' + Skills[i].Assets[j] + '`');
       end;
     end;
     Result := Lines.Text;

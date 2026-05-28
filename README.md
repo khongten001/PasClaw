@@ -236,7 +236,17 @@ Skills live under `$PASCLAW_HOME/workspace/skills/`. PasClaw accepts two layouts
 
 `pasclaw skills search <query>` queries `/api/v1/search` and prints slug / version / display-name / summary rows.
 
-Subsequent phases will add `scripts/` (callable helpers) + `references/` (lazy-loaded context) runtime support.
+**Skill bundle layout** (Phase 4, this release):
+
+```
+workspace/skills/<name>/
+├── SKILL.md
+├── scripts/      ← executables the model invokes via shell_exec
+├── references/   ← markdown the model loads on demand via fs_read
+└── assets/       ← templates / fixtures / images bundled with the skill
+```
+
+`LoadSkillManifests` walks `scripts/`, `references/`, and `assets/` after parsing each SKILL.md (`ScanSkillSubdir` in `PasClaw.Skills.Loader`), and `BuildSkillsSection` (in `PasClaw.Agent.Prompt`) prints each file's absolute path under the skill's bullet in the system prompt. The model discovers the bundled resources without having to `fs_list` the skill directory; `scripts/*` are invoked via `shell_exec` (subject to the sandbox policy), `references/*` via `fs_read` when SKILL.md's body points the model there. See [`samples/skills/hello/`](samples/skills/hello/) for the canonical layout — it ships a `scripts/greet.sh` and a `references/style-guide.md` alongside its SKILL.md.
 
 ### Gateway, OpenAI-compatible server, and channels
 
