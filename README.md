@@ -71,6 +71,73 @@ Globals: `--no-color` (or `NO_COLOR=1`) disables ANSI styling.
 `PASCLAW_HOME` overrides the home directory (default `~/.pasclaw`).
 `PASCLAW_CONFIG` overrides the config path.
 
+## 🔌 Providers (LLM)
+
+PasClaw ships a single provider catalog (`src/pkg/providers/PasClaw.Providers.Catalog.pas`) that's surfaced through `pasclaw onboard`. Picking a provider populates the right default base URL, default model, and auth scheme so you only need to paste in an API key. Most entries below are OpenAI Chat Completions compatible and share one underlying provider implementation — adding another OpenAI-shaped provider is a one-row catalog change.
+
+| Provider | `kind` | API Key | Notes |
+|----------|--------|---------|-------|
+| [Anthropic](https://console.anthropic.com/settings/keys) | `anthropic` | Required | Claude Opus / Sonnet / Haiku |
+| [OpenAI](https://platform.openai.com/api-keys) | `openai` | Required | GPT-4o, GPT-5, o3 family |
+| [OpenRouter](https://openrouter.ai/keys) | `openrouter` | Required | 200+ models, unified API |
+| [Zhipu (GLM)](https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys) | `zhipu` | Required | GLM-4, GLM-5 |
+| [DeepSeek](https://platform.deepseek.com/api_keys) | `deepseek` | Required | DeepSeek-V3, DeepSeek-R1 |
+| [Volcengine](https://console.volcengine.com) | `volcengine` | Required | ByteDance Doubao / Ark |
+| [Qwen](https://dashscope.console.aliyun.com/apiKey) | `qwen` | Required | Qwen3 / Qwen-Max |
+| [Groq](https://console.groq.com/keys) | `groq` | Required | Fast inference (Llama, Mixtral) |
+| [Moonshot (Kimi)](https://platform.moonshot.cn/console/api-keys) | `moonshot` | Required | Kimi models |
+| [MiniMax](https://platform.minimaxi.com/user-center/basic-information/interface-key) | `minimax` | Required | MiniMax abab / hailuo |
+| [Mistral](https://console.mistral.ai/api-keys) | `mistral` | Required | Mistral Large, Codestral |
+| [NVIDIA NIM](https://build.nvidia.com/) | `nvidia` | Required | NVIDIA-hosted models |
+| [Cerebras](https://cloud.cerebras.ai/) | `cerebras` | Required | Fast inference |
+| [Novita AI](https://novita.ai/) | `novita` | Required | Various open models |
+| [Xiaomi MiMo](https://platform.xiaomimimo.com/) | `mimo` | Required | Set `api_base` per deployment |
+| [Ollama](https://ollama.com/) | `ollama` | Not needed | Local, self-hosted |
+| [vLLM](https://docs.vllm.ai/) | `vllm` | Not needed | Local, OpenAI-compatible |
+| [LiteLLM](https://docs.litellm.ai/) | `litellm` | Varies | Proxy for 100+ providers (set `api_base`) |
+| [Google Gemini](https://aistudio.google.com/apikey) | `gemini` | Required | Catalog entry reserved — `generateContent` REST client coming in a follow-up |
+
+Deferred to follow-up PRs (each adds one new `TProtocolFamily` enum value and one new branch in `Factory`): **Azure OpenAI** (`asHeader` auth slot already reserved), **AWS Bedrock** (needs SigV4 signing, build-tag gated like picoclaw), **GitHub Copilot** (OAuth device flow), **Antigravity** (Google Cloud OAuth).
+
+<details>
+<summary><b>Local deployment (Ollama, vLLM)</b></summary>
+
+`pasclaw onboard` will skip the API-key prompt for `ollama` and `vllm` (the catalog marks them `asNone`). The resulting `~/.pasclaw/config.json` entry looks like:
+
+**Ollama:**
+```json
+{
+  "providers": [
+    {
+      "name": "ollama",
+      "kind": "ollama",
+      "api_base": "http://localhost:11434",
+      "model": "llama3.1:8b"
+    }
+  ],
+  "default_provider": "ollama",
+  "default_model": "llama3.1:8b"
+}
+```
+
+**vLLM:**
+```json
+{
+  "providers": [
+    {
+      "name": "vllm",
+      "kind": "vllm",
+      "api_base": "http://localhost:8000",
+      "model": "your-model"
+    }
+  ],
+  "default_provider": "vllm",
+  "default_model": "your-model"
+}
+```
+
+</details>
+
 ## Layout
 
 ```
