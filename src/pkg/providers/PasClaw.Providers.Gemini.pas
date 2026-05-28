@@ -151,7 +151,7 @@ begin
 
       if Messages[i].Role = mrTool then
       begin
-        { Tool result → role:user, parts:[{functionResponse}]. }
+        // Tool result -> role:user, parts:[{functionResponse}].
         Content := TJsonObject.Create;
         Content.PutStr('role', 'user');
         Parts := TJsonArray.Create;
