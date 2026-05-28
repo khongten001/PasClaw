@@ -10,6 +10,9 @@
                                       (request: {model, messages, ...},
                                        response: {id, choices[{message}], usage}
                                        — SSE if stream:true is set)
+    POST /v1/responses             -> OpenAI Responses-compatible
+                                      (request: {model, input, ...},
+                                       response: {id, output[{content}], usage})
     GET  /v1/models                -> OpenAI-compatible model list
     GET  /v1/version               -> build version
 
@@ -58,6 +61,11 @@ type
                                     AResp: TIdHTTPResponseInfo;
                                     out AWasStreamingRequest: Boolean;
                                     out AResponseStarted: Boolean);
+    procedure HandleResponses(AContext: TIdContext;
+                              ARequest: TIdHTTPRequestInfo;
+                              AResp: TIdHTTPResponseInfo;
+                              out AWasStreamingRequest: Boolean;
+                              out AResponseStarted: Boolean);
     procedure HandleModels(AResp: TIdHTTPResponseInfo);
     procedure WriteJSON(AResp: TIdHTTPResponseInfo; Code: Integer; const Body: string);
     procedure WriteSSE(AResp: TIdHTTPResponseInfo; const Body: string);
@@ -199,6 +207,8 @@ begin
     else if (ARequest.Command = 'POST') and (Doc = '/v1/chat')    then HandleChat(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/chat/completions') then
       HandleChatCompletions(AContext, ARequest, AResponse, IsChatCompletionsStream, ResponseStarted)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/responses') then
+      HandleResponses(AContext, ARequest, AResponse, IsChatCompletionsStream, ResponseStarted)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/models')  then HandleModels(AResponse)
     else if Doc = '/' then
     begin
@@ -213,7 +223,7 @@ begin
     end
     else if Doc = '/v1' then
       WriteJSON(AResponse, 200,
-        '{"name":"pasclaw","routes":["/v1/health","/v1/version","/v1/status","/v1/tools","/v1/chat","/v1/chat/completions","/v1/models"]}')
+        '{"name":"pasclaw","routes":["/v1/health","/v1/version","/v1/status","/v1/tools","/v1/chat","/v1/chat/completions","/v1/responses","/v1/models"]}')
     else
       WriteJSON(AResponse, 404, '{"error":"not found","path":"' + Doc + '"}');
   except
@@ -999,6 +1009,328 @@ begin
   finally
     Req.Free;
     if Streamer <> nil then Streamer.Free;
+  end;
+end;
+
+
+function GenResponseId: string;
+{ Opaque Responses API id. Keep it distinct from chatcmpl-* so logs can
+  distinguish which OpenAI-compatible surface handled the request. }
+const
+  Alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+var
+  i: Integer;
+begin
+  Result := 'resp_';
+  for i := 1 to 24 do
+    Result := Result + Alphabet[1 + Random(Length(Alphabet))];
+end;
+
+function BuildResponsesObject(const Id, Model, Status, Content: string;
+                               Usage: TUsageInfo): TJsonObject;
+{ Minimal OpenAI Responses-compatible non-streaming response. Modern OpenAI
+  clients look for output[].content[].text rather than choices[].message. }
+var
+  OutputArr, ContentArr, AnnotationsArr: TJsonArray;
+  MsgObj, TextObj, UsageObj: TJsonObject;
+begin
+  Result := TJsonObject.Create;
+  Result.PutStr('id',         Id);
+  Result.PutStr('object',     'response');
+  Result.PutInt('created_at', DateTimeToUnix(Now, False));
+  Result.PutStr('model',      Model);
+  Result.PutStr('status',     Status);
+
+  OutputArr := TJsonArray.Create;
+  if Content <> '' then
+  begin
+    MsgObj := TJsonObject.Create;
+    MsgObj.PutStr('id',     'msg_' + Copy(Id, 6, MaxInt));
+    MsgObj.PutStr('type',   'message');
+    MsgObj.PutStr('status', Status);
+    MsgObj.PutStr('role',   'assistant');
+
+    TextObj := TJsonObject.Create;
+    TextObj.PutStr('type', 'output_text');
+    TextObj.PutStr('text', Content);
+    AnnotationsArr := TJsonArray.Create;
+    TextObj.PutArray('annotations', AnnotationsArr);
+
+    ContentArr := TJsonArray.Create;
+    ContentArr.AddObject(TextObj);
+    MsgObj.PutArray('content', ContentArr);
+    OutputArr.AddObject(MsgObj);
+  end;
+  Result.PutArray('output', OutputArr);
+
+  UsageObj := TJsonObject.Create;
+  UsageObj.PutInt('input_tokens',  Usage.InputTokens);
+  UsageObj.PutInt('output_tokens', Usage.OutputTokens);
+  UsageObj.PutInt('total_tokens',  Usage.InputTokens + Usage.OutputTokens);
+  Result.PutObject('usage', UsageObj);
+end;
+
+procedure TGatewayServer.HandleResponses(AContext: TIdContext;
+                                          ARequest: TIdHTTPRequestInfo;
+                                          AResp: TIdHTTPResponseInfo;
+                                          out AWasStreamingRequest: Boolean;
+                                          out AResponseStarted: Boolean);
+(* OpenAI Responses API compatibility. Accepts the request shape used by
+   modern OpenAI clients and KAI: model, input (string or array of
+   role/content messages), stream, temperature, and max_output_tokens. The
+   request is translated into the same TMessageArray/TToolLoopConfig path as
+   /v1/chat/completions. Responses streaming has a different event protocol,
+   so this endpoint deliberately returns an OpenAI-shaped unsupported-streaming
+   error instead of pretending chat-completion chunks are Responses events. *)
+var
+  Body, ReqModel, InputText, FinishReason, RespId: string;
+  Bytes: TBytes;
+  Req, InputObj, ReplyObj, ErrObj: TJsonObject;
+  InputArr: TJsonArray;
+  Msgs: array of TMessage;
+  i, MsgCount: Integer;
+  WantsStream: Boolean;
+  Loop: TToolLoopResult;
+  LoopCfg: TToolLoopConfig;
+  RawTemp: Double;
+
+  procedure AppendMessage(Role: TMsgRole; const Content: string);
+  begin
+    if Trim(Content) = '' then Exit;
+    SetLength(Msgs, MsgCount + 1);
+    Msgs[MsgCount] := MakeMessage(Role, Content);
+    Inc(MsgCount);
+  end;
+
+  function FlattenTextArray(Arr: TJsonArray): string;
+  var
+    PartObj: TJsonObject;
+    NestedArr: TJsonArray;
+    PartText, NestedText: string;
+    j: Integer;
+  begin
+    Result := '';
+    if Arr = nil then Exit;
+    for j := 0 to Arr.Count - 1 do
+    begin
+      PartText := Arr.ItemStr(j, '');
+      if PartText = '' then
+      begin
+        PartObj := Arr.ItemObject(j);
+        if PartObj <> nil then
+        try
+          PartText := PartObj.GetStr('text', '');
+          if PartText = '' then PartText := PartObj.GetStr('input_text', '');
+          if PartText = '' then PartText := PartObj.GetStr('output_text', '');
+          if PartText = '' then
+          begin
+            NestedArr := PartObj.ChildArray('content');
+            if NestedArr <> nil then
+            try
+              NestedText := FlattenTextArray(NestedArr);
+              PartText := NestedText;
+            finally
+              NestedArr.Free;
+            end;
+          end;
+        finally
+          PartObj.Free;
+        end;
+      end;
+      if Trim(PartText) <> '' then
+      begin
+        if Result <> '' then Result := Result + sLineBreak;
+        Result := Result + PartText;
+      end;
+    end;
+  end;
+
+  function ExtractMessageContent(Obj: TJsonObject): string;
+  var
+    ContentArr: TJsonArray;
+  begin
+    Result := '';
+    if Obj = nil then Exit;
+    ContentArr := Obj.ChildArray('content');
+    if ContentArr <> nil then
+    try
+      Result := FlattenTextArray(ContentArr);
+    finally
+      ContentArr.Free;
+    end
+    else
+    begin
+      Result := Obj.GetStr('content', '');
+      if Result = '' then Result := Obj.GetStr('text', '');
+      if Result = '' then Result := Obj.GetStr('input_text', '');
+    end;
+  end;
+
+begin
+  AWasStreamingRequest := False;
+  AResponseStarted := False;
+  Body := '';
+  SetLength(Msgs, 0);
+  MsgCount := 0;
+
+  if ARequest.PostStream <> nil then
+  begin
+    ARequest.PostStream.Position := 0;
+    SetLength(Bytes, ARequest.PostStream.Size);
+    if ARequest.PostStream.Size > 0 then
+    begin
+      ARequest.PostStream.ReadBuffer(Bytes[0], ARequest.PostStream.Size);
+      Body := TEncoding.UTF8.GetString(Bytes);
+    end;
+  end;
+
+  if FDebugIO then
+    LogDebug('responses <- %d bytes from %s: %s',
+             [Length(Bytes), ARequest.RemoteIP, Body]);
+
+  if Trim(Body) = '' then
+  begin
+    WriteJSON(AResp, 400,
+      '{"error":{"message":"empty request body","type":"invalid_request_error"}}');
+    Exit;
+  end;
+
+  try
+    Req := TJsonObject.Parse(Body);
+  except
+    on E: Exception do
+    begin
+      WriteJSON(AResp, 400,
+        '{"error":{"message":"invalid JSON","type":"invalid_request_error"}}');
+      Exit;
+    end;
+  end;
+
+  if Req = nil then
+  begin
+    WriteJSON(AResp, 400,
+      '{"error":{"message":"invalid JSON object","type":"invalid_request_error"}}');
+    Exit;
+  end;
+
+  try
+    ReqModel    := Req.GetStr('model', FCfg.DefaultModel);
+    WantsStream := Req.GetBool('stream', False);
+    AWasStreamingRequest := WantsStream;
+
+    if WantsStream then
+    begin
+      WriteJSON(AResp, 400,
+        '{"error":{"message":"Responses streaming is not yet supported; use stream:false or /v1/chat/completions for SSE.","type":"invalid_request_error","param":"stream","code":"unsupported_streaming"}}');
+      Exit;
+    end;
+
+    InputArr := Req.ChildArray('input');
+    if InputArr <> nil then
+    try
+      for i := 0 to InputArr.Count - 1 do
+      begin
+        InputObj := InputArr.ItemObject(i);
+        if InputObj <> nil then
+        try
+          InputText := ExtractMessageContent(InputObj);
+          AppendMessage(MsgRoleFromString(InputObj.GetStr('role', 'user')), InputText);
+        finally
+          InputObj.Free;
+        end
+        else
+          AppendMessage(mrUser, InputArr.ItemStr(i, ''));
+      end;
+    finally
+      InputArr.Free;
+    end
+    else
+      AppendMessage(mrUser, Req.GetStr('input', ''));
+
+    if MsgCount = 0 then
+    begin
+      WriteJSON(AResp, 400,
+        '{"error":{"message":"missing or empty input","type":"invalid_request_error","param":"input"}}');
+      Exit;
+    end;
+
+    if FProvider = nil then
+    begin
+      WriteJSON(AResp, 503,
+        '{"error":{"message":"no provider configured","type":"server_error"}}');
+      Exit;
+    end;
+
+    LoopCfg.Provider      := FProvider;
+    LoopCfg.Registry      := FRegistry;
+    LoopCfg.Model         := ReqModel;
+    LoopCfg.MaxIterations := FMaxIter;
+    LoopCfg.Options       := DefaultChatOptions;
+    if not HasSystemMessage(Msgs) then
+      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
+    RawTemp := Req.GetFloat('temperature', 0);
+    if RawTemp > 0 then LoopCfg.Options.Temperature := RawTemp;
+    if Req.Has('max_output_tokens') then
+      LoopCfg.Options.MaxTokens := Req.GetInt('max_output_tokens', LoopCfg.Options.MaxTokens)
+    else if Req.Has('max_tokens') then
+      LoopCfg.Options.MaxTokens := Req.GetInt('max_tokens', LoopCfg.Options.MaxTokens);
+    LoopCfg.OnText        := nil;
+    LoopCfg.OnToolCall    := nil;
+    LoopCfg.OnToolResult  := nil;
+
+    RespId := GenResponseId;
+
+    if not RunToolLoop(LoopCfg, Msgs, Loop) then
+    begin
+      ReplyObj := BuildResponsesObject(RespId, ReqModel, 'failed', '', Loop.LastResp.Usage);
+      try
+        ErrObj := TJsonObject.Create;
+        ErrObj.PutStr('message', 'tool loop failed');
+        ErrObj.PutStr('type',    'server_error');
+        ReplyObj.PutObject('error', ErrObj);
+        WriteJSON(AResp, 502, ReplyObj.ToJSON);
+      finally
+        ReplyObj.Free;
+      end;
+      Exit;
+    end;
+
+    if Loop.LastResp.FinishReason <> '' then
+      FinishReason := Loop.LastResp.FinishReason
+    else
+      FinishReason := 'stop';
+
+    if Length(Loop.LastResp.ToolCalls) > 0 then
+    begin
+      Loop.Content := Trim(Loop.Content);
+      if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
+      Loop.Content := Loop.Content + Format(
+        '(reached MaxIterations=%d while the model was still calling tools; '+
+        'last finish_reason=%s, %d pending tool call(s) — raise the --max-iter '+
+        'cap on `pasclaw serve` or reduce the task scope.)',
+        [FMaxIter, FinishReason, Length(Loop.LastResp.ToolCalls)]);
+      FinishReason := 'length';
+      LogWarn('responses: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
+              [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
+    end
+    else if Loop.Content = '' then
+    begin
+      Loop.Content := Format('(no content returned by the model; finish_reason=%s)',
+                              [FinishReason]);
+      LogWarn('responses: empty content with finish=%s iterations=%d',
+              [FinishReason, Loop.Iterations]);
+    end;
+
+    ReplyObj := BuildResponsesObject(RespId, ReqModel, 'completed', Loop.Content,
+                                      Loop.LastResp.Usage);
+    try
+      if FDebugIO then LogDebug('responses -> 200 JSON: %s', [ReplyObj.ToJSON]);
+      WriteJSON(AResp, 200, ReplyObj.ToJSON);
+    finally
+      ReplyObj.Free;
+    end;
+  finally
+    Req.Free;
   end;
 end;
 

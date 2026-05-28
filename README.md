@@ -270,6 +270,9 @@ curl http://127.0.0.1:8088/v1/chat \
 curl http://127.0.0.1:8088/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hello"}]}'
+curl http://127.0.0.1:8088/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"claude-opus-4-7","input":"hello"}'
 ```
 
 The gateway routes implemented in `src/pkg/gateway/` are:
@@ -284,7 +287,32 @@ The gateway routes implemented in `src/pkg/gateway/` are:
 | `/v1/tools` | `GET` | Registered tool descriptors. |
 | `/v1/chat` | `POST` | PasClaw JSON chat endpoint accepting `{"message":"..."}`. |
 | `/v1/chat/completions` | `POST` | OpenAI Chat Completions-compatible endpoint; supports streaming with `stream: true`. |
+| `/v1/responses` | `POST` | OpenAI Responses-compatible endpoint accepting string or message-array `input`; non-streaming only. |
 | `/v1/models` | `GET` | OpenAI-compatible model list containing the configured default model. |
+
+Manual `/v1/responses` verification examples:
+
+```sh
+# string input
+curl http://127.0.0.1:8088/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"claude-opus-4-7","input":"hello"}'
+
+# message-array input
+curl http://127.0.0.1:8088/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"claude-opus-4-7","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}'
+
+# missing or empty input should return invalid_request_error
+curl http://127.0.0.1:8088/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"claude-opus-4-7","input":""}'
+
+# streaming is intentionally unsupported on this route
+curl http://127.0.0.1:8088/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"claude-opus-4-7","input":"hello","stream":true}'
+```
 
 Channel posting commands:
 
