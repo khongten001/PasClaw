@@ -1193,53 +1193,90 @@ var
   MsgItemId: string;
   EmptyUsage: TUsageInfo;
   ContentArr: TJsonArray;
+  Seq: Integer;
 
-  function ItemAddedEvent(const ItemInProgressJSON: string): string;
+  { Every Responses streaming event the openai-python validators
+    accept carries a monotonically-increasing `sequence_number`.
+    `response.output_text.delta` / `.done` additionally require an
+    empty `logprobs: []` when no logprob data is available. Omitting
+    either makes the SDK raise ValidationError on the first event
+    that lands — exactly the "client chokes on the response" symptom
+    we set out to fix. Helpers below take Seq as the first arg so
+    the call site bumps a single local counter on every emit. }
+
+  function CreatedEvent(SeqNum: Integer; const ResponseJSON: string): string;
   begin
     Result := Format(
-      '{"type":"response.output_item.added","output_index":0,"item":%s}',
-      [ItemInProgressJSON]);
+      '{"type":"response.created","sequence_number":%d,"response":%s}',
+      [SeqNum, ResponseJSON]);
   end;
 
-  function ContentPartAddedEvent(const PartJSON_: string): string;
+  function InProgressEvent(SeqNum: Integer; const ResponseJSON: string): string;
   begin
     Result := Format(
-      '{"type":"response.content_part.added","item_id":%s,'+
-      '"output_index":0,"content_index":0,"part":%s}',
-      ['"' + JsonEscape(MsgItemId) + '"', PartJSON_]);
+      '{"type":"response.in_progress","sequence_number":%d,"response":%s}',
+      [SeqNum, ResponseJSON]);
   end;
 
-  function TextDeltaEvent(const Delta: string): string;
+  function CompletedEvent(SeqNum: Integer; const ResponseJSON: string): string;
   begin
     Result := Format(
-      '{"type":"response.output_text.delta","item_id":%s,'+
-      '"output_index":0,"content_index":0,"delta":%s}',
-      ['"' + JsonEscape(MsgItemId) + '"',
+      '{"type":"response.completed","sequence_number":%d,"response":%s}',
+      [SeqNum, ResponseJSON]);
+  end;
+
+  function ItemAddedEvent(SeqNum: Integer; const ItemInProgressJSON: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.output_item.added","sequence_number":%d,' +
+      '"output_index":0,"item":%s}',
+      [SeqNum, ItemInProgressJSON]);
+  end;
+
+  function ContentPartAddedEvent(SeqNum: Integer; const PartJSON_: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.content_part.added","sequence_number":%d,' +
+      '"item_id":%s,"output_index":0,"content_index":0,"part":%s}',
+      [SeqNum, '"' + JsonEscape(MsgItemId) + '"', PartJSON_]);
+  end;
+
+  function TextDeltaEvent(SeqNum: Integer; const Delta: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.output_text.delta","sequence_number":%d,' +
+      '"item_id":%s,"output_index":0,"content_index":0,' +
+      '"delta":%s,"logprobs":[]}',
+      [SeqNum,
+       '"' + JsonEscape(MsgItemId) + '"',
        '"' + JsonEscape(Delta) + '"']);
   end;
 
-  function TextDoneEvent(const Text: string): string;
+  function TextDoneEvent(SeqNum: Integer; const Text: string): string;
   begin
     Result := Format(
-      '{"type":"response.output_text.done","item_id":%s,'+
-      '"output_index":0,"content_index":0,"text":%s}',
-      ['"' + JsonEscape(MsgItemId) + '"',
+      '{"type":"response.output_text.done","sequence_number":%d,' +
+      '"item_id":%s,"output_index":0,"content_index":0,' +
+      '"text":%s,"logprobs":[]}',
+      [SeqNum,
+       '"' + JsonEscape(MsgItemId) + '"',
        '"' + JsonEscape(Text) + '"']);
   end;
 
-  function ContentPartDoneEvent(const PartJSON_: string): string;
+  function ContentPartDoneEvent(SeqNum: Integer; const PartJSON_: string): string;
   begin
     Result := Format(
-      '{"type":"response.content_part.done","item_id":%s,'+
-      '"output_index":0,"content_index":0,"part":%s}',
-      ['"' + JsonEscape(MsgItemId) + '"', PartJSON_]);
+      '{"type":"response.content_part.done","sequence_number":%d,' +
+      '"item_id":%s,"output_index":0,"content_index":0,"part":%s}',
+      [SeqNum, '"' + JsonEscape(MsgItemId) + '"', PartJSON_]);
   end;
 
-  function ItemDoneEvent(const ItemFinalJSON: string): string;
+  function ItemDoneEvent(SeqNum: Integer; const ItemFinalJSON: string): string;
   begin
     Result := Format(
-      '{"type":"response.output_item.done","output_index":0,"item":%s}',
-      [ItemFinalJSON]);
+      '{"type":"response.output_item.done","sequence_number":%d,' +
+      '"output_index":0,"item":%s}',
+      [SeqNum, ItemFinalJSON]);
   end;
 
 begin
@@ -1338,27 +1375,32 @@ begin
   try
     if DebugIO then LogDebug('responses sse: %d bytes content, item_id=%s',
                               [Length(Content), MsgItemId]);
+    { OpenAI's Responses streaming events start sequence_number at 0
+      and increase by 1 per event. The validators reject gaps and
+      duplicates. Each emit bumps Seq and the helper for that event
+      type embeds the value in its JSON payload. }
+    Seq := 0;
     EmitResponsesEvent(Streamer, 'response.created',
-      Format('{"type":"response.created","response":%s}', [CreatedJSON]));
+      CreatedEvent(Seq, CreatedJSON)); Inc(Seq);
     EmitResponsesEvent(Streamer, 'response.in_progress',
-      Format('{"type":"response.in_progress","response":%s}', [CreatedJSON]));
+      InProgressEvent(Seq, CreatedJSON)); Inc(Seq);
     EmitResponsesEvent(Streamer, 'response.output_item.added',
-      ItemAddedEvent(EmptyItemJSON));
+      ItemAddedEvent(Seq, EmptyItemJSON)); Inc(Seq);
     EmitResponsesEvent(Streamer, 'response.content_part.added',
-      ContentPartAddedEvent(EmptyPartJSON));
+      ContentPartAddedEvent(Seq, EmptyPartJSON)); Inc(Seq);
     if Content <> '' then
     begin
       EmitResponsesEvent(Streamer, 'response.output_text.delta',
-        TextDeltaEvent(Content));
+        TextDeltaEvent(Seq, Content)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.output_text.done',
-        TextDoneEvent(Content));
+        TextDoneEvent(Seq, Content)); Inc(Seq);
     end;
     EmitResponsesEvent(Streamer, 'response.content_part.done',
-      ContentPartDoneEvent(PartJSON));
+      ContentPartDoneEvent(Seq, PartJSON)); Inc(Seq);
     EmitResponsesEvent(Streamer, 'response.output_item.done',
-      ItemDoneEvent(ItemJSON));
+      ItemDoneEvent(Seq, ItemJSON)); Inc(Seq);
     EmitResponsesEvent(Streamer, 'response.completed',
-      Format('{"type":"response.completed","response":%s}', [CompletedJSON]));
+      CompletedEvent(Seq, CompletedJSON));
     Streamer.CloseStream;
   finally
     Streamer.Free;
