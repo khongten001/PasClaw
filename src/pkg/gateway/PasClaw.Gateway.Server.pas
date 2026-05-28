@@ -55,7 +55,9 @@ type
     procedure HandleChat(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     procedure HandleChatCompletions(AContext: TIdContext;
                                     ARequest: TIdHTTPRequestInfo;
-                                    AResp: TIdHTTPResponseInfo);
+                                    AResp: TIdHTTPResponseInfo;
+                                    out AWasStreamingRequest: Boolean;
+                                    out AResponseStarted: Boolean);
     procedure HandleModels(AResp: TIdHTTPResponseInfo);
     procedure WriteJSON(AResp: TIdHTTPResponseInfo; Code: Integer; const Body: string);
     procedure WriteSSE(AResp: TIdHTTPResponseInfo; const Body: string);
@@ -180,8 +182,12 @@ procedure TGatewayServer.OnCommandGet(AContext: TIdContext;
                                      AResponse: TIdHTTPResponseInfo);
 var
   Doc: string;
+  IsChatCompletionsStream: Boolean;
+  ResponseStarted: Boolean;
 begin
   Doc := ARequest.Document;
+  IsChatCompletionsStream := False;
+  ResponseStarted := False;
   LogDebug('gateway: %s %s', [ARequest.Command, Doc]);
 
   try
@@ -190,7 +196,8 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/status')  then HandleStatus(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/tools')   then HandleTools(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/chat')    then HandleChat(ARequest, AResponse)
-    else if (ARequest.Command = 'POST') and (Doc = '/v1/chat/completions') then HandleChatCompletions(AContext, ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/chat/completions') then
+      HandleChatCompletions(AContext, ARequest, AResponse, IsChatCompletionsStream, ResponseStarted)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/models')  then HandleModels(AResponse)
     else if Doc = '/' then
     begin
@@ -212,7 +219,20 @@ begin
     on E: Exception do
     begin
       LogError('gateway: handler crashed: %s', [E.Message]);
-      if not AResponse.HeaderHasBeenWritten then
+      if IsChatCompletionsStream and (ResponseStarted or AResponse.HeaderHasBeenWritten) then
+      begin
+        LogWarn('gateway: streaming response already started; closing connection');
+        if (AContext <> nil) and (AContext.Connection <> nil) then
+        begin
+          try
+            AContext.Connection.Disconnect;
+          except
+            on EDisconnect: Exception do
+              LogWarn('gateway: failed to close streaming connection: %s', [EDisconnect.Message]);
+          end;
+        end;
+      end
+      else if not AResponse.HeaderHasBeenWritten then
         WriteJSON(AResponse, 500, '{"error":"internal","message":"' + E.Message + '"}')
       else if (AContext <> nil) and (AContext.Connection <> nil) then
         AContext.Connection.Disconnect;
@@ -653,7 +673,9 @@ end;
 
 procedure TGatewayServer.HandleChatCompletions(AContext: TIdContext;
                                                 ARequest: TIdHTTPRequestInfo;
-                                                AResp: TIdHTTPResponseInfo);
+                                                AResp: TIdHTTPResponseInfo;
+                                                out AWasStreamingRequest: Boolean;
+                                                out AResponseStarted: Boolean);
 (* OpenAI Chat Completions API. Accepts the standard request shape
    (model, messages array of role/content objects, optional temperature,
    max_tokens, stream, tools) and routes through the existing tool loop.
@@ -690,6 +712,8 @@ begin
   Streamer := nil;
   StreamStarted := False;
   StreamClosed := False;
+  AWasStreamingRequest := False;
+  AResponseStarted := False;
   Body := '';
   if ARequest.PostStream <> nil then
   begin
@@ -726,6 +750,7 @@ begin
   try
     ReqModel    := Req.GetStr('model', FCfg.DefaultModel);
     WantsStream := Req.GetBool('stream', False);
+    AWasStreamingRequest := WantsStream;
     if FDebugIO then
       LogDebug('chat/completions: model=%s stream=%s temperature=%g max_tokens=%d',
                [ReqModel, BoolToStr(WantsStream, True),
@@ -820,6 +845,7 @@ begin
         writes (and would double-chunk ours). }
       AResp.WriteHeader;
       StreamStarted := True;
+      AResponseStarted := True;
       { Drain every nested write buffer so headers AND subsequent body
         writes go straight to the socket. TIdHTTPServer opens a
         connection-level buffer per request to compute Content-Length;
