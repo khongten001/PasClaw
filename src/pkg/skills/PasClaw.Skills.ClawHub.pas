@@ -68,8 +68,10 @@ implementation
 
 uses
   SysUtils, Classes, DateUtils,
+  {$IFDEF FPC}{$IFDEF UNIX} BaseUnix, {$ENDIF}{$ENDIF}
   {$IFNDEF FPC}
   System.IOUtils,
+  {$IFDEF POSIX} Posix.SysStat, {$ENDIF}
   {$ENDIF}
   PasClaw.Utils,
   PasClaw.Logger,
@@ -296,6 +298,38 @@ begin
   end;
 end;
 
+procedure ChmodPlusXScriptsTree(const SkillDir: string);
+{ Same shape as PasClaw.Skills.GitHub.ChmodPlusXScriptsTree — sets
+  the executable bit on every file under <SkillDir>/scripts/ on
+  POSIX hosts so a freshly ClawHub-installed script does not fail
+  with "permission denied" the first time the model invokes it
+  through shell_exec. CopyTree uses TFileStream (preserves bytes
+  but not permissions). No-op on Windows. }
+var
+  ScriptsDir: string;
+  SR: TSearchRec;
+  Path: string;
+begin
+  ScriptsDir := JoinPath(SkillDir, 'scripts');
+  if not DirectoryExists(ScriptsDir) then Exit;
+  if FindFirst(JoinPath(ScriptsDir, '*'), faAnyFile, SR) <> 0 then Exit;
+  try
+    repeat
+      if (SR.Attr and faDirectory) <> 0 then Continue;
+      if (SR.Name = '.') or (SR.Name = '..') then Continue;
+      Path := JoinPath(ScriptsDir, SR.Name);
+      {$IFDEF FPC}{$IFDEF UNIX}
+      try FpChmod(Path, &755); except end;
+      {$ENDIF}{$ENDIF}
+      {$IFNDEF FPC}{$IFDEF POSIX}
+      try Posix.SysStat.chmod(PAnsiChar(AnsiString(Path)), $1ED); except end;
+      {$ENDIF}{$ENDIF}
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+end;
+
 procedure CopyTree(const SrcDir, DstDir: string);
 
   procedure CopyOne(const From_, To_: string);
@@ -476,6 +510,7 @@ begin
     end;
 
     CopyTree(SrcDir, DstDir);
+    ChmodPlusXScriptsTree(DstDir);
     LogInfo('clawhub: installed %s (v=%s) at %s',
             [Slug, EffectiveVersion, DstDir]);
     Result := True;

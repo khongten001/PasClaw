@@ -52,7 +52,12 @@ procedural knowledge, with optional `scripts/`, `references/`, and
   (sandbox-aware: workspace-pinned, denylist-checked). The model sees
   each script's absolute path in the system prompt's SKILLS section
   and decides when to run it. `scripts/greet.sh` next to this file
-  demonstrates the layout.
+  demonstrates the layout. On POSIX the installer chmods every file
+  under `scripts/` to mode `755` so they run directly; on Windows
+  cmd.exe cannot execute `.sh` files natively, so the system prompt
+  prepends `bash ` to `.sh` paths (resolves through git-bash / WSL /
+  MSYS if any is on `PATH`) and `powershell -ExecutionPolicy Bypass
+  -File ` to `.ps1` paths.
 
 - `references/` — markdown documentation the model loads on demand via
   `fs_read`. Use this for project-specific conventions, domain knowledge,

@@ -67,8 +67,10 @@ implementation
 
 uses
   SysUtils, Classes, DateUtils, StrUtils,
+  {$IFDEF FPC}{$IFDEF UNIX} BaseUnix, {$ENDIF}{$ENDIF}
   {$IFNDEF FPC}
   System.IOUtils,
+  {$IFDEF POSIX} Posix.SysStat, {$ENDIF}
   {$ENDIF}
   PasClaw.Utils,
   PasClaw.Logger,
@@ -250,6 +252,42 @@ begin
       if (SR.Name = '.') or (SR.Name = '..') then Continue;
       Result := JoinPath(ExtractDir, SR.Name);
       Exit;
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+end;
+
+procedure ChmodPlusXScriptsTree(const SkillDir: string);
+{ Walks <SkillDir>/scripts/ and sets the executable bit on each file
+  on POSIX hosts. CopyTree uses TFileStream which preserves bytes
+  but not permissions, so a freshly installed bash script would
+  otherwise fail with "permission denied" when shell_exec invokes
+  it at the path advertised in the system prompt — even if the
+  source repo committed mode 100755.
+
+  Best-effort: ignores chmod errors (rare; the file was just
+  created so we own it). No-op on Windows where NTFS has no
+  execute bit. }
+var
+  ScriptsDir: string;
+  SR: TSearchRec;
+  Path: string;
+begin
+  ScriptsDir := JoinPath(SkillDir, 'scripts');
+  if not DirectoryExists(ScriptsDir) then Exit;
+  if FindFirst(JoinPath(ScriptsDir, '*'), faAnyFile, SR) <> 0 then Exit;
+  try
+    repeat
+      if (SR.Attr and faDirectory) <> 0 then Continue;
+      if (SR.Name = '.') or (SR.Name = '..') then Continue;
+      Path := JoinPath(ScriptsDir, SR.Name);
+      {$IFDEF FPC}{$IFDEF UNIX}
+      try FpChmod(Path, &755); except end;
+      {$ENDIF}{$ENDIF}
+      {$IFNDEF FPC}{$IFDEF POSIX}
+      try Posix.SysStat.chmod(PAnsiChar(AnsiString(Path)), $1ED); except end;
+      {$ENDIF}{$ENDIF}
     until FindNext(SR) <> 0;
   finally
     FindClose(SR);
@@ -446,6 +484,7 @@ begin
     end;
 
     CopyTree(SrcDir, DstDir);
+    ChmodPlusXScriptsTree(DstDir);
     LogInfo('skills.github: installed %s/%s%s@%s as %s',
             [T.Owner, T.Repo,
              IfThen(T.SubPath = '', '', '/' + T.SubPath),
