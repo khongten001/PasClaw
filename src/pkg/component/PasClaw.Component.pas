@@ -35,7 +35,7 @@ unit PasClaw.Component;
 interface
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, SyncObjs,
   PasClaw.Config,
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
@@ -119,6 +119,7 @@ type
     FOnStarted:      TNotifyEvent;
     FOnStopped:      TNotifyEvent;
     FOnError:        TPasClawErrorEvent;
+    FLastError:      string;
     procedure RaiseError(const Msg: string);
   public
     constructor Create(AOwner: TComponent); override;
@@ -127,6 +128,7 @@ type
     procedure Stop;
     function  IsRunning: Boolean;
     property Server: TGatewayServer read FServer;
+    property LastError: string read FLastError;
   published
     property BindAddr:       string  read FBindAddr       write FBindAddr;
     property Port:           Integer read FPort           write FPort           default 8088;
@@ -325,10 +327,17 @@ type
     FAddr:   string;
     FPort:   Integer;
     FErr:    string;
+    FStartupDone: TEvent;
+    FStartupOK:   Boolean;
+    FStartupErr:  string;
   protected
     procedure Execute; override;
   public
     constructor Create(AServer: TGatewayServer; const AAddr: string; APort: Integer);
+    destructor Destroy; override;
+    function WaitForStartup(TimeoutMS: Cardinal): Boolean;
+    property StartupOK: Boolean read FStartupOK;
+    property StartupErr: string read FStartupErr;
     property Err: string read FErr;
   end;
 
@@ -339,15 +348,37 @@ begin
   FServer := AServer;
   FAddr   := AAddr;
   FPort   := APort;
+  FStartupDone := TEvent.Create(nil, True, False, '');
+  FStartupOK   := False;
+  FStartupErr  := '';
+end;
+
+destructor TServerWorker.Destroy;
+begin
+  FreeAndNil(FStartupDone);
+  inherited Destroy;
+end;
+
+function TServerWorker.WaitForStartup(TimeoutMS: Cardinal): Boolean;
+begin
+  Result := FStartupDone.WaitFor(TimeoutMS) = wrSignaled;
 end;
 
 procedure TServerWorker.Execute;
 begin
   try
     FServer.Start(FAddr, FPort);
+    FStartupOK := True;
+    FStartupDone.SetEvent;
     FServer.WaitForStop;
   except
-    on E: Exception do FErr := E.ClassName + ': ' + E.Message;
+    on E: Exception do
+    begin
+      FErr := E.ClassName + ': ' + E.Message;
+      FStartupErr := FErr;
+      FStartupOK := False;
+      FStartupDone.SetEvent;
+    end;
   end;
 end;
 
@@ -379,6 +410,9 @@ function TPasClawServer.Start: Boolean;
 var
   Skills: TSkillSpecArray;
   Err: string;
+  StartupMsg: string;
+const
+  STARTUP_TIMEOUT_MS = 5000;
 begin
   if IsRunning then Exit(True);
   { Defensive: if a prior Start failed mid-bind (or the thread exited on
@@ -418,8 +452,29 @@ begin
   FServer.DebugIO := FDebug;
   FServer.MaxIter := FMaxIter;
 
+  FLastError := '';
   FThread := TServerWorker.Create(FServer, FBindAddr, FPort);
   TServerWorker(FThread).Start;
+
+  if not TServerWorker(FThread).WaitForStartup(STARTUP_TIMEOUT_MS) then
+  begin
+    StartupMsg := Format('server startup timed out after %d ms', [STARTUP_TIMEOUT_MS]);
+    FLastError := StartupMsg;
+    RaiseError(StartupMsg);
+    Stop;
+    Exit(False);
+  end;
+
+  if not TServerWorker(FThread).StartupOK then
+  begin
+    StartupMsg := TServerWorker(FThread).StartupErr;
+    if StartupMsg = '' then StartupMsg := 'server startup failed';
+    FLastError := StartupMsg;
+    RaiseError(StartupMsg);
+    Stop;
+    Exit(False);
+  end;
+
   Result := True;
   if Assigned(FOnStarted) then FOnStarted(Self);
 end;
