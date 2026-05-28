@@ -336,9 +336,23 @@ begin
                   FuncCall := Part.ChildObject('functionCall');
                   if FuncCall <> nil then
                   try
-                    TC.Id        := FuncCall.GetStr('id', '');
                     TC.Kind      := 'function';
                     TC.Func.Name := FuncCall.GetStr('name', '');
+                    { Gemini's functionCall has name + args but no
+                      OpenAI-style id. The tool loop later records this
+                      id on the mrTool result, and BuildRequest above
+                      needs a non-empty id to resolve the call->name
+                      map for functionResponse — leaving Id empty
+                      makes the tool result go back with name: "" and
+                      the model can't associate it with the requested
+                      call. Synthesize a deterministic local id from
+                      the function name + the position of this call in
+                      the response. Collisions across turns are fine:
+                      same id always maps to the same name. }
+                    TC.Id        := FuncCall.GetStr('id', '');
+                    if Trim(TC.Id) = '' then
+                      TC.Id := Format('gemini_call_%s_%d',
+                                      [TC.Func.Name, Length(Resp.ToolCalls)]);
                     ArgsObj := FuncCall.ChildObject('args');
                     if ArgsObj <> nil then
                     try
