@@ -1,4 +1,4 @@
-{
+﻿{
   PasClaw.Config - build-time version constants, on-disk config struct,
   and helpers for resolving the PasClaw home directory.
   Mirrors pkg/config in picoclaw.
@@ -59,7 +59,7 @@ type
         listing extra paths the model may touch beyond Workspace.
         Picoclaw uses regex; we use globs to avoid pulling in a
         regex dependency and because globs cover the common cases
-        (/tmp/*, ~/.cache/agent/*, /usr/share/*).
+        (/tmp/*, ~/.cache/agent/*, /usr/share/* ).
 
       CustomShellDeny
         Substrings appended to the built-in shell denylist. Each
