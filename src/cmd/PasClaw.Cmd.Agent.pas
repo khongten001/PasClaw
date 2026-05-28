@@ -154,7 +154,7 @@ begin
   Result.Model         := Model;
   Result.MaxIterations := A.MaxIterations;
   Result.Options       := DefaultChatOptions;
-  Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt);
+  Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt, not A.NoTools);
   Result.Options.ThinkingLevel := A.Thinking;
   if A.MaxTokens > 0 then Result.Options.MaxTokens := A.MaxTokens;
   Result.OnText        := nil;
