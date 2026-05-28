@@ -156,7 +156,8 @@ var
   Skills: TSkillSpecArray;
   i: Integer;
   Lines: TStringList;
-  Desc: string;
+  Desc, K: string;
+  HasCallable, HasKnowledge: Boolean;
 begin
   Result := '';
   try
@@ -166,23 +167,49 @@ begin
   end;
   if Length(Skills) = 0 then Exit;
 
+  HasCallable  := False;
+  HasKnowledge := False;
+  for i := 0 to High(Skills) do
+  begin
+    K := LowerCase(Trim(Skills[i].Kind));
+    if (K = 'shell') or (K = 'prompt') then HasCallable := True
+    else HasKnowledge := True;
+  end;
+
   Lines := TStringList.Create;
   try
     Lines.Add('## Skills');
     Lines.Add('');
-    Lines.Add('The following skills are installed in your workspace. Each is exposed as a tool you can call by name.');
+    if HasCallable and HasKnowledge then
+      Lines.Add('Skills extend your capabilities. Callable skills register as `skill_<name>` tools you invoke directly; knowledge-only skills are markdown bodies — read each one''s SKILL.md with `fs_read` when the matching task comes up.')
+    else if HasCallable then
+      Lines.Add('The following skills register as `skill_<name>` tools you can call directly.')
+    else
+      Lines.Add('Knowledge-only skills are markdown bodies. Read each SKILL.md with `fs_read` for the procedural context the model needs.');
     Lines.Add('');
     for i := 0 to High(Skills) do
     begin
       Desc := Trim(Skills[i].Description);
-      { RegisterSkills in PasClaw.Skills.Loader registers the provider
-        tool as 'skill_' + Skills[i].Name (line 269). Advertising the
-        bare name here would tell the model to call a nonexistent tool.
-        The 'skill_' prefix is the actual callable identifier. }
-      if Desc = '' then
-        Lines.Add('- `skill_' + Skills[i].Name + '`')
+      K    := LowerCase(Trim(Skills[i].Kind));
+      if (K = 'shell') or (K = 'prompt') then
+      begin
+        { Callable skill — advertise as `skill_<name>`, which is the
+          actual registered tool identifier in PasClaw.Skills.Loader. }
+        if Desc = '' then
+          Lines.Add('- `skill_' + Skills[i].Name + '` (callable)')
+        else
+          Lines.Add('- `skill_' + Skills[i].Name + '` — ' + Desc + ' (callable)');
+      end
       else
-        Lines.Add('- `skill_' + Skills[i].Name + '` — ' + Desc);
+      begin
+        { Knowledge-only skill — surface the SKILL.md path so the model
+          can fs_read it on demand. Picoclaw and nanobot do the same: the
+          system prompt lists the catalog, the body loads lazily. }
+        if Desc = '' then
+          Lines.Add('- **' + Skills[i].Name + '**: read `' + Skills[i].Source + '`')
+        else
+          Lines.Add('- **' + Skills[i].Name + '** — ' + Desc + '. Read `' + Skills[i].Source + '` for the full instructions.');
+      end;
     end;
     Result := Lines.Text;
     { Strip trailing newline TStringList.Text adds, so the SectionSep

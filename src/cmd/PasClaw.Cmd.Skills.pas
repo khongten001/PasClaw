@@ -22,16 +22,28 @@ function DoList: Integer;
 var
   Specs: TSkillSpecArray;
   i: Integer;
+  K, Src: string;
 begin
   Specs := LoadSkillManifests(GetHome);
   if Length(Specs) = 0 then
   begin
     WriteLn('(no skills found at ', JoinPath(GetHome, 'workspace/skills'), ')');
+    WriteLn('Add one: mkdir -p ~/.pasclaw/workspace/skills/<name>; place a SKILL.md inside.');
     Exit(0);
   end;
-  WriteLn(Ansi.Bold, 'name', Ansi.Reset, '              kind   description');
+  WriteLn(Ansi.Bold, 'name', Ansi.Reset, '              kind        source');
   for i := 0 to High(Specs) do
-    WriteLn(Specs[i].Name:18, '  ', Specs[i].Kind:6, '  ', Specs[i].Description);
+  begin
+    K := Specs[i].Kind;
+    if K = '' then K := 'knowledge';
+    { Show relative path under ~/.pasclaw so the line stays readable. }
+    Src := Specs[i].Source;
+    if Pos(GetHome, Src) = 1 then
+      Src := '~' + Copy(Src, Length(GetHome) + 1, MaxInt);
+    WriteLn(Specs[i].Name:18, '  ', K:9, '  ', Src);
+    if Specs[i].Description <> '' then
+      WriteLn('                    ', Ansi.Dim, Specs[i].Description, Ansi.Reset);
+  end;
   Result := 0;
 end;
 
