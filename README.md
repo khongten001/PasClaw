@@ -8,69 +8,32 @@ The main program lives at `src/pasclaw/PasClaw.dpr`. It initializes terminal col
 
 - Free Pascal 3.2+ in Delphi mode, or Delphi/RAD Studio.
 - Indy (`TIdHTTP`, `TIdHTTPServer`) for HTTP clients, the gateway, and channel integrations.
-  - FPC builds vendor Indy with `make get-indy` into `vendor/Indy`.
+  - FPC builds vendor Indy into `vendor/Indy`.
   - Delphi/RAD Studio ships Indy, so no vendored Indy checkout is required.
-- On Debian/Ubuntu FPC systems, install `fp-units-misc` so the `iconvenc` units are available.
 
 ## Build
 
-The repository `Makefile` is the authoritative FPC build entry point.
-
-```sh
-sudo apt install fpc fp-units-misc
-make get-indy
-make
-```
-
-`make` compiles the embedded web UI resource first and then builds `src/pasclaw/PasClaw.dpr` into `build/pasclaw`:
-
-```sh
-make webui-res       # compiles src/pkg/gateway/webui.rc + webui.html to webui.res
-make                 # builds build/pasclaw
-make run             # builds and runs build/pasclaw
-make smoke           # quick top-level command smoke test
-make test-hashline   # hashline patch test binary
-make test            # smoke + test-hashline
-make clean           # removes build/
-make print-version   # prints the version Make will inject
-```
-
-The Makefile injects `PASCLAW_VERSION` from `git describe --tags --always` when building with FPC. You can override key variables when needed:
-
-```sh
-make FPC=/path/to/fpc BUILDDIR=out BIN=out/pasclaw
-make INDY_DIR=/path/to/Indy
-make ICONVENC_DIR=/path/to/fpc/units/iconvenc
-```
-
 ### Delphi / RAD Studio
 
-Open `src/pasclaw/PasClaw.dpr` in RAD Studio and add the source directories from `Makefile`'s `UNIT_DIRS` to the project search path:
+Open `src/pasclaw/PasClaw.dproj` in Delphi/RAD Studio and build the project. The checked-in Delphi project already contains the project search paths.
 
-- `src/pkg/cliui`
-- `src/pkg/utils`
-- `src/pkg/logger`
-- `src/pkg/config`
-- `src/pkg/json`
-- `src/pkg/providers`
-- `src/pkg/tokenizer`
-- `src/pkg/tools`
-- `src/pkg/mcp`
-- `src/pkg/gateway`
-- `src/pkg/channels`
-- `src/pkg/cron`
-- `src/pkg/skills`
-- `src/pkg/agent`
-- `src/pkg/memory`
-- `src/pkg/updater`
-- `src/pkg/membench`
-- `src/pkg/tui`
-- `src/pkg/platform`
-- `src/pkg/hashline`
-- `src/pkg/component`
-- `src/cmd`
+On Windows, you can optionally build from a RAD Studio command prompt with:
 
-For the embedded web UI, compile `src/pkg/gateway/webui.rc` to `src/pkg/gateway/webui.res` with the Delphi resource compiler (`brcc32` or equivalent) before building. The unit `PasClaw.Gateway.WebUI` links `webui.res` with `{$R webui.res}`.
+```bat
+build-delphi.bat
+```
+
+The batch file uses MSBuild with the existing Delphi project when available, and falls back to the installed Delphi command-line compiler.
+
+### Free Pascal
+
+See [`fpc.md`](fpc.md) for detailed FPC prerequisites, Indy vendoring, resource generation, Makefile targets, and variable overrides.
+
+On Windows, you can optionally build with:
+
+```bat
+build-fpc.bat
+```
 
 ## Configuration
 
