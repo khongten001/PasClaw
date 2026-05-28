@@ -36,6 +36,7 @@ UNIT_DIRS = \
 	src/pkg/tui \
 	src/pkg/platform \
 	src/pkg/hashline \
+	src/pkg/component \
 	src/cmd
 
 # Indy unit + include dirs (only used when building under FPC).
