@@ -1121,6 +1121,292 @@ begin
   Result.PutObject('usage', UsageObj);
 end;
 
+function EmitResponsesEvent(Streamer: TSSEStreamer;
+                            const EventType, Payload: string): Boolean;
+{ Writes one Responses-API SSE event to the wire:
+
+    event: <event_type>\n
+    data: <json>\n
+    \n
+
+  Returns False if the streamer's underlying connection is already
+  closed — callers can short-circuit further emission when the
+  client disconnected mid-stream. }
+var
+  Frame: string;
+begin
+  Result := False;
+  if (Streamer = nil) or Streamer.Closed then Exit;
+  Frame := 'event: ' + EventType + #10 +
+           'data: '  + Payload    + #10 + #10;
+  Streamer.WriteRaw(Frame);
+  Result := True;
+end;
+
+procedure EmitResponsesStream(AContext: TIdContext;
+                              AResp: TIdHTTPResponseInfo;
+                              var AResponseStarted: Boolean;
+                              const RespId, Model, Content: string;
+                              Usage: TUsageInfo;
+                              DebugIO: Boolean);
+(* Phase A streaming for /v1/responses: the tool loop has already
+   finished server-side and produced its final text. Emit the
+   Responses-API SSE event sequence so a client that opened the
+   request with stream:true (Codex CLI, openai-python streaming
+   call, etc.) receives a parseable event stream rather than a 400
+   error.
+
+   The event order matches what the official OpenAI SDK's streaming
+   parser expects:
+
+     event: response.created            { status: in_progress, empty output }
+     event: response.in_progress
+     event: response.output_item.added  { empty message item }
+     event: response.content_part.added { empty output_text part }
+     event: response.output_text.delta  { the full text as one delta }
+     event: response.output_text.done
+     event: response.content_part.done
+     event: response.output_item.done
+     event: response.completed          { status: completed, full output }
+
+   Single text delta is the trade-off for PR scope — the tool loop is
+   synchronous so we can't stream true partials without rewiring the
+   provider layer. The SDK accepts a single big delta just fine; the
+   user-visible difference is first-byte time matching last-byte time
+   instead of incremental display. A follow-up PR (true streaming)
+   will hook the provider's OnText callback to emit deltas as the
+   model produces them.
+
+   Tools are NOT passed back as output items in this PR. Codex sends
+   tool definitions and expects to execute them client-side via
+   function_call output items in the stream; PasClaw still runs its
+   internal tool loop here, so the model's calls get executed
+   server-side and only the final text reaches the client. That's
+   intentional for PR scope — fixing the SSE event shape so the
+   client stops crashing — and will be lifted in the tool-passthrough
+   PR. *)
+var
+  Streamer: TSSEStreamer;
+  CreatedObj, CompletedObj, ItemObj, PartObj, MsgItemObj: TJsonObject;
+  CreatedJSON, CompletedJSON: string;
+  ItemJSON, EmptyItemJSON, PartJSON, EmptyPartJSON: string;
+  MsgItemId: string;
+  EmptyUsage: TUsageInfo;
+  ContentArr: TJsonArray;
+  Seq: Integer;
+
+  { Every Responses streaming event the openai-python validators
+    accept carries a monotonically-increasing `sequence_number`.
+    `response.output_text.delta` / `.done` additionally require an
+    empty `logprobs: []` when no logprob data is available. Omitting
+    either makes the SDK raise ValidationError on the first event
+    that lands — exactly the "client chokes on the response" symptom
+    we set out to fix. Helpers below take Seq as the first arg so
+    the call site bumps a single local counter on every emit. }
+
+  function CreatedEvent(SeqNum: Integer; const ResponseJSON: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.created","sequence_number":%d,"response":%s}',
+      [SeqNum, ResponseJSON]);
+  end;
+
+  function InProgressEvent(SeqNum: Integer; const ResponseJSON: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.in_progress","sequence_number":%d,"response":%s}',
+      [SeqNum, ResponseJSON]);
+  end;
+
+  function CompletedEvent(SeqNum: Integer; const ResponseJSON: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.completed","sequence_number":%d,"response":%s}',
+      [SeqNum, ResponseJSON]);
+  end;
+
+  function ItemAddedEvent(SeqNum: Integer; const ItemInProgressJSON: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.output_item.added","sequence_number":%d,' +
+      '"output_index":0,"item":%s}',
+      [SeqNum, ItemInProgressJSON]);
+  end;
+
+  function ContentPartAddedEvent(SeqNum: Integer; const PartJSON_: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.content_part.added","sequence_number":%d,' +
+      '"item_id":%s,"output_index":0,"content_index":0,"part":%s}',
+      [SeqNum, '"' + JsonEscape(MsgItemId) + '"', PartJSON_]);
+  end;
+
+  function TextDeltaEvent(SeqNum: Integer; const Delta: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.output_text.delta","sequence_number":%d,' +
+      '"item_id":%s,"output_index":0,"content_index":0,' +
+      '"delta":%s,"logprobs":[]}',
+      [SeqNum,
+       '"' + JsonEscape(MsgItemId) + '"',
+       '"' + JsonEscape(Delta) + '"']);
+  end;
+
+  function TextDoneEvent(SeqNum: Integer; const Text: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.output_text.done","sequence_number":%d,' +
+      '"item_id":%s,"output_index":0,"content_index":0,' +
+      '"text":%s,"logprobs":[]}',
+      [SeqNum,
+       '"' + JsonEscape(MsgItemId) + '"',
+       '"' + JsonEscape(Text) + '"']);
+  end;
+
+  function ContentPartDoneEvent(SeqNum: Integer; const PartJSON_: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.content_part.done","sequence_number":%d,' +
+      '"item_id":%s,"output_index":0,"content_index":0,"part":%s}',
+      [SeqNum, '"' + JsonEscape(MsgItemId) + '"', PartJSON_]);
+  end;
+
+  function ItemDoneEvent(SeqNum: Integer; const ItemFinalJSON: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.output_item.done","sequence_number":%d,' +
+      '"output_index":0,"item":%s}',
+      [SeqNum, ItemFinalJSON]);
+  end;
+
+begin
+  MsgItemId := 'msg_' + Copy(RespId, 6, MaxInt);
+
+  { Streaming-friendly response.created: in_progress + empty output +
+    zero usage. Pydantic accepts these because the required fields are
+    present (we set parallel_tool_calls / tool_choice / tools / output
+    inside BuildResponsesObject). }
+  EmptyUsage.InputTokens  := 0;
+  EmptyUsage.OutputTokens := 0;
+
+  CreatedObj := BuildResponsesObject(RespId, Model, 'in_progress', '', EmptyUsage);
+  try
+    CreatedJSON := CreatedObj.ToJSON;
+  finally
+    CreatedObj.Free;
+  end;
+
+  { Pre-build the message item shapes for added / done events. The
+    "added" shape carries an empty content array; "done" carries the
+    full output_text part. }
+
+  MsgItemObj := TJsonObject.Create;
+  MsgItemObj.PutStr('id',     MsgItemId);
+  MsgItemObj.PutStr('type',   'message');
+  MsgItemObj.PutStr('status', 'in_progress');
+  MsgItemObj.PutStr('role',   'assistant');
+  ContentArr := TJsonArray.Create;
+  MsgItemObj.PutArray('content', ContentArr);
+  try
+    EmptyItemJSON := MsgItemObj.ToJSON;
+  finally
+    MsgItemObj.Free;
+  end;
+
+  PartObj := TJsonObject.Create;
+  PartObj.PutStr('type', 'output_text');
+  PartObj.PutStr('text', '');
+  ContentArr := TJsonArray.Create;
+  PartObj.PutArray('annotations', ContentArr);
+  try
+    EmptyPartJSON := PartObj.ToJSON;
+  finally
+    PartObj.Free;
+  end;
+
+  PartObj := TJsonObject.Create;
+  PartObj.PutStr('type', 'output_text');
+  PartObj.PutStr('text', Content);
+  ContentArr := TJsonArray.Create;
+  PartObj.PutArray('annotations', ContentArr);
+  try
+    PartJSON := PartObj.ToJSON;
+  finally
+    PartObj.Free;
+  end;
+
+  ItemObj := TJsonObject.Create;
+  ItemObj.PutStr('id',     MsgItemId);
+  ItemObj.PutStr('type',   'message');
+  ItemObj.PutStr('status', 'completed');
+  ItemObj.PutStr('role',   'assistant');
+  ContentArr := TJsonArray.Create;
+  ContentArr.AddRaw(PartJSON);
+  ItemObj.PutArray('content', ContentArr);
+  try
+    ItemJSON := ItemObj.ToJSON;
+  finally
+    ItemObj.Free;
+  end;
+
+  CompletedObj := BuildResponsesObject(RespId, Model, 'completed', Content, Usage);
+  try
+    CompletedJSON := CompletedObj.ToJSON;
+  finally
+    CompletedObj.Free;
+  end;
+
+  { Headers: same shape as the chat-completions SSE setup. Suppress
+    Indy's auto Content-Length, force chunked, and drain all nested
+    buffers so subsequent writes hit the socket immediately. }
+  AResp.ResponseNo  := 200;
+  AResp.ContentType := 'text/event-stream; charset=utf-8';
+  AResp.CharSet     := 'utf-8';
+  AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
+  AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
+  AResp.CustomHeaders.AddValue('Transfer-Encoding', 'chunked');
+  AResp.ContentLength := -1;
+  AResp.WriteHeader;
+  AResponseStarted := True;
+  while AContext.Connection.IOHandler.WriteBufferingActive do
+    AContext.Connection.IOHandler.WriteBufferClose;
+
+  Streamer := TSSEStreamer.Create(AContext, RespId, Model, DebugIO);
+  try
+    if DebugIO then LogDebug('responses sse: %d bytes content, item_id=%s',
+                              [Length(Content), MsgItemId]);
+    { OpenAI's Responses streaming events start sequence_number at 0
+      and increase by 1 per event. The validators reject gaps and
+      duplicates. Each emit bumps Seq and the helper for that event
+      type embeds the value in its JSON payload. }
+    Seq := 0;
+    EmitResponsesEvent(Streamer, 'response.created',
+      CreatedEvent(Seq, CreatedJSON)); Inc(Seq);
+    EmitResponsesEvent(Streamer, 'response.in_progress',
+      InProgressEvent(Seq, CreatedJSON)); Inc(Seq);
+    EmitResponsesEvent(Streamer, 'response.output_item.added',
+      ItemAddedEvent(Seq, EmptyItemJSON)); Inc(Seq);
+    EmitResponsesEvent(Streamer, 'response.content_part.added',
+      ContentPartAddedEvent(Seq, EmptyPartJSON)); Inc(Seq);
+    if Content <> '' then
+    begin
+      EmitResponsesEvent(Streamer, 'response.output_text.delta',
+        TextDeltaEvent(Seq, Content)); Inc(Seq);
+      EmitResponsesEvent(Streamer, 'response.output_text.done',
+        TextDoneEvent(Seq, Content)); Inc(Seq);
+    end;
+    EmitResponsesEvent(Streamer, 'response.content_part.done',
+      ContentPartDoneEvent(Seq, PartJSON)); Inc(Seq);
+    EmitResponsesEvent(Streamer, 'response.output_item.done',
+      ItemDoneEvent(Seq, ItemJSON)); Inc(Seq);
+    EmitResponsesEvent(Streamer, 'response.completed',
+      CompletedEvent(Seq, CompletedJSON));
+    Streamer.CloseStream;
+  finally
+    Streamer.Free;
+  end;
+end;
+
 procedure TGatewayServer.HandleResponses(AContext: TIdContext;
                                           ARequest: TIdHTTPRequestInfo;
                                           AResp: TIdHTTPResponseInfo;
@@ -1269,12 +1555,9 @@ begin
     WantsStream := Req.GetBool('stream', False);
     AWasStreamingRequest := WantsStream;
 
-    if WantsStream then
-    begin
-      WriteJSON(AResp, 400,
-        '{"error":{"message":"Responses streaming is not yet supported; use stream:false or /v1/chat/completions for SSE.","type":"invalid_request_error","param":"stream","code":"unsupported_streaming"}}');
-      Exit;
-    end;
+    { Streaming flag is honored further down. Header-write happens
+      after RunToolLoop completes so a failed loop can still emit a
+      proper 502 JSON response (no SSE headers committed yet). }
 
     InputArr := Req.ChildArray('input');
     if InputArr <> nil then
@@ -1377,13 +1660,20 @@ begin
               [FinishReason, Loop.Iterations]);
     end;
 
-    ReplyObj := BuildResponsesObject(RespId, ReqModel, 'completed', Loop.Content,
-                                      Loop.LastResp.Usage);
-    try
-      if FDebugIO then LogDebug('responses -> 200 JSON: %s', [ReplyObj.ToJSON]);
-      WriteJSON(AResp, 200, ReplyObj.ToJSON);
-    finally
-      ReplyObj.Free;
+    if WantsStream then
+      EmitResponsesStream(AContext, AResp, AResponseStarted,
+                          RespId, ReqModel, Loop.Content,
+                          Loop.LastResp.Usage, FDebugIO)
+    else
+    begin
+      ReplyObj := BuildResponsesObject(RespId, ReqModel, 'completed', Loop.Content,
+                                        Loop.LastResp.Usage);
+      try
+        if FDebugIO then LogDebug('responses -> 200 JSON: %s', [ReplyObj.ToJSON]);
+        WriteJSON(AResp, 200, ReplyObj.ToJSON);
+      finally
+        ReplyObj.Free;
+      end;
     end;
   finally
     Req.Free;
