@@ -153,6 +153,7 @@ uses
   PasClaw.Providers.Factory,
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
+  PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
   PasClaw.Tools.ToolLoop;
@@ -194,7 +195,14 @@ end;
 
 procedure TPasClawAgent.EnsureConfig;
 begin
-  if FConfig = nil then FConfig := LoadConfig;
+  if FConfig = nil then
+  begin
+    FConfig := LoadConfig;
+    { Apply the sandbox policy to the shared module-level state.
+      The component sits next to the CLI in one process so this is
+      the same global state Cmd.Agent / Cmd.Serve seed at startup. }
+    ConfigureSandbox(FConfig.Sandbox, '');
+  end;
 end;
 
 procedure TPasClawAgent.EnsureProvider;
@@ -292,7 +300,15 @@ begin
   Cfg.Model         := ModelName;
   Cfg.MaxIterations := FMaxIterations;
   Cfg.Options       := DefaultChatOptions;
-  Cfg.Options.SystemPrompt := BuildSystemPrompt(FConfig, FSystemPrompt);
+  { Derive ToolsEnabled from the registry we are about to hand to
+    RunToolLoop, NOT from FUseTools. EnsureRegistry caches FRegistry
+    across calls and only checks FUseTools when the registry is
+    nil — so a component used with UseTools=True, then flipped to
+    UseTools=False, would otherwise send the model a "No tools in
+    this session" prompt while RunToolLoop still received the cached
+    registry. The single source of truth is Cfg.Registry. }
+  Cfg.Options.SystemPrompt := BuildSystemPrompt(FConfig, FSystemPrompt,
+                                                Cfg.Registry <> nil);
   Cfg.OnText        := ForwardText;
   Cfg.OnToolCall    := ForwardToolCall;
   Cfg.OnToolResult  := ForwardToolResult;
@@ -422,6 +438,7 @@ begin
   if (FThread <> nil) or (FServer <> nil) then Stop;
 
   FConfig := LoadConfig;
+  ConfigureSandbox(FConfig.Sandbox, '');
   if FModel <> '' then
     FConfig.DefaultModel := FModel;
 

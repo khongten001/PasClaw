@@ -81,8 +81,15 @@ type
   end;
 
 (* Run a shell command; capture combined stdout+stderr (UTF-8) up to
-   OneShotMaxBytes. Returns the exit code; -1 on failure to spawn. *)
-function RunOneShot(const Cmd: string; out Output: string): Integer;
+   OneShotMaxBytes. Returns the exit code; -1 on failure to spawn.
+
+   WorkingDir is the directory the child process starts in. Pass an
+   empty string to inherit the parent's cwd (legacy behaviour); pass
+   an absolute path to bind the shell there — Tool_Shell uses this
+   to pin the shell to the sandbox workspace so a command can't
+   reference relative paths above the boundary. *)
+function RunOneShot   (const Cmd: string;                  out Output: string): Integer; overload;
+function RunOneShot   (const Cmd, WorkingDir: string;      out Output: string): Integer; overload;
 
 implementation
 
@@ -197,7 +204,7 @@ begin
     try TInternalProcess(FProcess).Terminate(0); except end;
 end;
 
-function RunOneShot(const Cmd: string; out Output: string): Integer;
+function RunOneShot(const Cmd, WorkingDir: string; out Output: string): Integer;
 var
   P: TInternalProcess;
   M: TMemoryStream;
@@ -216,6 +223,7 @@ begin
     P.Executable := '/bin/sh';
     P.Parameters.Add('-c'); P.Parameters.Add(Cmd);
     {$ENDIF}
+    if WorkingDir <> '' then P.CurrentDirectory := WorkingDir;
     P.Options := [poUsePipes, poStderrToOutPut];
     try P.Execute; except Exit; end;
     Total := 0;
@@ -387,7 +395,7 @@ begin
     TerminateProcess(FProcHandle, 0);
 end;
 
-function RunOneShot(const Cmd: string; out Output: string): Integer;
+function RunOneShot(const Cmd, WorkingDir: string; out Output: string): Integer;
 var
   P: TStdioProcess;
   Args: TStringList;
@@ -395,13 +403,30 @@ var
   Total, N: Integer;
   Acc: TMemoryStream;
   Bytes: TBytes;
+  PrevDir: string;
+  Restored: Boolean;
 begin
   Result := -1;
   Output := '';
   P := TStdioProcess.Create;
   Args := TStringList.Create;
   Acc := TMemoryStream.Create;
+  Restored := False;
+  PrevDir := '';
   try
+    { TStdioProcess.Spawn does not accept a working directory; cmd.exe
+      inherits cwd from the parent process. Bind the parent cwd just
+      across the Spawn call. PasClaw's gateway / CLI tool path runs
+      one shell_exec at a time per request, so the race window between
+      ChDir and the child reading cwd is negligible — but if future
+      concurrent shell_exec calls land, this should move into
+      TStdioProcess.Spawn as a real CreateProcessW lpCurrentDirectory
+      argument. }
+    if WorkingDir <> '' then
+    begin
+      PrevDir := GetCurrentDir;
+      try ChDir(WorkingDir); Restored := True; except end;
+    end;
     Args.Add('/C'); Args.Add(Cmd);
     if not P.Spawn('cmd.exe', Args) then Exit;
     Total := 0;
@@ -427,6 +452,8 @@ begin
       Output := TEncoding.UTF8.GetString(Bytes);
     end;
   finally
+    if Restored and (PrevDir <> '') then
+      try ChDir(PrevDir); except end;
     Acc.Free;
     Args.Free;
     P.Free;
@@ -580,7 +607,7 @@ begin
     kill(FPid, SIGTERM);
 end;
 
-function RunOneShot(const Cmd: string; out Output: string): Integer;
+function RunOneShot(const Cmd, WorkingDir: string; out Output: string): Integer;
 var
   P: TStdioProcess;
   Args: TStringList;
@@ -588,13 +615,22 @@ var
   Total, N, Status: Integer;
   Acc: TMemoryStream;
   Bytes: TBytes;
+  PrevDir: string;
+  Restored: Boolean;
 begin
   Result := -1;
   Output := '';
   P := TStdioProcess.Create;
   Args := TStringList.Create;
   Acc := TMemoryStream.Create;
+  PrevDir := '';
+  Restored := False;
   try
+    if WorkingDir <> '' then
+    begin
+      PrevDir := GetCurrentDir;
+      try ChDir(WorkingDir); Restored := True; except end;
+    end;
     Args.Add('-c'); Args.Add(Cmd);
     if not P.Spawn('/bin/sh', Args) then Exit;
     Total := 0;
@@ -619,6 +655,8 @@ begin
       Output := TEncoding.UTF8.GetString(Bytes);
     end;
   finally
+    if Restored and (PrevDir <> '') then
+      try ChDir(PrevDir); except end;
     Acc.Free;
     Args.Free;
     P.Free;
@@ -627,5 +665,10 @@ end;
 
 {$ENDIF}
 {$ENDIF}
+
+function RunOneShot(const Cmd: string; out Output: string): Integer;
+begin
+  Result := RunOneShot(Cmd, '', Output);
+end;
 
 end.

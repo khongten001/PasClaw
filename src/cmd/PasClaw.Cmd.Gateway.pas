@@ -26,6 +26,7 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
+  PasClaw.Tools.Sandbox,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Cron.Scheduler,
@@ -82,6 +83,7 @@ var
   Skills: TSkillSpecArray;
 begin
   Cfg := LoadConfig;
+  ConfigureSandbox(Cfg.Sandbox, '');
   try
     Args := ParseGw(Argv, Cfg);
 

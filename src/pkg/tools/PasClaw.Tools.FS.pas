@@ -1,7 +1,10 @@
 (*
   PasClaw.Tools.FS - built-in filesystem tools: fs_read, fs_write, fs_list,
-  fs_edit_hashline, fs_grep. Paths are not sandboxed by default; the gateway
-  will install a workspace-restricted variant in Phase 4.
+  fs_edit_hashline, fs_grep. Every path argument is fed through
+  PasClaw.Tools.Sandbox before the underlying file operation runs;
+  when sandbox.restrict_to_workspace is set in config.json, reads and
+  writes outside the workspace (modulo allow_read_paths /
+  allow_write_paths) are refused with a Reason the model sees.
 
   fs_read emits hashline-prefixed output by default — each file body is
   preceded by a ¶path#hash header and every line is prefixed with
@@ -33,7 +36,8 @@ uses
   Masks,
   PasClaw.JSON,
   PasClaw.Utils,
-  PasClaw.Hashline;
+  PasClaw.Hashline,
+  PasClaw.Tools.Sandbox;
 
 var
   GHashlineEnabled: Boolean = True;
@@ -108,13 +112,18 @@ end;
 
 function Tool_FSRead(const ArgsJSON: string; out ErrMsg: string): string;
 var
-  Path, Body: string;
+  Path, Body, Reason: string;
   Plain: Boolean;
 begin
   ErrMsg := '';
   if not ParseStringArg(ArgsJSON, 'path', Path) then
   begin
     ErrMsg := 'missing required argument: path';
+    Exit('');
+  end;
+  if not CanReadPath(Path, Reason) then
+  begin
+    ErrMsg := Reason;
     Exit('');
   end;
   if not FileExists(Path) then
@@ -139,7 +148,7 @@ end;
 
 function Tool_FSWrite(const ArgsJSON: string; out ErrMsg: string): string;
 var
-  Path, Content: string;
+  Path, Content, Reason: string;
   Lines: TStringList;
   Stripped: Boolean;
 begin
@@ -147,6 +156,11 @@ begin
   if not ParseStringArg(ArgsJSON, 'path', Path) then
   begin
     ErrMsg := 'missing required argument: path';
+    Exit('');
+  end;
+  if not CanWritePath(Path, Reason) then
+  begin
+    ErrMsg := Reason;
     Exit('');
   end;
   if not HasJSONKey(ArgsJSON, 'content') then
@@ -252,6 +266,11 @@ begin
       ErrMsg := Format('section %d (%s): header is missing %shash; re-read the file with fs_read and use the returned %spath%shash header',
                        [i + 1, Sections[i].Path,
                         HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_HASH_SEP]);
+      Exit('');
+    end;
+    if not CanWritePath(Sections[i].Path, ApplyErr) then
+    begin
+      ErrMsg := Format('section %d (%s): %s', [i + 1, Sections[i].Path, ApplyErr]);
       Exit('');
     end;
     if not FileExists(Sections[i].Path) then
@@ -401,6 +420,7 @@ begin
     ErrMsg := 'missing required argument: path';
     Exit('');
   end;
+  if not CanReadPath(Root, ErrMsg) then Exit('');
   if not ParseStringArg(ArgsJSON, 'pattern', Pattern) then
   begin
     ErrMsg := 'missing required argument: pattern';
@@ -447,6 +467,7 @@ begin
     ErrMsg := 'missing required argument: path';
     Exit('');
   end;
+  if not CanReadPath(Path, ErrMsg) then Exit('');
   if not DirectoryExists(Path) then
   begin
     ErrMsg := 'no such directory: ' + Path;

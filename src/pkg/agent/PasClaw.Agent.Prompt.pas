@@ -56,8 +56,19 @@ uses
   PasClaw.Providers.Types;
 
 { Returns the fully-composed system prompt. UserSys is appended verbatim
-  as the final section if non-empty. Pass '' if there's nothing extra. }
-function BuildSystemPrompt(Cfg: TConfig; const UserSys: string): string;
+  as the final section if non-empty. Pass '' if there's nothing extra.
+
+  ToolsEnabled controls whether tool-dependent sections (the skill
+  catalog, the "ALWAYS use tools" rule, the truncated-fs_write rule,
+  the verify-by-running-checks rule, the update-MEMORY.md rule) are
+  emitted. Callers running `--no-tools` (or constructing the component
+  with UseTools=False) MUST pass False here — otherwise the prompt
+  tells the model to call tools that the tool loop will refuse to
+  pass through, producing a confused conversation. Identity, workspace
+  paths, and memory contents stay in either mode since they are useful
+  as context even without tools available. }
+function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
+                           ToolsEnabled: Boolean = True): string;
 
 { True iff at least one message in the array is mrSystem. The gateway's
   /v1/chat/completions handler uses this to decide whether to inject the
@@ -164,10 +175,14 @@ begin
     for i := 0 to High(Skills) do
     begin
       Desc := Trim(Skills[i].Description);
+      { RegisterSkills in PasClaw.Skills.Loader registers the provider
+        tool as 'skill_' + Skills[i].Name (line 269). Advertising the
+        bare name here would tell the model to call a nonexistent tool.
+        The 'skill_' prefix is the actual callable identifier. }
       if Desc = '' then
-        Lines.Add('- `' + Skills[i].Name + '`')
+        Lines.Add('- `skill_' + Skills[i].Name + '`')
       else
-        Lines.Add('- `' + Skills[i].Name + '` — ' + Desc);
+        Lines.Add('- `skill_' + Skills[i].Name + '` — ' + Desc);
     end;
     Result := Lines.Text;
     { Strip trailing newline TStringList.Text adds, so the SectionSep
@@ -179,10 +194,30 @@ begin
   end;
 end;
 
-function BuildRulesSection: string;
+function BuildRulesSection(ToolsEnabled: Boolean): string;
 var
   MemPath: string;
 begin
+  if not ToolsEnabled then
+  begin
+    { No-tools mode: the model cannot call fs_write, fs_edit_hashline,
+      skills, or anything else. Rules 1, 3, 4, and 5 all assume tool
+      access — emitting them would tell the model to do things the
+      tool loop is configured to refuse. Keep the precision rule
+      because it is purely advisory and language-agnostic. }
+    Result :=
+      '## Rules' + sLineBreak +
+      sLineBreak +
+      '1. **Be precise** — match the language''s native idioms, name things ' +
+      'clearly, do not introduce abstractions the task does not actually need. ' +
+      'Three similar lines is fine; a premature framework is not.' + sLineBreak +
+      sLineBreak +
+      '2. **No tools in this session** — the user invoked you in text-only ' +
+      'mode. Do not claim to read files, run commands, or modify state. ' +
+      'Answer from what is in this conversation.';
+    Exit;
+  end;
+
   MemPath := JoinPath(GetHome, 'workspace/memory/MEMORY.md');
   Result :=
     '## Rules' + sLineBreak +
@@ -217,14 +252,19 @@ begin
   Result := Acc + SectionSep + Section;
 end;
 
-function BuildSystemPrompt(Cfg: TConfig; const UserSys: string): string;
+function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
+                           ToolsEnabled: Boolean): string;
 begin
   Result := '';
   Result := AppendSection(Result, BuildIdentitySection);
   Result := AppendSection(Result, BuildWorkspaceSection);
   Result := AppendSection(Result, BuildMemorySection);
-  Result := AppendSection(Result, BuildSkillsSection);
-  Result := AppendSection(Result, BuildRulesSection);
+  { Skills are only callable when the tool registry was actually built.
+    --no-tools (and component UseTools=False) bypass RegisterSkills, so
+    advertising the catalog would be a lie. }
+  if ToolsEnabled then
+    Result := AppendSection(Result, BuildSkillsSection);
+  Result := AppendSection(Result, BuildRulesSection(ToolsEnabled));
   if Trim(UserSys) <> '' then
     Result := AppendSection(Result, Trim(UserSys));
 end;

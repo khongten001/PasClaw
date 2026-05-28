@@ -1,12 +1,16 @@
-{
-  PasClaw.Tools.Shell - shell_exec tool. Runs a command via /bin/sh -c (or
-  cmd.exe on Windows) and captures stdout+stderr.
+(*
+  PasClaw.Tools.Shell - shell_exec tool. Runs a command via /bin/sh -c
+  (or cmd.exe on Windows) and captures stdout+stderr.
 
-  Safety: a small denylist guards against the most catastrophic operations
-  (rm -rf, mkfs, dd if=, format). It is NOT a sandbox; users should still
-  audit prompts. The gateway in Phase 4 will install a workspace-restricted
-  variant for use in untrusted channels.
-}
+  Safety: PasClaw.Tools.Sandbox.ShellAllowed enforces a token + substring
+  denylist (sudo, rm, chmod, chown, kill family, mkfs, dd if=,
+  command substitution, package installs, device writes, etc.) and,
+  when sandbox.restrict_to_workspace is set, refuses commands that
+  reference absolute paths outside the workspace. Both checks are
+  configured from TConfig.Sandbox at command startup. This is the
+  Phase-4-promised "workspace-restricted variant" the original
+  comment kept pointing at.
+*)
 unit PasClaw.Tools.Shell;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -26,7 +30,8 @@ implementation
 uses
   PasClaw.JSON,
   PasClaw.Logger,
-  PasClaw.Platform;
+  PasClaw.Platform,
+  PasClaw.Tools.Sandbox;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -50,28 +55,9 @@ begin
   end;
 end;
 
-function IsDangerous(const Cmd: string): Boolean;
-var
-  L: string;
-begin
-  L := LowerCase(Cmd);
-  Result :=
-    (Pos('rm -rf /',  L) > 0) or
-    (Pos('rm -fr /',  L) > 0) or
-    (Pos('mkfs',      L) > 0) or
-    (Pos('dd if=',    L) > 0) or
-    (Pos(':(){:|',    L) > 0) or  { fork bomb }
-    (Pos('shutdown -h', L) > 0);
-end;
-
-function RunShell(const Cmd: string; out ExitCode: Integer): string;
-begin
-  ExitCode := RunOneShot(Cmd, Result);
-end;
-
 function Tool_Shell(const ArgsJSON: string; out ErrMsg: string): string;
 var
-  Cmd: string;
+  Cmd, Reason, WorkDir: string;
   ExitCode: Integer;
   Out_: string;
 begin
@@ -81,13 +67,24 @@ begin
     ErrMsg := 'missing required argument: command';
     Exit('');
   end;
-  if IsDangerous(Cmd) then
+  if not ShellAllowed(Cmd, Reason) then
   begin
-    ErrMsg := 'refused: command matches built-in denylist (rm -rf /, mkfs, dd if=, fork bomb, shutdown)';
+    ErrMsg := Reason;
     Exit('');
   end;
-  LogDebug('shell exec: %s', [Cmd]);
-  Out_ := RunShell(Cmd, ExitCode);
+  { Pin the shell's cwd to the workspace when restriction is on. Paired
+    with the cd / chdir / pushd / popd token denylist and the '..'
+    traversal check in ShellAllowed, this closes the relative-path
+    bypass: a sandboxed model has no way to read or write files
+    outside the workspace via shell_exec. When restriction is off,
+    WorkDir is empty and RunOneShot inherits the parent's cwd
+    (legacy behaviour, byte-identical to the previous release). }
+  if RestrictionActive then
+    WorkDir := CurrentWorkspace
+  else
+    WorkDir := '';
+  LogDebug('shell exec (cwd=%s): %s', [WorkDir, Cmd]);
+  ExitCode := RunOneShot(Cmd, WorkDir, Out_);
   Result := Format('exit=%d'#10'%s', [ExitCode, Out_]);
 end;
 

@@ -24,6 +24,7 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
+  PasClaw.Tools.Sandbox,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.TUI;
@@ -69,6 +70,7 @@ var
 begin
   if not ParseArgs(Argv, A) then Exit(1);
   Cfg := LoadConfig;
+  ConfigureSandbox(Cfg.Sandbox, '');
   try
     if A.Provider <> '' then Name := A.Provider else Name := Cfg.DefaultProvider;
     Provider := nil;

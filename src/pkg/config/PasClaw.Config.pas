@@ -38,6 +38,50 @@ type
     Port:     Integer;
   end;
 
+  (*  TSandboxPolicy - opt-in workspace + shell hardening.
+
+      RestrictToWorkspace
+        When True, fs_read / fs_write / fs_list / fs_edit_hashline /
+        fs_grep operations refuse paths outside Workspace, and the
+        shell tool refuses commands whose absolute-path references
+        leave Workspace. AllowReadOutsideWorkspace softens the read
+        side (handy for letting an agent pull dependencies from
+        /usr/include while still locking down writes).
+
+      Workspace
+        Absolute path of the directory the model may operate inside.
+        Empty string means "use the current working directory at the
+        time tools are configured" — handy for invoking
+        `pasclaw agent` from a project root.
+
+      AllowReadPaths / AllowWritePaths
+        Glob-style patterns (NOT full regex, just '*' and '?')
+        listing extra paths the model may touch beyond Workspace.
+        Picoclaw uses regex; we use globs to avoid pulling in a
+        regex dependency and because globs cover the common cases
+        (/tmp/*, ~/.cache/agent/*, /usr/share/*).
+
+      CustomShellDeny
+        Substrings appended to the built-in shell denylist. Each
+        match is checked case-insensitively against the command
+        string. Use this to block project-specific commands the
+        built-in list misses.
+
+      ShellDenyEnabled
+        Master switch for the shell denylist. Default True. Set
+        False only for trusted automation; doing so re-enables
+        `sudo`, `rm -rf`, `dd`, `mkfs`, command-substitution,
+        `curl | sh`, and every other pattern in the list.    *)
+  TSandboxPolicy = record
+    RestrictToWorkspace:       Boolean;
+    AllowReadOutsideWorkspace: Boolean;
+    Workspace:                 string;
+    AllowReadPaths:            array of string;
+    AllowWritePaths:           array of string;
+    CustomShellDeny:           array of string;
+    ShellDenyEnabled:          Boolean;
+  end;
+
   TProviderConfig = record
     Name:    string;   { e.g. "anthropic", "openai" }
     Kind:    string;   { provider type id }
@@ -73,6 +117,7 @@ type
     DefaultProvider: string;
     DefaultModel:    string;
     Gateway:    TGatewayConfig;
+    Sandbox:    TSandboxPolicy;
     Providers:  array of TProviderConfig;
     MCPServers: array of TMCPServer;
     Crons:      array of TCronEntry;
@@ -103,6 +148,16 @@ begin
   Gateway.LogLevel := 'info';
   Gateway.BindAddr := '127.0.0.1';
   Gateway.Port     := 8088;
+  { Sandbox defaults: workspace boundary OFF for backwards compat
+    (existing configs do not have a sandbox section), shell denylist
+    ON because it's a strict safety upgrade over the previous
+    six-substring check and no legitimate use ever passed it. Flip
+    RestrictToWorkspace to True in config.json to lock the FS tools
+    down to a chosen directory. }
+  Sandbox.RestrictToWorkspace       := False;
+  Sandbox.AllowReadOutsideWorkspace := False;
+  Sandbox.Workspace                 := '';
+  Sandbox.ShellDenyEnabled          := True;
 end;
 
 function ProviderToJSON(const P: TProviderConfig): TJsonObject;
@@ -159,6 +214,22 @@ begin
     Gw.PutStr ('bind_addr', Gateway.BindAddr);
     Gw.PutInt ('port',      Gateway.Port);
     Root.PutObject('gateway', Gw);
+
+    Tmp := TJsonObject.Create;
+    Tmp.PutBool('restrict_to_workspace',        Sandbox.RestrictToWorkspace);
+    Tmp.PutBool('allow_read_outside_workspace', Sandbox.AllowReadOutsideWorkspace);
+    Tmp.PutStr ('workspace',                    Sandbox.Workspace);
+    Tmp.PutBool('shell_deny_enabled',           Sandbox.ShellDenyEnabled);
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Sandbox.AllowReadPaths)  do Arr.AddStr(Sandbox.AllowReadPaths[i]);
+    Tmp.PutArray('allow_read_paths',  Arr);
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Sandbox.AllowWritePaths) do Arr.AddStr(Sandbox.AllowWritePaths[i]);
+    Tmp.PutArray('allow_write_paths', Arr);
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Sandbox.CustomShellDeny) do Arr.AddStr(Sandbox.CustomShellDeny[i]);
+    Tmp.PutArray('custom_shell_deny', Arr);
+    Root.PutObject('sandbox', Tmp);
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Providers) do
@@ -217,6 +288,41 @@ begin
       Gateway.LogLevel := Obj.GetStr('log_level', Gateway.LogLevel);
       Gateway.BindAddr := Obj.GetStr('bind_addr', Gateway.BindAddr);
       Gateway.Port     := Obj.GetInt('port',      Gateway.Port);
+    finally
+      Obj.Free;
+    end;
+
+    Obj := Root.ChildObject('sandbox');
+    if Obj <> nil then
+    try
+      Sandbox.RestrictToWorkspace       := Obj.GetBool('restrict_to_workspace',        Sandbox.RestrictToWorkspace);
+      Sandbox.AllowReadOutsideWorkspace := Obj.GetBool('allow_read_outside_workspace', Sandbox.AllowReadOutsideWorkspace);
+      Sandbox.Workspace                 := Obj.GetStr ('workspace',                    Sandbox.Workspace);
+      Sandbox.ShellDenyEnabled          := Obj.GetBool('shell_deny_enabled',           Sandbox.ShellDenyEnabled);
+      Arr := Obj.ChildArray('allow_read_paths');
+      if Arr <> nil then
+      try
+        SetLength(Sandbox.AllowReadPaths, Arr.Count);
+        for i := 0 to Arr.Count - 1 do Sandbox.AllowReadPaths[i] := Arr.ItemStr(i, '');
+      finally
+        Arr.Free;
+      end;
+      Arr := Obj.ChildArray('allow_write_paths');
+      if Arr <> nil then
+      try
+        SetLength(Sandbox.AllowWritePaths, Arr.Count);
+        for i := 0 to Arr.Count - 1 do Sandbox.AllowWritePaths[i] := Arr.ItemStr(i, '');
+      finally
+        Arr.Free;
+      end;
+      Arr := Obj.ChildArray('custom_shell_deny');
+      if Arr <> nil then
+      try
+        SetLength(Sandbox.CustomShellDeny, Arr.Count);
+        for i := 0 to Arr.Count - 1 do Sandbox.CustomShellDeny[i] := Arr.ItemStr(i, '');
+      finally
+        Arr.Free;
+      end;
     finally
       Obj.Free;
     end;

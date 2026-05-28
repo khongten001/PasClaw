@@ -359,7 +359,7 @@ begin
   LoopCfg.Model         := FCfg.DefaultModel;
   LoopCfg.MaxIterations := 8;
   LoopCfg.Options       := DefaultChatOptions;
-  LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '');
+  LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
   LoopCfg.OnText        := nil;
   LoopCfg.OnToolCall    := nil;
   LoopCfg.OnToolResult  := nil;
@@ -807,7 +807,7 @@ begin
       bare-bones clients that send only a user message get our identity
       preamble for free. }
     if not HasSystemMessage(Msgs) then
-      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '');
+      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
     { Temperature: only forward if the client actually set it (>0). Avoids
       the deprecated-field 400 from newer Claude models when the OpenAI
       client library defaults to 1.0. }
