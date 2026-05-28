@@ -152,6 +152,7 @@
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Types.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Intf.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.HTTP.pas"/>
+        <DCCReference Include="..\pkg\providers\PasClaw.Providers.Catalog.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Anthropic.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.OpenAI.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Factory.pas"/>
