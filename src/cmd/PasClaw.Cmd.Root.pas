@@ -10,6 +10,14 @@ unit PasClaw.Cmd.Root;
 
 interface
 
+{ Returns the exit code that would have been returned by the CLI for the
+  same `pasclaw Cmd Argv...` invocation. Pure dispatch — does not touch
+  ParamStr, the log level, or any global init — so embedding callers
+  (TPasClawAgent.Execute, tests) can use it without re-reading the host
+  process's command line. RunRootCommand below handles CLI-only concerns
+  (argv parsing, --no-color stripping, config-driven log level) then
+  forwards to DispatchCommand. }
+function DispatchCommand(const Cmd: string; const Argv: array of string): Integer;
 function RunRootCommand: Integer;
 
 implementation
@@ -116,10 +124,36 @@ begin
   Write(RenderCommandHelp(Use, Short, Long, Example, Sub, Fl));
 end;
 
+function DispatchCommand(const Cmd: string; const Argv: array of string): Integer;
+begin
+  if      Cmd = 'config'   then Result := Cmd_Config_Run(Argv)
+  else if Cmd = 'onboard'  then Result := Cmd_Onboard_Run(Argv)
+  else if Cmd = 'agent'    then Result := Cmd_Agent_Run(Argv)
+  else if Cmd = 'auth'     then Result := Cmd_Auth_Run(Argv)
+  else if Cmd = 'gateway'  then Result := Cmd_Gateway_Run(Argv)
+  else if Cmd = 'serve'    then Result := Cmd_Serve_Run(Argv)
+  else if Cmd = 'status'   then Result := Cmd_Status_Run(Argv)
+  else if Cmd = 'cron'     then Result := Cmd_Cron_Run(Argv)
+  else if Cmd = 'mcp'      then Result := Cmd_MCP_Run(Argv)
+  else if Cmd = 'migrate'  then Result := Cmd_Migrate_Run(Argv)
+  else if Cmd = 'skills'   then Result := Cmd_Skills_Run(Argv)
+  else if Cmd = 'model'    then Result := Cmd_Model_Run(Argv)
+  else if Cmd = 'post'     then Result := Cmd_Post_Run(Argv)
+  else if Cmd = 'membench' then Result := Cmd_Membench_Run(Argv)
+  else if Cmd = 'tui'      then Result := Cmd_TUI_Run(Argv)
+  else if Cmd = 'update'   then Result := Cmd_Update_Run(Argv)
+  else if Cmd = 'version'  then Result := Cmd_Version_Run(Argv)
+  else
+  begin
+    Write(ErrOutput, FormatCLIError('unknown command: ' + Cmd, 'pasclaw'));
+    Result := 1;
+  end;
+end;
+
 function RunRootCommand: Integer;
 var
   Args: TStringList;
-  Cmd, Last: string;
+  Cmd: string;
   ArgArr: TArray<string>;
   Cfg: TConfig;
 begin
@@ -144,30 +178,7 @@ begin
 
     Cmd := Args[0];
     ArgArr := ToArray(Args, 1);
-    Last := 'pasclaw ' + Cmd;
-
-    if      Cmd = 'config'   then Result := Cmd_Config_Run(ArgArr)
-    else if Cmd = 'onboard'  then Result := Cmd_Onboard_Run(ArgArr)
-    else if Cmd = 'agent'    then Result := Cmd_Agent_Run(ArgArr)
-    else if Cmd = 'auth'     then Result := Cmd_Auth_Run(ArgArr)
-    else if Cmd = 'gateway'  then Result := Cmd_Gateway_Run(ArgArr)
-    else if Cmd = 'serve'    then Result := Cmd_Serve_Run(ArgArr)
-    else if Cmd = 'status'   then Result := Cmd_Status_Run(ArgArr)
-    else if Cmd = 'cron'     then Result := Cmd_Cron_Run(ArgArr)
-    else if Cmd = 'mcp'      then Result := Cmd_MCP_Run(ArgArr)
-    else if Cmd = 'migrate'  then Result := Cmd_Migrate_Run(ArgArr)
-    else if Cmd = 'skills'   then Result := Cmd_Skills_Run(ArgArr)
-    else if Cmd = 'model'    then Result := Cmd_Model_Run(ArgArr)
-    else if Cmd = 'post'     then Result := Cmd_Post_Run(ArgArr)
-    else if Cmd = 'membench' then Result := Cmd_Membench_Run(ArgArr)
-    else if Cmd = 'tui'      then Result := Cmd_TUI_Run(ArgArr)
-    else if Cmd = 'update'   then Result := Cmd_Update_Run(ArgArr)
-    else if Cmd = 'version'  then Result := Cmd_Version_Run(ArgArr)
-    else
-    begin
-      Write(ErrOutput, FormatCLIError('unknown command: ' + Cmd, 'pasclaw'));
-      Result := 1;
-    end;
+    Result := DispatchCommand(Cmd, ArgArr);
   finally
     Args.Free;
   end;
