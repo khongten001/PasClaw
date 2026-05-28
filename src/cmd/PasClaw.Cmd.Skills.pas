@@ -164,6 +164,28 @@ begin
   if DirectoryExists(Dir) then Walk(Dir);
 end;
 
+function IsSafeSkillName(const Name: string): Boolean;
+{ Skill names go into JoinPath without canonicalisation, so a path
+  with separators or '..' would escape workspace/skills/ and let
+  `pasclaw skills remove ../memory` recursively delete an unrelated
+  workspace subtree. Only single-segment ASCII-ish names are
+  accepted on the remove path. Names that came from
+  InstallFromGitHub are derived from URL path segments — none of
+  the rejected characters can appear there — so legitimate
+  installs always pass. }
+var
+  i: Integer;
+begin
+  Result := False;
+  if (Name = '') or (Name = '.') or (Name = '..') then Exit;
+  for i := 1 to Length(Name) do
+    case Name[i] of
+      '/', '\', ':', #0..#31: Exit;
+    end;
+  if Pos('..', Name) > 0 then Exit;
+  Result := True;
+end;
+
 function DoRemove(const Argv: array of string): Integer;
 var
   Cfg: TConfig;
@@ -172,6 +194,13 @@ var
   RemovedFiles: Boolean;
 begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
+  if not IsSafeSkillName(Argv[1]) then
+  begin
+    WriteLn(Ansi.Red, '✗ ', Ansi.Reset,
+            'unsafe skill name "', Argv[1], '" — skill names must be a single ',
+            'path segment with no /, \, :, or ".." sequence');
+    Exit(1);
+  end;
   RemovedFiles := False;
 
   WorkspaceDir := JoinPath(GetHome, 'workspace/skills');
