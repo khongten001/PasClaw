@@ -24,6 +24,7 @@ implementation
 uses
   PasClaw.Providers.Anthropic,
   PasClaw.Providers.OpenAI,
+  PasClaw.Providers.Gemini,
   PasClaw.Providers.Catalog;
 
 function FindProvider(Cfg: TConfig; const Name: string; out Idx: Integer): Boolean;
@@ -97,6 +98,8 @@ begin
       Provider := TAnthropicProvider.Create(APIKey, Base, Model);
     pfOpenAI:
       Provider := TOpenAIProvider.Create(APIKey, Base, Model, Kind, Spec.Auth);
+    pfGemini:
+      Provider := TGeminiProvider.Create(APIKey, Base, Model);
     pfPlaceholder:
       begin
         ErrMsg := 'provider "' + Spec.DisplayName + '" is in the catalog but ' +

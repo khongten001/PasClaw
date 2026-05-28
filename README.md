@@ -95,7 +95,7 @@ PasClaw ships a single provider catalog (`src/pkg/providers/PasClaw.Providers.Ca
 | [Ollama](https://ollama.com/) | `ollama` | Not needed | Local, self-hosted |
 | [vLLM](https://docs.vllm.ai/) | `vllm` | Not needed | Local, OpenAI-compatible |
 | [LiteLLM](https://docs.litellm.ai/) | `litellm` | Varies | Proxy for 100+ providers (set `api_base`) |
-| [Google Gemini](https://aistudio.google.com/apikey) | `gemini` | Required | Catalog entry reserved — `generateContent` REST client coming in a follow-up |
+| [Google Gemini](https://aistudio.google.com/apikey) | `gemini` | Required | Gemini 1.5 / 2.0 (`generateContent` REST, `x-goog-api-key` auth) |
 
 Deferred to follow-up PRs (each adds one new `TProtocolFamily` enum value and one new branch in `Factory`): **Azure OpenAI** (`asHeader` auth slot already reserved), **AWS Bedrock** (needs SigV4 signing, build-tag gated like picoclaw), **GitHub Copilot** (OAuth device flow), **Antigravity** (Google Cloud OAuth).
 

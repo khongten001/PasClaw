@@ -9,16 +9,17 @@
   table + a couple of helpers replaces the dispatch and turns "add a new
   provider" into a one-row change.
 
-  Three protocol families are reserved here:
+  Protocol families wired up so far:
 
-    pfOpenAI    - POST <base>/v1/chat/completions, JSON shape OpenAI
-                  defined; covers the long tail.
-    pfAnthropic - POST <base>/v1/messages with x-api-key header;
-                  Anthropic only for now.
-    pfGemini    - placeholder for Google's generateContent shape;
-                  no implementation in Phase A — a follow-up PR adds
-                  TGeminiProvider + flips the gemini entry from
-                  pfPlaceholder to pfGemini.
+    pfOpenAI      - POST <base>/v1/chat/completions, JSON shape OpenAI
+                    defined; covers the long tail.
+    pfAnthropic   - POST <base>/v1/messages with x-api-key header.
+    pfGemini      - POST <base>/v1beta/models/<model>:generateContent
+                    with x-goog-api-key header.
+    pfPlaceholder - kind reserved in the catalog so configs validate,
+                    but no provider implementation bundled yet (used
+                    for Bedrock / Azure / GitHub Copilot / Antigravity
+                    until each follow-up PR lands).
 
   Three auth schemes:
 
@@ -41,7 +42,8 @@ type
   TProtocolFamily = (
     pfOpenAI,
     pfAnthropic,
-    pfPlaceholder  { kind known, no implementation yet — Gemini/Bedrock/etc. }
+    pfGemini,
+    pfPlaceholder  { kind known, no implementation yet — Bedrock/Azure/etc. }
   );
 
   TAuthSchemeKind = (asBearer, asNone, asHeader);
@@ -196,10 +198,10 @@ begin
                        MkAuth(asBearer),
                        'Proxy for 100+ providers (set api_base)');
   Result[18] := MkSpec('gemini',     'Google Gemini',
-                       pfPlaceholder,'https://generativelanguage.googleapis.com',
+                       pfGemini,     'https://generativelanguage.googleapis.com',
                        'gemini-1.5-flash',
-                       MkAuth(asBearer),
-                       'Gemini (implementation pending — Phase B)');
+                       MkAuth(asHeader, 'x-goog-api-key'),
+                       'Gemini 1.5 / 2.0 (generateContent REST)');
 end;
 
 function LookupProvider(const Kind: string; out Spec: TProviderSpec): Boolean;
