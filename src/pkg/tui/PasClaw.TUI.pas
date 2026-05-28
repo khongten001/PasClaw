@@ -49,6 +49,7 @@ implementation
 
 uses
   Classes,
+  SyncObjs,
   PasClaw.CliUI,
   PasClaw.Logger,
   PasClaw.Providers.Types,
@@ -57,6 +58,72 @@ uses
   , MVCFramework.Console
   {$ENDIF}
   ;
+
+type
+  TRunToolLoopThread = class(TThread)
+  private
+    FCfg: TToolLoopConfig;
+    FMsgs: array of TMessage;
+    FLoop: TToolLoopResult;
+    FOk: Boolean;
+    FErr: string;
+    FDone: TEvent;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const ACfg: TToolLoopConfig; const AMsgs: array of TMessage);
+    destructor Destroy; override;
+    property LoopResult: TToolLoopResult read FLoop;
+    property Ok: Boolean read FOk;
+    property Err: string read FErr;
+    property DoneEvent: TEvent read FDone;
+  end;
+
+function ResolveRequestTimeoutSeconds: Integer;
+var
+  V: string;
+  N: Integer;
+begin
+  Result := 120;
+  V := Trim(GetEnvironmentVariable('PASCLAW_REQUEST_TIMEOUT'));
+  if V = '' then Exit;
+  if TryStrToInt(V, N) and (N > 0) then
+    Result := N;
+end;
+
+constructor TRunToolLoopThread.Create(const ACfg: TToolLoopConfig; const AMsgs: array of TMessage);
+var
+  i: Integer;
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+  FCfg := ACfg;
+  SetLength(FMsgs, Length(AMsgs));
+  for i := 0 to High(AMsgs) do
+    FMsgs[i] := AMsgs[i];
+  FDone := TEvent.Create(nil, True, False, '');
+end;
+
+destructor TRunToolLoopThread.Destroy;
+begin
+  FDone.Free;
+  inherited Destroy;
+end;
+
+procedure TRunToolLoopThread.Execute;
+begin
+  try
+    FOk := RunToolLoop(FCfg, FMsgs, FLoop);
+  except
+    on E: Exception do
+    begin
+      FOk := False;
+      FErr := E.Message;
+    end;
+  end;
+  FDone.SetEvent;
+end;
+
 
 constructor TTUI.Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
 begin
@@ -153,7 +220,9 @@ var
   Loop: TToolLoopResult;
   Cfg: TToolLoopConfig;
   S: ISpinner;
-  Ok: Boolean;
+  W: TRunToolLoopThread;
+  TimeoutSec: Integer;
+  WaitRes: TWaitResult;
 begin
   if FProvider = nil then
   begin
@@ -172,20 +241,40 @@ begin
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
   Cfg.OnToolResult  := nil;
+  TimeoutSec        := ResolveRequestTimeoutSeconds;
 
   S := Spinner('thinking', ssDots, Cyan);
+  W := TRunToolLoopThread.Create(Cfg, Msgs);
   try
-    Ok := RunToolLoop(Cfg, Msgs, Loop);
+    LogDebug('tool-loop start model=%s timeout=%ds', [FModel, TimeoutSec]);
+    WriteColoredText('         [hint: press Ctrl+C to interrupt]'#10, DarkGray);
+    W.Start;
+    WaitRes := W.DoneEvent.WaitFor(TimeoutSec * 1000);
   finally
     S.Hide;
     S := nil;
   end;
 
-  if not Ok then
+  if WaitRes = wrTimeout then
   begin
-    WriteError('tool loop failed');
+    LogWarn('tool-loop timeout after %ds (possible slow model response or deadlocked tool call)', [TimeoutSec]);
+    WriteError(Format('request timed out after %ds', [TimeoutSec]));
+    W.Terminate;
+    W.FreeOnTerminate := True;
     Exit;
   end;
+
+  W.WaitFor;
+  if not W.Ok then
+  begin
+    LogWarn('tool-loop failed: %s', [W.Err]);
+    WriteError('tool loop failed');
+    W.Free;
+    Exit;
+  end;
+  Loop := W.LoopResult;
+  W.Free;
+  LogDebug('tool-loop end ok iters=%d', [Loop.Iterations]);
 
   WriteColoredText('pasclaw', Magenta);
   WriteColoredText(' > ', DarkGray);
@@ -305,6 +394,9 @@ var
   Msgs: array of TMessage;
   Loop: TToolLoopResult;
   Cfg: TToolLoopConfig;
+  W: TRunToolLoopThread;
+  TimeoutSec: Integer;
+  WaitRes: TWaitResult;
 begin
   if FProvider = nil then
   begin
@@ -324,12 +416,32 @@ begin
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
   Cfg.OnToolResult  := nil;
+  TimeoutSec        := ResolveRequestTimeoutSeconds;
 
-  if not RunToolLoop(Cfg, Msgs, Loop) then
+  LogDebug('tool-loop start model=%s timeout=%ds', [FModel, TimeoutSec]);
+  WriteLn(Ansi.Dim, '         [hint: press Ctrl+C to interrupt]', Ansi.Reset);
+  W := TRunToolLoopThread.Create(Cfg, Msgs);
+  W.Start;
+  WaitRes := W.DoneEvent.WaitFor(TimeoutSec * 1000);
+  if WaitRes = wrTimeout then
   begin
-    WriteLn(Ansi.Red, 'pasclaw  > ', Ansi.Reset, '(tool loop failed)');
+    LogWarn('tool-loop timeout after %ds (possible slow model response or deadlocked tool call)', [TimeoutSec]);
+    WriteLn(Ansi.Red, 'pasclaw  > ', Ansi.Reset, Format('(request timed out after %ds)', [TimeoutSec]));
+    W.Terminate;
+    W.FreeOnTerminate := True;
     Exit;
   end;
+  W.WaitFor;
+  if not W.Ok then
+  begin
+    LogWarn('tool-loop failed: %s', [W.Err]);
+    WriteLn(Ansi.Red, 'pasclaw  > ', Ansi.Reset, '(tool loop failed)');
+    W.Free;
+    Exit;
+  end;
+  Loop := W.LoopResult;
+  W.Free;
+  LogDebug('tool-loop end ok iters=%d', [Loop.Iterations]);
   Write(Ansi.BoldBlue, 'pasclaw', Ansi.Reset, '  > ');
   WriteLn(Loop.Content);
   if Loop.LastResp.Usage.InputTokens + Loop.LastResp.Usage.OutputTokens > 0 then
