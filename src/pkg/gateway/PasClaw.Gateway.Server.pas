@@ -212,7 +212,10 @@ begin
     on E: Exception do
     begin
       LogError('gateway: handler crashed: %s', [E.Message]);
-      WriteJSON(AResponse, 500, '{"error":"internal","message":"' + E.Message + '"}');
+      if not AResponse.HeaderHasBeenWritten then
+        WriteJSON(AResponse, 500, '{"error":"internal","message":"' + E.Message + '"}')
+      else if (AContext <> nil) and (AContext.Connection <> nil) then
+        AContext.Connection.Disconnect;
     end;
   end;
 end;
@@ -457,6 +460,7 @@ type
     FContext: TIdContext;
     FId, FModel: string;
     FDebugIO: Boolean;
+    FClosed: Boolean;
     procedure WriteSocketBytes(const Data: TBytes);
   public
     constructor Create(AContext: TIdContext; const Id, Model: string;
@@ -474,6 +478,7 @@ type
     { Writes the zero-length terminator chunk that ends a chunked
       transfer-encoding response. Called by Finalize. }
     procedure CloseStream;
+    property Closed: Boolean read FClosed;
   end;
 
 constructor TSSEStreamer.Create(AContext: TIdContext; const Id, Model: string;
@@ -484,6 +489,7 @@ begin
   FId      := Id;
   FModel   := Model;
   FDebugIO := DebugIO;
+  FClosed  := False;
 end;
 
 procedure TSSEStreamer.WriteSocketBytes(const Data: TBytes);
@@ -549,6 +555,8 @@ procedure TSSEStreamer.CloseStream;
 var
   Terminator: TBytes;
 begin
+  if FClosed then Exit;
+  FClosed := True;
   Terminator := TEncoding.UTF8.GetBytes('0'#13#10#13#10);
   WriteSocketBytes(Terminator);
 end;
@@ -670,8 +678,18 @@ var
   RawTemp: Double;
   ReplyObj: TJsonObject;
   Streamer: TSSEStreamer;
+  StreamStarted, StreamClosed: Boolean;
+  function SanitizeStreamError(const S: string): string;
+  begin
+    Result := StringReplace(S, #13, ' ', [rfReplaceAll]);
+    Result := StringReplace(Result, #10, ' ', [rfReplaceAll]);
+    Result := Trim(Result);
+    if Result = '' then Result := 'unknown failure';
+  end;
 begin
   Streamer := nil;
+  StreamStarted := False;
+  StreamClosed := False;
   Body := '';
   if ARequest.PostStream <> nil then
   begin
@@ -771,6 +789,9 @@ begin
 
     if WantsStream then
     begin
+      { Dedicated guard for all streamed execution once headers are emitted.
+        After this point we must never fall back to WriteJSON. }
+      try
       { Stream path: flush SSE headers up front and hook the tool loop
         so chunks reach the client as each tool call happens. The loop
         itself still runs synchronously in this thread; the difference
@@ -798,6 +819,7 @@ begin
         which on some Indy builds also tries to auto-frame body
         writes (and would double-chunk ours). }
       AResp.WriteHeader;
+      StreamStarted := True;
       { Drain every nested write buffer so headers AND subsequent body
         writes go straight to the socket. TIdHTTPServer opens a
         connection-level buffer per request to compute Content-Length;
@@ -815,19 +837,73 @@ begin
       LoopCfg.OnToolCall   := Streamer.NoteToolCall;
       LoopCfg.OnToolResult := Streamer.NoteToolResult;
       Streamer.WriteComment('connected');
+      if not RunToolLoop(LoopCfg, Msgs, Loop) then
+      begin
+        if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
+        Streamer.WriteError('tool loop failed');
+        StreamClosed := Streamer.Closed;
+        Exit;
+      end;
+      if Loop.LastResp.FinishReason <> '' then
+        FinishReason := Loop.LastResp.FinishReason
+      else
+        FinishReason := 'stop';
+
+      if Length(Loop.LastResp.ToolCalls) > 0 then
+      begin
+        Loop.Content := Trim(Loop.Content);
+        if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
+        Loop.Content := Loop.Content + Format(
+          '(reached MaxIterations=%d while the model was still calling tools; '+
+          'last finish_reason=%s, %d pending tool call(s) — raise the --max-iter '+
+          'cap on `pasclaw serve` or reduce the task scope.)',
+          [FMaxIter, FinishReason, Length(Loop.LastResp.ToolCalls)]);
+        FinishReason := 'length';
+        LogWarn('chat/completions: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
+                [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
+      end
+      else if Loop.Content = '' then
+      begin
+        Loop.Content := Format('(no content returned by the model; finish_reason=%s)',
+                                [FinishReason]);
+        LogWarn('chat/completions: empty content with finish=%s iterations=%d',
+                [FinishReason, Loop.Iterations]);
+      end;
+
+      if FDebugIO then
+        LogDebug('chat/completions: tool loop done iterations=%d in=%d out=%d finish=%s content=%s',
+                 [Loop.Iterations, Loop.LastResp.Usage.InputTokens,
+                  Loop.LastResp.Usage.OutputTokens, FinishReason, Loop.Content]);
+      if FDebugIO then LogDebug('chat/completions -> 200 SSE (final)');
+      Streamer.Finalize(Loop.Content, FinishReason);
+      StreamClosed := Streamer.Closed;
+      except
+        on E: Exception do
+        begin
+          if StreamStarted and (not StreamClosed) and
+             (Streamer <> nil) and (not Streamer.Closed) then
+          begin
+            try
+              Streamer.WriteError('internal error: ' + SanitizeStreamError(E.Message));
+              StreamClosed := Streamer.Closed;
+            except
+              if (AContext <> nil) and (AContext.Connection <> nil) then
+                AContext.Connection.Disconnect;
+            end;
+          end
+          else if (AContext <> nil) and (AContext.Connection <> nil) then
+            AContext.Connection.Disconnect;
+          raise;
+        end;
+      end;
+      Exit;
     end;
 
     if not RunToolLoop(LoopCfg, Msgs, Loop) then
     begin
       if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
-      if WantsStream then
-        { Headers already went out as 200 OK; send an OpenAI-style
-          error frame + [DONE] rather than disguising the failure as
-          a normal assistant completion. }
-        Streamer.WriteError('tool loop failed')
-      else
-        WriteJSON(AResp, 502,
-          '{"error":{"message":"tool loop failed","type":"server_error"}}');
+      WriteJSON(AResp, 502,
+        '{"error":{"message":"tool loop failed","type":"server_error"}}');
       Exit;
     end;
 
@@ -877,21 +953,13 @@ begin
                [Loop.Iterations, Loop.LastResp.Usage.InputTokens,
                 Loop.LastResp.Usage.OutputTokens, FinishReason, Loop.Content]);
 
-    if WantsStream then
-    begin
-      if FDebugIO then LogDebug('chat/completions -> 200 SSE (final)');
-      Streamer.Finalize(Loop.Content, FinishReason);
-    end
-    else
-    begin
-      ReplyObj := BuildOpenAICompletion(CompId, ReqModel, Loop.Content,
-                                         Loop.LastResp.Usage, FinishReason);
-      try
-        if FDebugIO then LogDebug('chat/completions -> 200 JSON: %s', [ReplyObj.ToJSON]);
-        WriteJSON(AResp, 200, ReplyObj.ToJSON);
-      finally
-        ReplyObj.Free;
-      end;
+    ReplyObj := BuildOpenAICompletion(CompId, ReqModel, Loop.Content,
+                                       Loop.LastResp.Usage, FinishReason);
+    try
+      if FDebugIO then LogDebug('chat/completions -> 200 JSON: %s', [ReplyObj.ToJSON]);
+      WriteJSON(AResp, 200, ReplyObj.ToJSON);
+    finally
+      ReplyObj.Free;
     end;
   finally
     Req.Free;
