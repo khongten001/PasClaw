@@ -197,6 +197,7 @@
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.Loader.pas"/>
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.Zip.pas"/>
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.GitHub.pas"/>
+        <DCCReference Include="..\pkg\skills\PasClaw.Skills.ClawHub.pas"/>
 
         <!-- pkg/agent -->
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Prompt.pas"/>
