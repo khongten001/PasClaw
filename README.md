@@ -1,6 +1,6 @@
 # PasClaw
 
-PasClaw is a Delphi Object Pascal port of [PicoClaw](https://github.com/sipeed/picoclaw) —
+PasClaw is a Delphi Object Pascal port of PicoClaw —
 Sipeed's ultra-lightweight personal AI agent. It targets Free Pascal 3.2+ in
 `{$MODE DELPHI}` so the same sources build with both FPC and Delphi RAD Studio.
 
