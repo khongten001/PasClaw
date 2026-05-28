@@ -155,6 +155,7 @@
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Catalog.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Anthropic.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.OpenAI.pas"/>
+        <DCCReference Include="..\pkg\providers\PasClaw.Providers.Gemini.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Factory.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Stream.pas"/>
 
