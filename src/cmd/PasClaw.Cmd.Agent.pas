@@ -76,7 +76,7 @@ begin
   Result.Provider      := '';
   Result.SystemPrompt  := '';
   Result.Thinking      := '';
-  Result.MaxTokens     := 4096;
+  Result.MaxTokens     := 8192;   { see DefaultChatOptions in PasClaw.Providers.Types — same rationale }
   Result.MaxIterations := 8;
   Result.NoTools       := False;
   Result.NoMCP         := False;

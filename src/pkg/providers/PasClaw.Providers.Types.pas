@@ -120,7 +120,16 @@ begin
     "`temperature` is deprecated for this model" 400 on the newer
     Claude models, which reject the field outright. }
   Result.Temperature   := 0;
-  Result.MaxTokens     := 4096;
+  { 8192 matches picoclaw's config.example.json and the recommended
+    setting across nanobot's docs / examples (HKUDS/nanobot and
+    nanobot-ai/nanobot both ship 8192 in their config examples).
+    The previous 4096 was too tight for code-writing tool calls: a
+    typical Pascal/TS unit easily exceeds 4k tokens in a single
+    tool_use input, and Anthropic returns the partial JSON when the
+    budget runs out — see PR #41 for the fs_write fallout that
+    motivated this. Callers can still override per-call via
+    --max-tokens or the gateway's max_tokens request field. }
+  Result.MaxTokens     := 8192;
   Result.Stream        := False;
   Result.SystemPrompt  := '';
   Result.ThinkingLevel := '';
