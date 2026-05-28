@@ -191,6 +191,9 @@ pasclaw skills list
 pasclaw skills install owner/repo                         # GitHub: repo root SKILL.md
 pasclaw skills install owner/repo/path/to/skill           # GitHub: subdirectory
 pasclaw skills install owner/repo/path/to/skill@v1.2.3    # GitHub: pinned ref
+pasclaw skills install code-review                        # ClawHub: by slug (latest version)
+pasclaw skills install code-review@1.2.3                  # ClawHub: pinned version
+pasclaw skills search "code review"                       # ClawHub: search the registry
 pasclaw skills install my-skill                           # Legacy: record name in config.json
 pasclaw skills remove my-skill                            # Deletes workspace dir + config entry
 ```
@@ -227,7 +230,13 @@ Skills live under `$PASCLAW_HOME/workspace/skills/`. PasClaw accepts two layouts
 
 `pasclaw skills install owner/repo[/path][@ref]` downloads a zip snapshot from `codeload.github.com`, extracts it via the bundled zip library (`Zipper.TUnZipper` under FPC, `System.Zip.TZipFile` under Delphi — no tar dependency), locates SKILL.md at the requested subpath, validates it through `ParseSkillMD`, and copies the containing directory tree into `$PASCLAW_HOME/workspace/skills/<name>/`. If no `@ref` is given the installer tries `main` then falls back to `master`. The destination directory name defaults to the last segment of the subpath, or the repo name when no subpath was given. Refuses to overwrite an existing skill directory — `pasclaw skills remove <name>` first if you want to reinstall.
 
-Subsequent phases will add a **ClawHub** search/install client (slug-based registry the picoclaw / nanobot ecosystem standardised on), then `scripts/` (callable helpers) + `references/` (lazy-loaded context) runtime support.
+**ClawHub install** (Phase 3, this release):
+
+`pasclaw skills install <slug>[@<version>]` hits ClawHub (`https://clawhub.ai`) — the slug-based registry picoclaw and nanobot standardised on. It optionally fetches metadata first (`/api/v1/skills/<slug>`) to surface the moderation flags and resolve `latestVersion` when no version is pinned, then downloads the zip from `/api/v1/download?slug=<slug>&version=<version>` and runs it through the same `PasClaw.Skills.Zip` + `ParseSkillMD` validation pipeline as the GitHub path. Malware-flagged skills are refused; suspicious skills install with a warning. Slugs are lowercase alphanumerics with `-` / `_`.
+
+`pasclaw skills search <query>` queries `/api/v1/search` and prints slug / version / display-name / summary rows.
+
+Subsequent phases will add `scripts/` (callable helpers) + `references/` (lazy-loaded context) runtime support.
 
 ### Gateway, OpenAI-compatible server, and channels
 
