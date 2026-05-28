@@ -60,6 +60,33 @@ begin
   end;
 end;
 
+function HasJSONKey(const ArgsJSON, Field: string): Boolean;
+{ Returns True iff the JSON object actually contains the key.
+  Distinct from ParseStringArg, which returns False both when the key
+  is missing AND when its value is the empty string. fs_write needs
+  the distinction: a missing `content` is almost always a truncated
+  tool call (Anthropic hits max_tokens mid-tool_use generation and
+  returns partial JSON) and silently writing 0 bytes would clobber the
+  user's file. A present-but-empty `content` is a legitimate
+  "clear the file" request. }
+var
+  Obj: TJsonObject;
+begin
+  Result := False;
+  if Trim(ArgsJSON) = '' then Exit;
+  try
+    Obj := TJsonObject.Parse(ArgsJSON);
+    if Obj = nil then Exit;
+    try
+      Result := Obj.Has(Field);
+    finally
+      Obj.Free;
+    end;
+  except
+    Result := False;
+  end;
+end;
+
 function ParseBoolArg(const ArgsJSON, Field: string; Default: Boolean): Boolean;
 var
   Obj: TJsonObject;
@@ -120,6 +147,24 @@ begin
   if not ParseStringArg(ArgsJSON, 'path', Path) then
   begin
     ErrMsg := 'missing required argument: path';
+    Exit('');
+  end;
+  if not HasJSONKey(ArgsJSON, 'content') then
+  begin
+    { A missing `content` key almost always means the model''s response
+      was truncated mid-tool_call (Anthropic / OpenAI hit max_tokens
+      during tool_use generation and returned the partial JSON). The
+      old behavior dutifully treated the missing field as the empty
+      string and overwrote the file with 0 bytes — destroying the
+      user''s content with no error signal to the model, which then
+      retried the same truncated call in a loop. Refuse the call so
+      the model gets feedback and either re-emits with full content or
+      switches to fs_edit_hashline for incremental writes. Pass
+      "content":"" explicitly to legitimately clear a file. }
+    ErrMsg := 'missing required argument: content. ' +
+              'If your previous response was truncated mid-tool_call (model hit max_tokens), ' +
+              're-emit fs_write with the full content as a string, or use fs_edit_hashline ' +
+              'to apply incremental edits. Pass "content":"" explicitly to clear a file.';
     Exit('');
   end;
   ParseStringArg(ArgsJSON, 'content', Content);
