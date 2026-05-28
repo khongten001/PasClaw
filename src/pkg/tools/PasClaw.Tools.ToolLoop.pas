@@ -248,8 +248,8 @@ begin
         begin
           ArgsObj := TJsonObject.Create;
           try
-            ArgsObj.Put('patch', CanonicalPatch);
-            RetryArgs := ArgsObj.Stringify;
+            ArgsObj.PutStr('patch', CanonicalPatch);
+            RetryArgs := ArgsObj.ToJSON;
           finally
             ArgsObj.Free;
           end;
