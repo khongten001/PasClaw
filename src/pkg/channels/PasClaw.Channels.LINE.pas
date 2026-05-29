@@ -103,10 +103,16 @@ type
 
 constructor TLineEventWorker.Create(Bot: TLineBot; const EventJSON: string);
 begin
-  inherited Create(False);   { CreateSuspended=False — start immediately }
+  { Construct SUSPENDED, assign state, then Start. With Create(False)
+    the kernel can schedule Execute before the field assignments below
+    finish — FBot would be nil and FEventJSON would be empty when the
+    worker ran. Codex flagged this on PR #78; the cron scheduler's
+    TCronThread uses the same suspended-then-start pattern. }
+  inherited Create(True);
   FreeOnTerminate := True;
   FBot       := Bot;
   FEventJSON := EventJSON;
+  Start;
 end;
 
 procedure TLineEventWorker.Execute;
