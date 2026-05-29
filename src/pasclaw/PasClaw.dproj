@@ -189,6 +189,9 @@
         <DCCReference Include="..\pkg\channels\PasClaw.Channels.Telegram.pas"/>
         <DCCReference Include="..\pkg\channels\PasClaw.Channels.Discord.pas"/>
         <DCCReference Include="..\pkg\channels\PasClaw.Channels.Slack.pas"/>
+        <DCCReference Include="..\pkg\channels\PasClaw.Channels.Teams.pas"/>
+        <DCCReference Include="..\pkg\channels\PasClaw.Channels.Webhook.pas"/>
+        <DCCReference Include="..\pkg\channels\PasClaw.Channels.LINE.pas"/>
 
         <!-- pkg/cron -->
         <DCCReference Include="..\pkg\cron\PasClaw.Cron.Expr.pas"/>
