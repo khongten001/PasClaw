@@ -691,6 +691,80 @@ begin
   CloseStream;
 end;
 
+type
+  { Per-request collector that hooks LoopCfg.OnToolCall/OnToolResult on the
+    non-streaming chat-completions path. RunToolLoop runs tools server-side
+    and the buffered Chat Completions response shape has no standard slot
+    for "tools that already ran" — so we collect ToolView's friendly per-
+    tool lines here (the same ones the streaming path emits as visible
+    deltas via TSSEStreamer.NoteToolCall/NoteToolResult) and the handler
+    prepends them above the model's content. Both delivery modes now show
+    the same activity transcript. }
+  TToolActivityCollector = class
+  public
+    Lines: TStringList;
+    constructor Create;
+    destructor Destroy; override;
+    procedure OnToolCall(const Name, ArgsJSON: string);
+    procedure OnToolResult(const Name, ResultText, Err: string);
+    function Transcript: string;
+  end;
+
+constructor TToolActivityCollector.Create;
+begin
+  inherited Create;
+  Lines := TStringList.Create;
+end;
+
+destructor TToolActivityCollector.Destroy;
+begin
+  Lines.Free;
+  inherited Destroy;
+end;
+
+procedure TToolActivityCollector.OnToolCall(const Name, ArgsJSON: string);
+begin
+  Lines.Add(FormatToolCallLine(Name, ArgsJSON));
+end;
+
+procedure TToolActivityCollector.OnToolResult(const Name, ResultText, Err: string);
+begin
+  Lines.Add(FormatToolResultLine(Name, ResultText, Err));
+end;
+
+function TToolActivityCollector.Transcript: string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 0 to Lines.Count - 1 do
+  begin
+    if i > 0 then Result := Result + #10;
+    Result := Result + Lines[i];
+  end;
+end;
+
+function PrependToolActivity(Collector: TToolActivityCollector;
+                              const Content: string): string;
+{ Stick the tool transcript above the model's content with a blank-line
+  separator, mirroring how the streaming path renders activity as deltas
+  before the final assistant text. Empty transcript or empty collector
+  means Content unchanged. }
+var
+  T: string;
+begin
+  if (Collector = nil) or (Collector.Lines.Count = 0) then
+  begin
+    Result := Content;
+    Exit;
+  end;
+  T := Collector.Transcript;
+  if Trim(Content) = '' then
+    Result := T
+  else
+    Result := T + #10#10 + Content;
+end;
+
 procedure TGatewayServer.HandleChatCompletions(AContext: TIdContext;
                                                 ARequest: TIdHTTPRequestInfo;
                                                 AResp: TIdHTTPResponseInfo;
@@ -721,6 +795,7 @@ var
   ReplyObj: TJsonObject;
   Streamer: TSSEStreamer;
   StreamStarted, StreamClosed: Boolean;
+  ActivityCollector: TToolActivityCollector;
   function SanitizeStreamError(const S: string): string;
   begin
     Result := StringReplace(S, #13, ' ', [rfReplaceAll]);
@@ -733,6 +808,7 @@ begin
   StreamStarted := False;
   StreamClosed := False;
   AWasStreamingRequest := False;
+  ActivityCollector := nil;
   AResponseStarted := False;
   Body := '';
   if ARequest.PostStream <> nil then
@@ -952,6 +1028,15 @@ begin
       Exit;
     end;
 
+    { The non-streaming path collects ToolView-formatted activity lines via
+      OnToolCall/OnToolResult and prepends them above the model's content
+      below — so frontends that buffer the whole JSON reply see the same
+      transcript the streaming path emits as visible deltas through
+      TSSEStreamer. }
+    ActivityCollector := TToolActivityCollector.Create;
+    LoopCfg.OnToolCall   := ActivityCollector.OnToolCall;
+    LoopCfg.OnToolResult := ActivityCollector.OnToolResult;
+
     if not RunToolLoop(LoopCfg, Msgs, Loop) then
     begin
       if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
@@ -1006,6 +1091,8 @@ begin
                [Loop.Iterations, Loop.LastResp.Usage.InputTokens,
                 Loop.LastResp.Usage.OutputTokens, FinishReason, Loop.Content]);
 
+    Loop.Content := PrependToolActivity(ActivityCollector, Loop.Content);
+
     ReplyObj := BuildOpenAICompletion(CompId, ReqModel, Loop.Content,
                                        Loop.LastResp.Usage, FinishReason);
     try
@@ -1017,6 +1104,7 @@ begin
   finally
     Req.Free;
     if Streamer <> nil then Streamer.Free;
+    if ActivityCollector <> nil then ActivityCollector.Free;
   end;
 end;
 
