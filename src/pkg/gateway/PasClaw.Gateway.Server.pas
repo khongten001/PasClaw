@@ -94,6 +94,7 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Prompt,
+  PasClaw.Gateway.ToolView,
   PasClaw.Gateway.WebUI;
 
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
@@ -645,16 +646,18 @@ procedure TSSEStreamer.NoteToolCall(const Name, ArgsJSON: string);
 var
   Preview: string;
 begin
-  (* One visible delta with a small bracketed marker so the client
-     actually shows progress, plus a comment with the args for any
-     consumer that wants to log structured tool activity. The visible
-     delta is the bit that turns the long silence into a heartbeat the
-     user can see in their chat UI. *)
+  (* One visible delta carrying a Claude-Code-style summary (tool name +
+     its key argument) so the client renders real progress, not just a
+     bare name. The visible delta is the bit that turns the long silence
+     into a heartbeat the user can see in their chat UI; the full args
+     still go to the debug log and the SSE comment below for any consumer
+     that wants to log structured tool activity. Standard OpenAI clients
+     drop the comment, which is exactly why the summary has to be visible. *)
   Preview := ArgsJSON;
   if Length(Preview) > 200 then Preview := Copy(Preview, 1, 200) + '...';
   if FDebugIO then
     LogDebug('chat/completions tool_call: name=%s args=%s', [Name, ArgsJSON]);
-  WriteChunk(#10'[tool: ' + Name + ']'#10, '');
+  WriteChunk(#10 + FormatToolCallLine(Name, ArgsJSON) + #10, '');
   WriteComment('tool_call name=' + Name + ' args=' + Preview);
 end;
 
@@ -672,6 +675,11 @@ begin
     LogDebug('chat/completions tool_result: name=%s err=%s result=%s',
              [Name, Err, Preview]);
   end;
+  (* Visible delta summarizing the outcome (line/byte counts with a first-line
+     peek, a short echo, or the error) on its own indented line under the call
+     — previously this went only to the dropped SSE comment, so the client saw
+     the call but never its result. *)
+  WriteChunk(FormatToolResultLine(Name, ResultText, Err) + #10, '');
   WriteComment('tool_result name=' + Name + ' ' + Status);
 end;
 

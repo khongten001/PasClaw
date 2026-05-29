@@ -262,6 +262,27 @@ The gateway routes implemented in `src/pkg/gateway/` are:
 | `/v1/responses` | `POST` | OpenAI Responses-compatible endpoint accepting string or message-array `input`; non-streaming only. |
 | `/v1/models` | `GET` | OpenAI-compatible model list containing the configured default model. |
 
+When `/v1/chat/completions` runs with `stream: true`, the tool loop executes
+server-side and each tool call is surfaced to the client as a visible
+content delta in a Claude-Code-style transcript — the tool name with its key
+argument, followed by a short result summary on the next line:
+
+```
+⏺ fs_read(README.md)
+  ⎿ 312 lines, 12044 bytes — ¶README.md#a1b2
+⏺ shell_exec(ls -la)
+  ⎿ exit=0
+```
+
+Known tools (`fs_read`, `fs_write`, `fs_list`, `fs_grep`,
+`fs_edit_hashline`, `shell_exec`) surface their most meaningful argument;
+MCP and other tools fall back to a compact one-line dump of the raw
+arguments. The full argument and result text also go to the SSE comment
+lines (`: tool_call ...` / `: tool_result ...`) for consumers that log
+structured activity, and to the server debug log when `--debug` is set.
+The formatter lives in `src/pkg/gateway/PasClaw.Gateway.ToolView.pas`
+(unit-tested via `make test-toolview`).
+
 Manual `/v1/responses` verification examples:
 
 ```sh
