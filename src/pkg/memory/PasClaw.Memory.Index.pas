@@ -80,6 +80,79 @@ uses
   PasClaw.Utils,
   PasClaw.Logger;
 
+function SanitizeFtsQuery(const Raw: string): string;
+(* Turn a natural-language query string into an FTS5-safe MATCH
+   expression. FTS5 treats unquoted ASCII punctuation (?, +, :, /,
+   unbalanced quotes, etc.) as syntax, so a conversational query like
+   "what did we discuss?" or a code token like "C++", "foo/bar", or
+   "skill_<name>" raises a parse error that bubbles up as "no matches"
+   even when the indexed content is right there.
+
+   Strategy: split the input on every non-token byte and reassemble as
+   OR-ed quoted phrases. Bytes >= $80 are treated as token bytes so
+   UTF-8 multi-byte sequences survive intact (the porter unicode61
+   tokenizer FTS5 was created with will fold them properly at index
+   time). The empty-string result signals the caller to early-exit.
+
+   OR over AND: natural-language queries include filler words
+   ("what", "did", "we") that won't appear in terse notes. AND would
+   require every token to match and silently return zero hits the
+   moment any filler is missing. OR returns matches as soon as ANY
+   token lands, and BM25 ranks documents that match more tokens
+   higher — so the top-K results are still the most relevant ones,
+   and "what did we discuss authentication?" still finds the note
+   that mentions "discussed authentication tokens".
+
+   Examples (arrow is the produced MATCH expression):
+     what did we discuss?  ->  "what" OR "did" OR "we" OR "discuss"
+     C++                   ->  "C"
+     foo/bar baz           ->  "foo" OR "bar" OR "baz"
+     authentication        ->  "authentication"
+     ?!?                   ->  (empty — all-separator input)
+*)
+
+  function IsTokenByte(B: Byte): Boolean;
+  begin
+    Result := ((B >= Ord('a')) and (B <= Ord('z'))) or
+              ((B >= Ord('A')) and (B <= Ord('Z'))) or
+              ((B >= Ord('0')) and (B <= Ord('9'))) or
+              (B = Ord('_')) or
+              (B >= $80);
+  end;
+
+var
+  i: Integer;
+  Cur: string;
+  Tokens: TStringList;
+begin
+  Result := '';
+  if Trim(Raw) = '' then Exit;
+
+  Tokens := TStringList.Create;
+  try
+    Cur := '';
+    for i := 1 to Length(Raw) do
+    begin
+      if IsTokenByte(Byte(Raw[i])) then
+        Cur := Cur + Raw[i]
+      else if Cur <> '' then
+      begin
+        Tokens.Add(Cur);
+        Cur := '';
+      end;
+    end;
+    if Cur <> '' then Tokens.Add(Cur);
+
+    for i := 0 to Tokens.Count - 1 do
+    begin
+      if Result <> '' then Result := Result + ' OR ';
+      Result := Result + '"' + Tokens[i] + '"';
+    end;
+  finally
+    Tokens.Free;
+  end;
+end;
+
 type
   TMemoryIndexImpl = class(TInterfacedObject, IMemoryIndex)
   private
@@ -483,12 +556,14 @@ end;
 function TMemoryIndexImpl.Search(const Query: string; K: Integer): TMemoryHitArray;
 {$IFDEF FPC}
 var
-  Q: TSQLQuery;
-  N: Integer;
+  Q:         TSQLQuery;
+  N:         Integer;
+  Sanitized: string;
 begin
   SetLength(Result, 0);
   if not FOpen then Exit;
-  if Trim(Query) = '' then Exit;
+  Sanitized := SanitizeFtsQuery(Query);
+  if Sanitized = '' then Exit;
   if K <= 0 then K := 5;
 
   Q := TSQLQuery.Create(nil);
@@ -498,7 +573,7 @@ begin
       'SELECT path, snippet(memory_fts, 1, ''«'', ''»'', ''…'', 24), bm25(memory_fts) ' +
       'FROM memory_fts WHERE memory_fts MATCH :q ' +
       'ORDER BY bm25(memory_fts) LIMIT :k';
-    Q.Params.ParamByName('q').AsString := Query;
+    Q.Params.ParamByName('q').AsString := Sanitized;
     Q.Params.ParamByName('k').AsInteger := K;
     try
       Q.Open;
@@ -526,12 +601,14 @@ begin
 end;
 {$ELSE}
 var
-  Q: TFDQuery;
-  N: Integer;
+  Q:         TFDQuery;
+  N:         Integer;
+  Sanitized: string;
 begin
   SetLength(Result, 0);
   if not FOpen then Exit;
-  if Trim(Query) = '' then Exit;
+  Sanitized := SanitizeFtsQuery(Query);
+  if Sanitized = '' then Exit;
   if K <= 0 then K := 5;
 
   Q := TFDQuery.Create(nil);
@@ -541,7 +618,7 @@ begin
       'SELECT path, snippet(memory_fts, 1, ''«'', ''»'', ''…'', 24), bm25(memory_fts) ' +
       'FROM memory_fts WHERE memory_fts MATCH :q ' +
       'ORDER BY bm25(memory_fts) LIMIT :k';
-    Q.ParamByName('q').AsString  := Query;
+    Q.ParamByName('q').AsString  := Sanitized;
     Q.ParamByName('k').AsInteger := K;
     try
       Q.Open;
