@@ -186,9 +186,14 @@ begin
           Format('cron[%s] (%s):'#10'%s', [Entry.Id, Entry.Skill, Output]));
     end;
 
-    { Persist last-fired regardless of skill success — we don't want
-      a permanently-failing job to retry on every tick forever. }
-    State.SetLastFired(Entry.Id, DateTimeToUnix(Now_));
+    { Stamp the SLOT we just handled, not Now. Subsequent ticks then
+      compute NextFireAfter(slot) which returns the NEXT missed slot
+      (or future slot if caught up), so a long downtime catches up
+      one slot per tick instead of skipping the rest. Stamp regardless
+      of skill success — a permanently-failing job would otherwise
+      retry the same slot on every tick forever; fix the skill and the
+      next due slot fires. }
+    State.SetLastFired(Entry.Id, DateTimeToUnix(Next));
     Dirty := True;
   end;
 

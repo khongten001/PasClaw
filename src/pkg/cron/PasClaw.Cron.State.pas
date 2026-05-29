@@ -83,20 +83,37 @@ end;
 
 procedure TCronState.Load;
 var
-  Body: string;
+  Body, ReadFrom, Bak: string;
   Root: TJsonObject;
   Arr: TJsonArray;
   Item: TJsonObject;
   i: Integer;
 begin
   SetLength(FEntries, 0);
-  if not FileExists(FPath) then Exit;
+  Bak := FPath + '.bak';
+  if FileExists(FPath) then
+    ReadFrom := FPath
+  else if FileExists(Bak) then
+  begin
+    { Save crashed between "move old to .bak" and "install new" —
+      the previous-known-good state is the only surviving copy.
+      Recover from it, then promote it back to the primary path so
+      a future clean Save doesn't see a stale .bak. }
+    LogWarn('cron.state: %s missing, recovering from %s', [FPath, Bak]);
+    if not RenameFile(Bak, FPath) then
+      LogWarn('cron.state: could not promote %s back to %s', [Bak, FPath]);
+    ReadFrom := FPath;
+    if not FileExists(ReadFrom) then Exit;
+  end
+  else
+    Exit;
+
   try
-    Body := ReadFileText(FPath);
+    Body := ReadFileText(ReadFrom);
   except
     on E: Exception do
     begin
-      LogWarn('cron.state: read %s failed: %s', [FPath, E.Message]);
+      LogWarn('cron.state: read %s failed: %s', [ReadFrom, E.Message]);
       Exit;
     end;
   end;
@@ -140,7 +157,8 @@ var
   Root, Item: TJsonObject;
   Arr: TJsonArray;
   i: Integer;
-  Tmp: string;
+  Tmp, Bak: string;
+  HadPrev: Boolean;
 begin
   Root := TJsonObject.Create;
   try
@@ -156,13 +174,41 @@ begin
 
     EnsureDir(ExtractFilePath(FPath));
     Tmp := FPath + '.tmp';
+    Bak := FPath + '.bak';
     WriteFileText(Tmp, Root.ToJSON);
-    { RenameFile is atomic on POSIX, near-atomic on NTFS. Either the
-      old state survives or the new one lands; no partial write
-      observed by the next Load. }
-    if FileExists(FPath) then DeleteFile(FPath);
+
+    { Backup-file dance — guarantees a recoverable copy exists at
+      every point in time, even if the process crashes mid-save or
+      RenameFile fails. Sequence:
+        1. Clear any stale .bak from a prior aborted save.
+        2. Move current state to .bak  (if a current state exists).
+        3. Install new state           (rename .tmp -> FPath).
+        4. Delete .bak.
+      If a crash happens between steps 2 and 3, the next Load notices
+      FPath is missing and recovers from .bak.
+      If RenameFile in step 3 fails, restore .bak so the previous
+      state survives — never leave the user with no state at all. }
+    if FileExists(Bak) then DeleteFile(Bak);
+
+    HadPrev := FileExists(FPath);
+    if HadPrev and not RenameFile(FPath, Bak) then
+    begin
+      LogWarn('cron.state: backup rename %s -> %s failed; aborting save',
+              [FPath, Bak]);
+      DeleteFile(Tmp);
+      Exit;
+    end;
+
     if not RenameFile(Tmp, FPath) then
-      LogWarn('cron.state: rename %s -> %s failed', [Tmp, FPath]);
+    begin
+      LogWarn('cron.state: install rename %s -> %s failed; restoring previous',
+              [Tmp, FPath]);
+      if HadPrev then RenameFile(Bak, FPath);
+      DeleteFile(Tmp);
+      Exit;
+    end;
+
+    if FileExists(Bak) then DeleteFile(Bak);
   finally
     Root.Free;
   end;
