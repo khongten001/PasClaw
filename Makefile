@@ -15,6 +15,21 @@ INDY_REPO    ?= https://github.com/IndySockets/Indy.git
 # on most distros but not always.
 ICONVENC_DIR ?= /usr/lib/x86_64-linux-gnu/fpc/3.2.2/units/x86_64-linux/iconvenc
 
+# fcl-db + sqlite ship with FPC's standard distribution but live outside the
+# default search path (Debian package: fp-units-db). PasClaw.Memory.Index
+# pulls TSQLite3Connection / TSQLQuery from these. libsqlite3.so must be
+# present at runtime — every modern Linux/Mac has it; Windows builds need
+# sqlite3.dll on PATH.
+FCLDB_DIR    ?= /usr/lib/x86_64-linux-gnu/fpc/3.2.2/units/x86_64-linux/fcl-db
+SQLITE_DIR   ?= /usr/lib/x86_64-linux-gnu/fpc/3.2.2/units/x86_64-linux/sqlite
+
+# PasClaw.Tools.FS uses the Masks unit (case-insensitive glob matching for
+# fs_grep's `include` filter). On Debian, Masks lives in Lazarus's lazutils
+# source tree rather than the fpc rtl, so callers that don't already have it
+# on their unit path can set LAZUTILS_DIR (apt: lazarus-src). Defaults to the
+# Debian path; empty string skips the include.
+LAZUTILS_DIR ?= /usr/lib/lazarus/3.0/components/lazutils
+
 # PasClaw source dirs.
 UNIT_DIRS = \
 	src/pkg/cliui \
@@ -49,6 +64,8 @@ INDY_UNIT_DIRS = \
 INDY_INC_DIRS = $(INDY_UNIT_DIRS)
 
 FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
+	-Fu$(FCLDB_DIR) -Fu$(SQLITE_DIR) \
+	$(if $(LAZUTILS_DIR),-Fu$(LAZUTILS_DIR)) \
 	$(foreach d,$(UNIT_DIRS),-Fu$(d)) \
 	$(foreach d,$(INDY_UNIT_DIRS),-Fu$(d)) \
 	$(foreach d,$(INDY_INC_DIRS),-Fi$(d)) \

@@ -153,6 +153,7 @@ uses
   PasClaw.Providers.Factory,
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
+  PasClaw.Tools.Memory,
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
@@ -234,6 +235,7 @@ begin
   FRegistry := TToolRegistry.Create;
   RegisterFSTools(FRegistry, FUseHashline);
   RegisterShellTool(FRegistry);
+  RegisterMemoryTools(FRegistry);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(FRegistry, Skills);
   if FUseMCP then
@@ -460,6 +462,7 @@ begin
     FRegistry := TToolRegistry.Create;
     RegisterFSTools(FRegistry, FEnableHashline);
     RegisterShellTool(FRegistry);
+    RegisterMemoryTools(FRegistry);
     Skills := LoadSkillManifests(GetHome);
     RegisterSkills(FRegistry, Skills);
   end;

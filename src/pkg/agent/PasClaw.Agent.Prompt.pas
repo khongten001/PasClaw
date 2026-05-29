@@ -136,19 +136,45 @@ begin
 end;
 
 function BuildMemorySection: string;
+{ Inject up to three markdown files into the system prompt:
+    workspace/memory/MEMORY.md         — durable user-owned notes
+    workspace/memory/<today>.md        — today's daily note, if it exists
+    workspace/memory/<yesterday>.md    — yesterday's daily note, for fresh context
+  Mirrors openclaw's bootstrap loading. Older notes stay on disk and reach
+  the model only when memory_search returns them. Each file is wrapped in
+  a subsection so the model can tell durable from dated material apart. }
 var
-  Path, Body: string;
+  MemoryDir, TodayStr, YesterdayStr: string;
+
+  procedure AppendFile(const SubHeader, FilePath: string);
+  var
+    SubBody: string;
+  begin
+    if not FileExists(FilePath) then Exit;
+    try
+      SubBody := Trim(ReadFileText(FilePath));
+    except
+      SubBody := '';
+    end;
+    if SubBody = '' then Exit;
+    if Result = '' then
+      Result := '## Memory'
+    else
+      Result := Result + sLineBreak + sLineBreak;
+    Result := Result + sLineBreak + sLineBreak +
+              '### ' + SubHeader + sLineBreak + sLineBreak + SubBody;
+  end;
+
 begin
   Result := '';
-  Path := JoinPath(GetHome, 'workspace/memory/MEMORY.md');
-  if not FileExists(Path) then Exit;
-  try
-    Body := Trim(ReadFileText(Path));
-    if Body = '' then Exit;
-    Result := '## Memory' + sLineBreak + sLineBreak + Body;
-  except
-    Result := '';
-  end;
+  MemoryDir := JoinPath(GetHome, 'workspace/memory');
+
+  AppendFile('MEMORY.md (durable)', JoinPath(MemoryDir, 'MEMORY.md'));
+
+  TodayStr     := FormatDateTime('yyyy-mm-dd', Now);
+  YesterdayStr := FormatDateTime('yyyy-mm-dd', Now - 1);
+  AppendFile('Today (' + TodayStr + ')',         JoinPath(MemoryDir, TodayStr + '.md'));
+  AppendFile('Yesterday (' + YesterdayStr + ')', JoinPath(MemoryDir, YesterdayStr + '.md'));
 end;
 
 function BuildSkillsSection: string;
@@ -269,7 +295,12 @@ begin
     sLineBreak +
     '5. **Memory** — when the user mentions something worth keeping across ' +
     'sessions (preferences, project facts, conventions), update ' +
-    MemPath + '. Treat it as a long-lived notes file the user owns.';
+    MemPath + ' for durable notes the user owns, or append a dated ' +
+    'entry to ' + JoinPath(GetHome, 'workspace/memory') +
+    '/{today}.md (e.g. ' + FormatDateTime('yyyy-mm-dd', Now) +
+    '.md) for episodic context. Use `memory_search` before answering ' +
+    'questions about prior conversations or project facts you might ' +
+    'have written down on an earlier turn.';
 end;
 
 function AppendSection(const Acc, Section: string): string;

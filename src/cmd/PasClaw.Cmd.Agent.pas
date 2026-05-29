@@ -27,6 +27,7 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
+  PasClaw.Tools.Memory,
   PasClaw.Tools.ToolLoop,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
@@ -133,6 +134,7 @@ begin
   Result := TToolRegistry.Create;
   RegisterFSTools(Result, UseHashline);
   RegisterShellTool(Result);
+  RegisterMemoryTools(Result);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(Result, Skills);
 end;
