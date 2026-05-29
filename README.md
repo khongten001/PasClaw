@@ -55,6 +55,8 @@ Environment variables:
 | `PASCLAW_CONFIG` | Overrides the config file path. |
 | `PASCLAW_VERSION` | Compile-time FPC version override used by the Makefile. |
 | `PASCLAW_TELEGRAM_TOKEN` | Default Telegram bot token for `pasclaw gateway --telegram`. |
+| `PASCLAW_LINE_TOKEN` | LINE Messaging API channel access token. Used by `pasclaw post line` and `pasclaw gateway --line`. |
+| `PASCLAW_LINE_SECRET` | LINE channel secret. Required by `pasclaw gateway --line` to verify `X-Line-Signature` on inbound events. |
 | `NO_COLOR` | Disables ANSI color output. |
 
 Useful config commands:
@@ -239,6 +241,7 @@ Subsequent phases will add `scripts/` (callable helpers) + `references/` (lazy-l
 pasclaw gateway
 pasclaw gateway --addr 0.0.0.0 --port 8088
 pasclaw gateway --telegram --token <BOT_TOKEN>
+pasclaw gateway --line                              # also pass $PASCLAW_LINE_TOKEN + $PASCLAW_LINE_SECRET
 pasclaw gateway --no-tools --no-mcp --no-hashline
 
 pasclaw serve

@@ -43,6 +43,7 @@ UNIT_DIRS = \
 	src/pkg/mcp \
 	src/pkg/gateway \
 	src/pkg/channels \
+	src/pkg/crypto \
 	src/pkg/cron \
 	src/pkg/skills \
 	src/pkg/agent \

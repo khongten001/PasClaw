@@ -32,7 +32,8 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Cron.Scheduler,
   PasClaw.Gateway.Server,
-  PasClaw.Channels.Telegram;
+  PasClaw.Channels.Telegram,
+  PasClaw.Channels.LINE;
 
 type
   TGwArgs = record
@@ -40,6 +41,9 @@ type
     Port:        Integer;
     Telegram:    Boolean;
     Token:       string;
+    Line:        Boolean;
+    LineToken:   string;
+    LineSecret:  string;
     NoMCP:       Boolean;
     NoTools:     Boolean;
     NoHashline:  Boolean;
@@ -53,6 +57,9 @@ begin
   Result.Port       := Cfg.Gateway.Port;
   Result.Telegram   := False;
   Result.Token      := GetEnvironmentVariable('PASCLAW_TELEGRAM_TOKEN');
+  Result.Line       := False;
+  Result.LineToken  := GetEnvironmentVariable('PASCLAW_LINE_TOKEN');
+  Result.LineSecret := GetEnvironmentVariable('PASCLAW_LINE_SECRET');
   Result.NoMCP      := False;
   Result.NoTools    := False;
   Result.NoHashline := False;
@@ -63,6 +70,9 @@ begin
     if Argv[i] = '--port'         then begin if i < High(Argv) then Result.Port     := StrToIntDef(Argv[i + 1], Result.Port); Inc(i, 2); Continue; end;
     if Argv[i] = '--telegram'     then begin Result.Telegram   := True; Inc(i); Continue; end;
     if Argv[i] = '--token'        then begin if i < High(Argv) then Result.Token    := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--line'         then begin Result.Line       := True; Inc(i); Continue; end;
+    if Argv[i] = '--line-token'   then begin if i < High(Argv) then Result.LineToken  := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--line-secret'  then begin if i < High(Argv) then Result.LineSecret := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--no-mcp'       then begin Result.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin Result.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin Result.NoHashline := True; Inc(i); Continue; end;
@@ -80,6 +90,7 @@ var
   MCPClients: TMCPClientList;
   Server: TGatewayServer;
   Telegram: TTelegramChannel;
+  Line: TLineBot;
   Scheduler: TCronScheduler;
   Skills: TSkillSpecArray;
 begin
@@ -119,13 +130,29 @@ begin
 
     Server := TGatewayServer.Create(Cfg, Provider, Reg);
     Telegram := nil;
+    Line     := nil;
     try
+      if Args.Line then
+      begin
+        if (Args.LineToken = '') or (Args.LineSecret = '') then
+        begin
+          LogError('line: need both --line-token / $PASCLAW_LINE_TOKEN and ' +
+                   '--line-secret / $PASCLAW_LINE_SECRET');
+          Exit(1);
+        end;
+        Line := TLineBot.Create(Args.LineToken, Args.LineSecret,
+                                Cfg, Provider, Reg);
+        Server.MountWebhook('/webhooks/line', Line.HandleWebhook);
+      end;
+
       Server.Start(Args.Addr, Args.Port);
 
       WriteLn(Ansi.Bold, 'Gateway up.', Ansi.Reset);
       WriteLn('  http://', Args.Addr, ':', Args.Port, '/v1/health');
       WriteLn('  http://', Args.Addr, ':', Args.Port, '/v1/tools');
       WriteLn('  POST http://', Args.Addr, ':', Args.Port, '/v1/chat   {"message":"..."}');
+      if Args.Line then
+        WriteLn('  POST http://', Args.Addr, ':', Args.Port, '/webhooks/line   (LINE platform)');
       WriteLn(Ansi.Dim, 'Press Ctrl-C to stop.', Ansi.Reset);
 
       if Args.Telegram then
@@ -145,6 +172,7 @@ begin
         Server.WaitForStop;
     finally
       if Telegram <> nil then Telegram.Free;
+      if Line     <> nil then Line.Free;
       Server.Stop;
       Server.Free;
       if Scheduler <> nil then Scheduler.Free;
