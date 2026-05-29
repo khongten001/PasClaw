@@ -198,23 +198,22 @@ begin
       { tool_choice mapping (Anthropic Messages API):
           "auto"     -> {"type":"auto"}     (model decides; Anthropic default)
           "required" -> {"type":"any"}      (must call one of the tools)
-          "none"     -> emit nothing        (Anthropic refuses to call tools
-                                              when the tools array is also
-                                              empty; the cleaner way for the
-                                              caller to express "no tools" is
-                                              to not send any tools at all,
-                                              but if they did and asked for
-                                              "none" we skip the field —
-                                              same as omitting tool_choice
-                                              with no model-side impact).
+          "none"     -> {"type":"none"}     (must not call any tool; needed
+                                              because omitting the field with
+                                              a non-empty tools array still
+                                              lets the model call them)
         Empty string means "don't emit; let provider default apply". }
-      if (Options.ToolChoice = 'auto') or (Options.ToolChoice = 'required') then
+      if (Options.ToolChoice = 'auto')
+         or (Options.ToolChoice = 'required')
+         or (Options.ToolChoice = 'none') then
       begin
         ToolObj := TJsonObject.Create;
         if Options.ToolChoice = 'auto' then
           ToolObj.PutStr('type', 'auto')
+        else if Options.ToolChoice = 'required' then
+          ToolObj.PutStr('type', 'any')
         else
-          ToolObj.PutStr('type', 'any');
+          ToolObj.PutStr('type', 'none');
         Root.PutObject('tool_choice', ToolObj);
       end;
     end;
@@ -349,12 +348,24 @@ var
   GStreamCB:   TStreamCallback;
   GStreamAcc:  string;
   GStreamLast: TLLMResponse;
+  { Tool-use accumulation across content_block_start / _delta / _stop.
+    Anthropic streams tool_use blocks as: start carries id+name+(empty)
+    input, delta carries partial_json fragments, stop signals end. We
+    buffer the JSON and flush into GStreamLast.ToolCalls on stop so
+    the streaming path matches Chat()'s non-streaming behavior — without
+    this, tool-call-only assistant turns reached the gateway with no
+    ToolCalls and Codex never saw its function_call output items. }
+  GToolBlockActive: Boolean;
+  GToolBlockId:     string;
+  GToolBlockName:   string;
+  GToolBlockArgs:   string;
 
 procedure HandleAnthropicSSE(const Event, Data: string);
 var
-  Root, Delta, Usage, MsgObj: TJsonObject;
-  Kind, Text: string;
+  Root, Delta, Usage, MsgObj, CB: TJsonObject;
+  Kind, Text, BlockKind, PartialJson: string;
   Chunk: TStreamChunk;
+  Tc: TToolCall;
 begin
   if Data = '' then Exit;
   Root := TJsonObject.Parse(Data);
@@ -362,7 +373,24 @@ begin
   try
     Kind := Root.GetStr('type', Event);
 
-    if Kind = 'content_block_delta' then
+    if Kind = 'content_block_start' then
+    begin
+      CB := Root.ChildObject('content_block');
+      if CB <> nil then
+      try
+        BlockKind := CB.GetStr('type', '');
+        if BlockKind = 'tool_use' then
+        begin
+          GToolBlockActive := True;
+          GToolBlockId     := CB.GetStr('id',   '');
+          GToolBlockName   := CB.GetStr('name', '');
+          GToolBlockArgs   := '';
+        end;
+      finally
+        CB.Free;
+      end;
+    end
+    else if Kind = 'content_block_delta' then
     begin
       Delta := Root.ChildObject('delta');
       if Delta = nil then Exit;
@@ -377,9 +405,34 @@ begin
             Chunk.Text := Text;
             if Assigned(GStreamCB) then GStreamCB(Chunk);
           end;
+        end
+        else if (Delta.GetStr('type', '') = 'input_json_delta') and GToolBlockActive then
+        begin
+          PartialJson := Delta.GetStr('partial_json', '');
+          if PartialJson <> '' then
+            GToolBlockArgs := GToolBlockArgs + PartialJson;
         end;
       finally
         Delta.Free;
+      end;
+    end
+    else if Kind = 'content_block_stop' then
+    begin
+      if GToolBlockActive then
+      begin
+        Tc.Id   := GToolBlockId;
+        Tc.Kind := 'function';
+        Tc.Func.Name := GToolBlockName;
+        if Trim(GToolBlockArgs) <> '' then
+          Tc.Func.Arguments := GToolBlockArgs
+        else
+          Tc.Func.Arguments := '{}';
+        SetLength(GStreamLast.ToolCalls, Length(GStreamLast.ToolCalls) + 1);
+        GStreamLast.ToolCalls[High(GStreamLast.ToolCalls)] := Tc;
+        GToolBlockActive := False;
+        GToolBlockId     := '';
+        GToolBlockName   := '';
+        GToolBlockArgs   := '';
       end;
     end
     else if Kind = 'message_delta' then
@@ -468,8 +521,13 @@ begin
 
   GStreamCB  := OnChunk;
   GStreamAcc := '';
+  Finalize(GStreamLast);
   FillChar(GStreamLast, SizeOf(GStreamLast), 0);
   GStreamLast.Model := UseModel;
+  GToolBlockActive := False;
+  GToolBlockId     := '';
+  GToolBlockName   := '';
+  GToolBlockArgs   := '';
   try
     LogDebug('anthropic SSE POST %s (model=%s)', [URL, UseModel]);
     PostStreaming(URL, Body, Headers, 120, @HandleAnthropicSSE, Status, Err);
@@ -477,6 +535,7 @@ begin
     Result.FinishReason := GStreamLast.FinishReason;
     Result.Usage        := GStreamLast.Usage;
     Result.Model        := GStreamLast.Model;
+    Result.ToolCalls    := Copy(GStreamLast.ToolCalls, 0, Length(GStreamLast.ToolCalls));
     if (Status < 200) or (Status >= 300) then
     begin
       if Result.Content = '' then
