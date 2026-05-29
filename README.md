@@ -152,10 +152,14 @@ MCP entries are stored in the config as `mcp_servers`. A command starting with `
 ```sh
 pasclaw cron list
 pasclaw cron add daily-summary "0 9 * * *" summarize "workspace/memory"
+pasclaw cron add ping-discord "*/15 * * * *" healthcheck "--channel discord:https://discord.com/api/webhooks/..."
+pasclaw cron add line-status "0 * * * *" status_skill "--channel line:U1234abcd"
 pasclaw cron disable daily-summary
 pasclaw cron enable daily-summary
 pasclaw cron remove daily-summary
 ```
+
+Each cron entry persists its last successful fire time to `$PASCLAW_HOME/workspace/cron/state.json` so a missed slot (gateway down, laptop closed) fires exactly once on the next tick instead of either silently skipping or double-firing. Skill output is appended to `workspace/memory/<today>.md` for the model to recall on subsequent turns, and — if `--channel <kind>:<target>` was set — posted to the configured channel. Channel kinds: `discord`, `slack`, `teams`, `webhook` (URL is the target), `line` (target is userId, token from `$PASCLAW_LINE_TOKEN`), `whatsapp` (target is phone number, credentials from `$PASCLAW_WHATSAPP_TOKEN` + `$PASCLAW_WHATSAPP_PHONE_ID`).
 
 ### Skills
 
