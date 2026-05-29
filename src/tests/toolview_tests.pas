@@ -117,6 +117,29 @@ begin
                  'only line', 'trailing newline kept as single line');
 end;
 
+procedure TestMalformedArgsDoesNotRaise;
+{ Providers occasionally stream truncated `arguments` (think mid-token
+  cut-off in a tool_use block). TJsonObject.Parse raises EPasClawJSON on
+  that input, and FormatToolCallLine sits on the SSE-streamer hot path —
+  if it lets the exception escape, the whole stream tears down with no
+  terminal event. Verify the helper handles malformed JSON by falling
+  back to the raw-args echo. }
+var
+  Line: string;
+begin
+  Line := FormatToolCallLine('fs_read', '{"path":"foo');
+  AssertContains(Line, 'fs_read', 'malformed fs_read still names the tool');
+
+  Line := FormatToolCallLine('shell_exec', 'not json at all');
+  AssertContains(Line, 'shell_exec', 'malformed shell_exec still names the tool');
+
+  Line := FormatToolCallLine('fs_grep', '{"pattern":"x"');
+  AssertContains(Line, 'fs_grep', 'malformed fs_grep still names the tool');
+
+  Line := FormatToolCallLine('web_search', '');
+  AssertContains(Line, 'web_search', 'empty args fall through to the unknown branch');
+end;
+
 begin
   TestFsReadCall;
   TestShellCall;
@@ -129,5 +152,6 @@ begin
   TestResultError;
   TestResultEmpty;
   TestResultTrailingNewline;
+  TestMalformedArgsDoesNotRaise;
   Writeln('PASS');
 end.
