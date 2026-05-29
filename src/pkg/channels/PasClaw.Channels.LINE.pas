@@ -269,6 +269,18 @@ var
   EvObj: TJsonObject;
   i: Integer;
 begin
+  { Gateway dispatch is path-only (channels like WhatsApp Cloud bind
+    GET and POST to the same URL). LINE only delivers via POST; emit
+    405 on anything else so the platform doesn't silently treat a
+    misconfigured probe as success. }
+  if ARequest.Command <> 'POST' then
+  begin
+    AResponse.ResponseNo  := 405;
+    AResponse.ContentText := '{"error":"method not allowed"}';
+    AResponse.ContentType := 'application/json';
+    Exit;
+  end;
+
   if ARequest.PostStream <> nil then
   begin
     SetLength(Bytes, ARequest.PostStream.Size);

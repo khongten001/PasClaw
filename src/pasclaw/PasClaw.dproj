@@ -192,6 +192,7 @@
         <DCCReference Include="..\pkg\channels\PasClaw.Channels.Teams.pas"/>
         <DCCReference Include="..\pkg\channels\PasClaw.Channels.Webhook.pas"/>
         <DCCReference Include="..\pkg\channels\PasClaw.Channels.LINE.pas"/>
+        <DCCReference Include="..\pkg\channels\PasClaw.Channels.WhatsApp.pas"/>
 
         <!-- pkg/crypto -->
         <DCCReference Include="..\pkg\crypto\PasClaw.Crypto.HMAC.pas"/>

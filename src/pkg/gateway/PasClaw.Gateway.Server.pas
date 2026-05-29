@@ -166,8 +166,13 @@ var
   Idx: Integer;
   Handler: TWebhookHandler;
 begin
+  { Dispatch on path only. Handlers self-check the verb because some
+    channels (WhatsApp Cloud) bind both GET — subscription
+    verification with hub.challenge echo — and POST — event delivery
+    — to the same URL. Handlers MUST emit 405 for verbs they don't
+    accept so the dispatcher doesn't silently 404 a legitimate
+    request. LINE's HandleWebhook does that; so does WhatsApp's. }
   Result := False;
-  if ARequest.Command <> 'POST' then Exit;
   Idx := FWebhookPaths.IndexOf(ARequest.Document);
   if Idx < 0 then Exit;
   Handler := FWebhookHandlers[Idx];

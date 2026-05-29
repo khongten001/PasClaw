@@ -33,7 +33,8 @@ uses
   PasClaw.Cron.Scheduler,
   PasClaw.Gateway.Server,
   PasClaw.Channels.Telegram,
-  PasClaw.Channels.LINE;
+  PasClaw.Channels.LINE,
+  PasClaw.Channels.WhatsApp;
 
 type
   TGwArgs = record
@@ -44,6 +45,11 @@ type
     Line:        Boolean;
     LineToken:   string;
     LineSecret:  string;
+    WhatsApp:    Boolean;
+    WAToken:     string;
+    WAPhoneId:   string;
+    WAVerify:    string;
+    WASecret:    string;
     NoMCP:       Boolean;
     NoTools:     Boolean;
     NoHashline:  Boolean;
@@ -60,6 +66,11 @@ begin
   Result.Line       := False;
   Result.LineToken  := GetEnvironmentVariable('PASCLAW_LINE_TOKEN');
   Result.LineSecret := GetEnvironmentVariable('PASCLAW_LINE_SECRET');
+  Result.WhatsApp   := False;
+  Result.WAToken    := GetEnvironmentVariable('PASCLAW_WHATSAPP_TOKEN');
+  Result.WAPhoneId  := GetEnvironmentVariable('PASCLAW_WHATSAPP_PHONE_ID');
+  Result.WAVerify   := GetEnvironmentVariable('PASCLAW_WHATSAPP_VERIFY_TOKEN');
+  Result.WASecret   := GetEnvironmentVariable('PASCLAW_WHATSAPP_APP_SECRET');
   Result.NoMCP      := False;
   Result.NoTools    := False;
   Result.NoHashline := False;
@@ -73,6 +84,11 @@ begin
     if Argv[i] = '--line'         then begin Result.Line       := True; Inc(i); Continue; end;
     if Argv[i] = '--line-token'   then begin if i < High(Argv) then Result.LineToken  := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--line-secret'  then begin if i < High(Argv) then Result.LineSecret := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--whatsapp'         then begin Result.WhatsApp  := True; Inc(i); Continue; end;
+    if Argv[i] = '--whatsapp-token'   then begin if i < High(Argv) then Result.WAToken   := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--whatsapp-phone'   then begin if i < High(Argv) then Result.WAPhoneId := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--whatsapp-verify'  then begin if i < High(Argv) then Result.WAVerify  := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--whatsapp-secret'  then begin if i < High(Argv) then Result.WASecret  := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--no-mcp'       then begin Result.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin Result.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin Result.NoHashline := True; Inc(i); Continue; end;
@@ -91,6 +107,7 @@ var
   Server: TGatewayServer;
   Telegram: TTelegramChannel;
   Line: TLineBot;
+  WhatsApp: TWhatsAppBot;
   Scheduler: TCronScheduler;
   Skills: TSkillSpecArray;
 begin
@@ -131,6 +148,7 @@ begin
     Server := TGatewayServer.Create(Cfg, Provider, Reg);
     Telegram := nil;
     Line     := nil;
+    WhatsApp := nil;
     try
       if Args.Line then
       begin
@@ -145,6 +163,24 @@ begin
         Server.MountWebhook('/webhooks/line', Line.HandleWebhook);
       end;
 
+      if Args.WhatsApp then
+      begin
+        if (Args.WAToken = '') or (Args.WAPhoneId = '') or
+           (Args.WAVerify = '') or (Args.WASecret = '') then
+        begin
+          LogError('whatsapp: need all four — --whatsapp-token / ' +
+                   '$PASCLAW_WHATSAPP_TOKEN, --whatsapp-phone / ' +
+                   '$PASCLAW_WHATSAPP_PHONE_ID, --whatsapp-verify / ' +
+                   '$PASCLAW_WHATSAPP_VERIFY_TOKEN, --whatsapp-secret / ' +
+                   '$PASCLAW_WHATSAPP_APP_SECRET');
+          Exit(1);
+        end;
+        WhatsApp := TWhatsAppBot.Create(Args.WAToken, Args.WAPhoneId,
+                                         Args.WAVerify, Args.WASecret,
+                                         Cfg, Provider, Reg);
+        Server.MountWebhook('/webhooks/whatsapp', WhatsApp.HandleWebhook);
+      end;
+
       Server.Start(Args.Addr, Args.Port);
 
       WriteLn(Ansi.Bold, 'Gateway up.', Ansi.Reset);
@@ -153,6 +189,8 @@ begin
       WriteLn('  POST http://', Args.Addr, ':', Args.Port, '/v1/chat   {"message":"..."}');
       if Args.Line then
         WriteLn('  POST http://', Args.Addr, ':', Args.Port, '/webhooks/line   (LINE platform)');
+      if Args.WhatsApp then
+        WriteLn('  ANY http://', Args.Addr, ':', Args.Port, '/webhooks/whatsapp   (WhatsApp Cloud)');
       WriteLn(Ansi.Dim, 'Press Ctrl-C to stop.', Ansi.Reset);
 
       if Args.Telegram then
@@ -173,6 +211,7 @@ begin
     finally
       if Telegram <> nil then Telegram.Free;
       if Line     <> nil then Line.Free;
+      if WhatsApp <> nil then WhatsApp.Free;
       Server.Stop;
       Server.Free;
       if Scheduler <> nil then Scheduler.Free;
