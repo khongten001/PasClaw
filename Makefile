@@ -58,7 +58,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline print-version get-indy webui-res
+.PHONY: all clean run test smoke test-hashline test-toolview print-version get-indy webui-res
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -122,4 +122,11 @@ test-hashline: $(WEBUI_RES) | $(BUILDDIR) $(INDY_DIR)
 	$(FPC) $(FPCFLAGS) src/tests/hashline_patch_tests.pas -o$(BUILDDIR)/hashline_patch_tests
 	@$(BUILDDIR)/hashline_patch_tests
 
-test: smoke test-hashline
+# Pure tool-activity formatter tests. No Indy/webui resource needed — the
+# ToolView unit only depends on PasClaw.JSON and PasClaw.Hashline.
+test-toolview: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/toolview_tests.pas -o$(BUILDDIR)/toolview_tests
+	@$(BUILDDIR)/toolview_tests
+
+test: smoke test-hashline test-toolview
