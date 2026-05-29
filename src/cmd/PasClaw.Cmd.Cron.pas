@@ -15,7 +15,10 @@ uses
 procedure Help;
 begin
   WriteLn('Usage: pasclaw cron <list|add|disable|enable|remove> [args]');
-  WriteLn('  add <id> "<spec>" <skill> [args]   register a cron task');
+  WriteLn('  add <id> "<spec>" <skill> [args] [--channel <kind>:<target>]');
+  WriteLn('                                     register a cron task');
+  WriteLn('                                     channel kinds: discord, slack, teams,');
+  WriteLn('                                                    webhook, line, whatsapp');
   WriteLn('  disable|enable <id>                toggle a task');
   WriteLn('  remove <id>                        delete a task');
 end;
@@ -47,25 +50,52 @@ end;
 function DoAdd(const Argv: array of string): Integer;
 var
   Cfg: TConfig;
-  n, i: Integer;
-  Args: string;
+  n, i, ColonPos: Integer;
+  Args, ChannelSpec, Kind, Target: string;
 begin
   if Length(Argv) < 4 then begin Help; Exit(1); end;
   Cfg := LoadConfig;
   try
     Args := '';
-    for i := 4 to High(Argv) do
+    ChannelSpec := '';
+    i := 4;
+    while i <= High(Argv) do
     begin
+      if (Argv[i] = '--channel') and (i < High(Argv)) then
+      begin
+        ChannelSpec := Argv[i + 1];
+        Inc(i, 2);
+        Continue;
+      end;
       if Args <> '' then Args := Args + ' ';
       Args := Args + Argv[i];
+      Inc(i);
     end;
+
+    Kind   := '';
+    Target := '';
+    if ChannelSpec <> '' then
+    begin
+      ColonPos := Pos(':', ChannelSpec);
+      if ColonPos <= 1 then
+      begin
+        WriteLn(Ansi.Red, '✗ ', Ansi.Reset,
+                '--channel must be <kind>:<target>');
+        Exit(1);
+      end;
+      Kind   := Copy(ChannelSpec, 1, ColonPos - 1);
+      Target := Copy(ChannelSpec, ColonPos + 1, MaxInt);
+    end;
+
     n := Length(Cfg.Crons);
     SetLength(Cfg.Crons, n + 1);
-    Cfg.Crons[n].Id      := Argv[1];
-    Cfg.Crons[n].Spec    := Argv[2];
-    Cfg.Crons[n].Skill   := Argv[3];
-    Cfg.Crons[n].Args    := Args;
-    Cfg.Crons[n].Enabled := True;
+    Cfg.Crons[n].Id            := Argv[1];
+    Cfg.Crons[n].Spec          := Argv[2];
+    Cfg.Crons[n].Skill         := Argv[3];
+    Cfg.Crons[n].Args          := Args;
+    Cfg.Crons[n].Enabled       := True;
+    Cfg.Crons[n].ChannelKind   := Kind;
+    Cfg.Crons[n].ChannelTarget := Target;
     SaveConfig(Cfg);
     WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'added cron ', Argv[1]);
     Result := 0;

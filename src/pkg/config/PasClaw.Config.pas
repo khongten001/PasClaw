@@ -99,11 +99,13 @@ type
   end;
 
   TCronEntry = record
-    Id:       string;
-    Spec:     string;   { cron expression }
-    Skill:    string;
-    Args:     string;
-    Enabled:  Boolean;
+    Id:            string;
+    Spec:          string;   { cron expression }
+    Skill:         string;
+    Args:          string;
+    Enabled:       Boolean;
+    ChannelKind:   string;   { 'discord' | 'slack' | 'teams' | 'webhook' | 'line' | 'whatsapp' | '' }
+    ChannelTarget: string;   { webhook URL, LINE userId, WhatsApp phone, etc. }
   end;
 
   TSkillEntry = record
@@ -188,6 +190,8 @@ begin
   Result.PutStr ('skill',   C.Skill);
   Result.PutStr ('args',    C.Args);
   Result.PutBool('enabled', C.Enabled);
+  if C.ChannelKind   <> '' then Result.PutStr('channel_kind',   C.ChannelKind);
+  if C.ChannelTarget <> '' then Result.PutStr('channel_target', C.ChannelTarget);
 end;
 
 function SkillToJSON(const S: TSkillEntry): TJsonObject;
@@ -380,11 +384,13 @@ begin
         Item := Arr.ItemObject(i);
         if Item = nil then Continue;
         try
-          Crons[i].Id      := Item.GetStr ('id',      '');
-          Crons[i].Spec    := Item.GetStr ('spec',    '');
-          Crons[i].Skill   := Item.GetStr ('skill',   '');
-          Crons[i].Args    := Item.GetStr ('args',    '');
-          Crons[i].Enabled := Item.GetBool('enabled', True);
+          Crons[i].Id            := Item.GetStr ('id',             '');
+          Crons[i].Spec          := Item.GetStr ('spec',           '');
+          Crons[i].Skill         := Item.GetStr ('skill',          '');
+          Crons[i].Args          := Item.GetStr ('args',           '');
+          Crons[i].Enabled       := Item.GetBool('enabled',        True);
+          Crons[i].ChannelKind   := Item.GetStr ('channel_kind',   '');
+          Crons[i].ChannelTarget := Item.GetStr ('channel_target', '');
         finally
           Item.Free;
         end;

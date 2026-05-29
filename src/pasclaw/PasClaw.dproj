@@ -199,6 +199,8 @@
 
         <!-- pkg/cron -->
         <DCCReference Include="..\pkg\cron\PasClaw.Cron.Expr.pas"/>
+        <DCCReference Include="..\pkg\cron\PasClaw.Cron.State.pas"/>
+        <DCCReference Include="..\pkg\cron\PasClaw.Cron.Sinks.pas"/>
         <DCCReference Include="..\pkg\cron\PasClaw.Cron.Scheduler.pas"/>
 
         <!-- pkg/skills -->
