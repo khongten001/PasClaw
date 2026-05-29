@@ -138,8 +138,20 @@ var
   Obj: TJsonObject;
   Summary, Pattern, Path, Inc_: string;
 begin
-  Obj := TJsonObject.Parse(ArgsJSON);
+  { TJsonObject.Parse raises EPasClawJSON on malformed input — providers
+    occasionally stream truncated `arguments` (the tool loop tolerates
+    this and surfaces a per-tool error). Swallow the parse failure here
+    and treat Obj as nil so the unknown-tool branch echoes the raw
+    ArgsJSON; the helper must never raise, otherwise an exception
+    propagates through TSSEStreamer and the whole stream dies. }
+  Obj := nil;
   try
+    try
+      Obj := TJsonObject.Parse(ArgsJSON);
+    except
+      on EPasClawJSON do
+        Obj := nil;
+    end;
     if Name = 'fs_read' then
     begin
       Summary := ArgStr(Obj, 'path');
