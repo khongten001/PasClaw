@@ -93,6 +93,7 @@ uses
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
+  PasClaw.Tools.Labels,
   PasClaw.Agent.Prompt,
   PasClaw.Gateway.WebUI;
 
@@ -643,18 +644,21 @@ end;
 
 procedure TSSEStreamer.NoteToolCall(const Name, ArgsJSON: string);
 var
-  Preview: string;
+  Preview, Label_: string;
 begin
-  (* One visible delta with a small bracketed marker so the client
-     actually shows progress, plus a comment with the args for any
-     consumer that wants to log structured tool activity. The visible
-     delta is the bit that turns the long silence into a heartbeat the
-     user can see in their chat UI. *)
+  (* One visible delta with a friendly per-tool label so the client
+     actually shows progress (e.g. "[Reading foo.pas]" instead of
+     "[tool: fs_read]"), plus a comment with the args for any consumer
+     that wants to log structured tool activity. LabelToolCall parses
+     known tools and surfaces the path / pattern / command — anything
+     extra stays server-side. The visible delta is the bit that turns
+     the long silence into a heartbeat the user can see in their UI. *)
   Preview := ArgsJSON;
   if Length(Preview) > 200 then Preview := Copy(Preview, 1, 200) + '...';
   if FDebugIO then
     LogDebug('chat/completions tool_call: name=%s args=%s', [Name, ArgsJSON]);
-  WriteChunk(#10'[tool: ' + Name + ']'#10, '');
+  Label_ := LabelToolCall(Name, ArgsJSON);
+  WriteChunk(#10'[' + Label_ + ']'#10, '');
   WriteComment('tool_call name=' + Name + ' args=' + Preview);
 end;
 
@@ -681,6 +685,62 @@ begin
   WriteChunk('', FinishReason);
   WriteRaw('data: [DONE]'#10#10);
   CloseStream;
+end;
+
+type
+  { Per-request collector that hooks LoopCfg.OnToolCall on the
+    non-streaming chat-completions path. RunToolLoop runs the tools
+    server-side and the OpenAI Chat Completions response shape has no
+    standard slot for "tools that already ran" — so we collect the
+    friendly per-tool labels here and the handler prepends them above
+    the model's content. Mirrors what the streaming path emits as
+    SSE heartbeat chunks so both delivery modes show the same labels. }
+  TToolLabelCollector = class
+  public
+    Labels: TStringList;
+    constructor Create;
+    destructor Destroy; override;
+    procedure OnToolCall(const Name, ArgsJSON: string);
+  end;
+
+constructor TToolLabelCollector.Create;
+begin
+  inherited Create;
+  Labels := TStringList.Create;
+end;
+
+destructor TToolLabelCollector.Destroy;
+begin
+  Labels.Free;
+  inherited Destroy;
+end;
+
+procedure TToolLabelCollector.OnToolCall(const Name, ArgsJSON: string);
+begin
+  Labels.Add(LabelToolCall(Name, ArgsJSON));
+end;
+
+function PrependToolTranscript(Collector: TToolLabelCollector;
+                                const Content: string): string;
+{ Build the bracketed transcript ([Reading foo.pas]\n[Writing bar.pas])
+  and stick it above the model's content with a blank line in between.
+  No transcript when no tools ran; just Content unchanged. }
+var
+  Transcript: string;
+  i: Integer;
+begin
+  if (Collector = nil) or (Collector.Labels.Count = 0) then
+  begin
+    Result := Content;
+    Exit;
+  end;
+  Transcript := '';
+  for i := 0 to Collector.Labels.Count - 1 do
+    Transcript := Transcript + '[' + Collector.Labels[i] + ']'#10;
+  if Trim(Content) = '' then
+    Result := Trim(Transcript)
+  else
+    Result := Transcript + #10 + Content;
 end;
 
 procedure TGatewayServer.HandleChatCompletions(AContext: TIdContext;
@@ -713,6 +773,7 @@ var
   ReplyObj: TJsonObject;
   Streamer: TSSEStreamer;
   StreamStarted, StreamClosed: Boolean;
+  LabelCollector: TToolLabelCollector;
   function SanitizeStreamError(const S: string): string;
   begin
     Result := StringReplace(S, #13, ' ', [rfReplaceAll]);
@@ -725,6 +786,7 @@ begin
   StreamStarted := False;
   StreamClosed := False;
   AWasStreamingRequest := False;
+  LabelCollector := nil;
   AResponseStarted := False;
   Body := '';
   if ARequest.PostStream <> nil then
@@ -944,6 +1006,13 @@ begin
       Exit;
     end;
 
+    { Non-streaming path collects friendly tool labels via OnToolCall
+      and prepends them above the model's content below — so frontends
+      that don't consume SSE still see the same activity transcript the
+      streaming path emits as heartbeat chunks. }
+    LabelCollector := TToolLabelCollector.Create;
+    LoopCfg.OnToolCall := LabelCollector.OnToolCall;
+
     if not RunToolLoop(LoopCfg, Msgs, Loop) then
     begin
       if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
@@ -998,6 +1067,8 @@ begin
                [Loop.Iterations, Loop.LastResp.Usage.InputTokens,
                 Loop.LastResp.Usage.OutputTokens, FinishReason, Loop.Content]);
 
+    Loop.Content := PrependToolTranscript(LabelCollector, Loop.Content);
+
     ReplyObj := BuildOpenAICompletion(CompId, ReqModel, Loop.Content,
                                        Loop.LastResp.Usage, FinishReason);
     try
@@ -1009,6 +1080,7 @@ begin
   finally
     Req.Free;
     if Streamer <> nil then Streamer.Free;
+    if LabelCollector <> nil then LabelCollector.Free;
   end;
 end;
 
@@ -2209,13 +2281,12 @@ begin
       else if Req.Has('max_tokens') then
         PassthroughOpts.MaxTokens := Req.GetInt('max_tokens', PassthroughOpts.MaxTokens);
 
-      { tool_choice forwarding. Accept the three string forms every
-        provider understands ("auto", "none", "required"). Anything
-        else — most notably the object form
-        {"type":"function","function":{"name":"..."}}, which would
-        need per-provider translation — is logged at debug and
-        dropped; the provider's default behaviour (typically
-        "auto" when tools are present) applies. }
+      (* tool_choice forwarding. Accept the three string forms every
+         provider understands ("auto", "none", "required"). Anything
+         else — most notably the object form requesting a specific
+         function by name, which would need per-provider translation
+         — is logged at debug and dropped; the provider's default
+         behaviour (typically "auto" when tools are present) applies. *)
       if Req.Has('tool_choice') then
       begin
         ToolKind := LowerCase(Trim(Req.GetStr('tool_choice', '')));
