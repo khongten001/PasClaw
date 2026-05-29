@@ -1223,6 +1223,18 @@ begin
     [Seq, ResponseJSON]);
 end;
 
+function ResFailedEvt(Seq: Integer; const ResponseJSON: string): string;
+{ Terminal SSE event for the failure path. Streaming clients (the
+  OpenAI Python SDK, Codex CLI) treat response.completed as success
+  even if the response object's status is "failed", so they need a
+  distinct event to surface provider exceptions raised after the
+  headers were already sent. }
+begin
+  Result := Format(
+    '{"type":"response.failed","sequence_number":%d,"response":%s}',
+    [Seq, ResponseJSON]);
+end;
+
 function ResItemAddedEvt(Seq, OutputIdx: Integer;
                          const ItemInProgressJSON: string): string;
 begin
@@ -1608,16 +1620,19 @@ procedure StreamResponsesViaProvider(AContext: TIdContext;
    so its text is only available as a whole at the end, and there
    is no incremental data to forward. *)
 var
-  CreatedObj, CompletedObj, MsgItemObj, PartObj, FinalItemObj: TJsonObject;
+  CreatedObj, CompletedObj, MsgItemObj, PartObj, FinalItemObj,
+  ErrObj: TJsonObject;
   ContentArr: TJsonArray;
   State: TResponsesStreamState;
-  CreatedJSON, CompletedJSON, FinalPartJSON, FinalItemJSON: string;
+  CreatedJSON, CompletedJSON, FinalPartJSON, FinalItemJSON,
+  StreamErr: string;
   EmptyUsage: TUsageInfo;
   NoToolCalls: array of TToolCall;
   Resp: TLLMResponse;
   i: Integer;
   FcItemId, FcCallId, FcArgs, FcEmptyJSON, FcCompletedJSON: string;
   FakeChunk: TStreamChunk;
+  Failed: Boolean;
 begin
   EmptyUsage.InputTokens  := 0;
   EmptyUsage.OutputTokens := 0;
@@ -1685,6 +1700,8 @@ begin
       EmitResponsesEvent(State.Streamer, 'response.in_progress',
         ResInProgressEvt(State.Seq, CreatedJSON)); Inc(State.Seq);
 
+      StreamErr := '';
+      Failed    := False;
       try
         Resp := Provider.ChatStream(Msgs, ToolDefs, Model, Opts, State.OnChunk);
       except
@@ -1696,6 +1713,19 @@ begin
           Resp.FinishReason := 'error';
           Resp.Usage.InputTokens  := 0;
           Resp.Usage.OutputTokens := 0;
+          StreamErr := 'provider ChatStream raised: ' + E.Message;
+          Failed    := True;
+        end;
+      end;
+      if (not Failed) and (Resp.FinishReason = 'error') then
+      begin
+        Failed := True;
+        if StreamErr = '' then
+        begin
+          if Resp.Content <> '' then
+            StreamErr := Resp.Content
+          else
+            StreamErr := 'provider returned finish_reason=error';
         end;
       end;
 
@@ -1704,8 +1734,11 @@ begin
         return the full text via Resp.Content with no OnChunk
         invocations. Feed it through OnChunk so the event sequence
         is the same shape regardless of provider streaming
-        support. }
-      if (not State.TextStarted) and (Resp.Content <> '') then
+        support. Skip on the failure path — Resp.Content carries the
+        provider error string, not a real assistant turn, so it
+        belongs in the response.failed error.message instead of being
+        streamed back as fake text deltas. }
+      if (not Failed) and (not State.TextStarted) and (Resp.Content <> '') then
       begin
         FakeChunk.Kind := 'text';
         FakeChunk.Text := Resp.Content;
@@ -1770,17 +1803,38 @@ begin
         Inc(State.NextOutputIdx);
       end;
 
-      CompletedObj := BuildResponsesObject(RespId, Model, 'completed',
-                                            State.TextAccumulated,
-                                            Resp.ToolCalls, ToolsRawJSON,
-                                            Resp.Usage);
-      try
-        CompletedJSON := CompletedObj.ToJSON;
-      finally
-        CompletedObj.Free;
+      if Failed then
+      begin
+        CompletedObj := BuildResponsesObject(RespId, Model, 'failed',
+                                              State.TextAccumulated,
+                                              Resp.ToolCalls, ToolsRawJSON,
+                                              Resp.Usage);
+        try
+          ErrObj := TJsonObject.Create;
+          ErrObj.PutStr('code',    'server_error');
+          ErrObj.PutStr('message', StreamErr);
+          CompletedObj.PutObject('error', ErrObj);
+          CompletedJSON := CompletedObj.ToJSON;
+        finally
+          CompletedObj.Free;
+        end;
+        EmitResponsesEvent(State.Streamer, 'response.failed',
+          ResFailedEvt(State.Seq, CompletedJSON));
+      end
+      else
+      begin
+        CompletedObj := BuildResponsesObject(RespId, Model, 'completed',
+                                              State.TextAccumulated,
+                                              Resp.ToolCalls, ToolsRawJSON,
+                                              Resp.Usage);
+        try
+          CompletedJSON := CompletedObj.ToJSON;
+        finally
+          CompletedObj.Free;
+        end;
+        EmitResponsesEvent(State.Streamer, 'response.completed',
+          ResCompletedEvt(State.Seq, CompletedJSON));
       end;
-      EmitResponsesEvent(State.Streamer, 'response.completed',
-        ResCompletedEvt(State.Seq, CompletedJSON));
       State.Streamer.CloseStream;
     finally
       State.Streamer.Free;
@@ -1837,17 +1891,34 @@ var
     sends previous-turn function_call items as separate input items
     with no parent message. The Chat-Completions-style providers we
     use expect each assistant turn to carry an embedded tool_calls
-    array. Synthesize one assistant message per function_call —
-    Anthropic / OpenAI both tolerate consecutive assistant messages
-    with tool_use blocks, and the per-message grouping doesn't
-    affect tool_result matching since matching is by call_id. }
+    array. When the client emits parallel calls in one turn (multiple
+    consecutive function_call items before any function_call_output),
+    coalesce them into a single assistant message so the request
+    body keeps the original turn boundaries: Anthropic in particular
+    rejects request shapes where a tool_use block appears in a turn
+    whose preceding turn already produced tool_use blocks without
+    intervening tool_result blocks. Matching with the corresponding
+    function_call_output is still by call_id regardless of grouping. }
   var
     Tc: TToolCall;
+    Last: Integer;
   begin
     Tc.Id   := CallId;
     Tc.Kind := 'function';
     Tc.Func.Name      := Name;
     Tc.Func.Arguments := ArgumentsJSON;
+
+    if (MsgCount > 0)
+       and (Msgs[MsgCount - 1].Role = mrAssistant)
+       and (Msgs[MsgCount - 1].Content = '')
+       and (Length(Msgs[MsgCount - 1].ToolCalls) > 0) then
+    begin
+      Last := Length(Msgs[MsgCount - 1].ToolCalls);
+      SetLength(Msgs[MsgCount - 1].ToolCalls, Last + 1);
+      Msgs[MsgCount - 1].ToolCalls[Last] := Tc;
+      Exit;
+    end;
+
     SetLength(Msgs, MsgCount + 1);
     Msgs[MsgCount].Role       := mrAssistant;
     Msgs[MsgCount].Content    := '';
