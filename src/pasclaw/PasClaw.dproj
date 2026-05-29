@@ -169,6 +169,7 @@
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Sandbox.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.FS.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Shell.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.Memory.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.ToolLoop.pas"/>
 
         <!-- pkg/mcp -->
@@ -204,6 +205,7 @@
 
         <!-- pkg/memory -->
         <DCCReference Include="..\pkg\memory\PasClaw.Memory.pas"/>
+        <DCCReference Include="..\pkg\memory\PasClaw.Memory.Index.pas"/>
 
         <!-- pkg/updater -->
         <DCCReference Include="..\pkg\updater\PasClaw.Updater.pas"/>
