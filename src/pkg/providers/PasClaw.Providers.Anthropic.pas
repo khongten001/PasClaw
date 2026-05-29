@@ -1,4 +1,4 @@
-{
+﻿{
   PasClaw.Providers.Anthropic - Anthropic Messages API client.
   Mirrors pkg/providers/anthropic_messages in picoclaw.
 
@@ -195,14 +195,14 @@ begin
       end;
       Root.PutArray('tools', ToolArr);
 
-      { tool_choice mapping (Anthropic Messages API):
+      (* tool_choice mapping (Anthropic Messages API):
           "auto"     -> {"type":"auto"}     (model decides; Anthropic default)
           "required" -> {"type":"any"}      (must call one of the tools)
           "none"     -> {"type":"none"}     (must not call any tool; needed
                                               because omitting the field with
                                               a non-empty tools array still
                                               lets the model call them)
-        Empty string means "don't emit; let provider default apply". }
+        Empty string means "don't emit; let provider default apply". *)
       if (Options.ToolChoice = 'auto')
          or (Options.ToolChoice = 'required')
          or (Options.ToolChoice = 'none') then
