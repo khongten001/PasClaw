@@ -93,7 +93,7 @@ Top-level commands are dispatched by `src/cmd/PasClaw.Cmd.Root.pas`:
 | `migrate` | Run data migrations for older versions. |
 | `skills` | List, install, or remove skill extensions. |
 | `model` | Show or change the default model. |
-| `post` | Send a one-shot message to Discord or Slack webhooks. |
+| `post` | Send a one-shot message to a Discord, Slack, Microsoft Teams, generic, or LINE webhook target. |
 | `membench` | Benchmark the memory log subsystem. |
 | `update` | Check GitHub releases or self-update. |
 | `version` | Print version/build information. |
@@ -493,7 +493,7 @@ src/
   cmd/              CLI command units and root dispatcher
   pkg/
     agent/          Agent execution and prompts
-    channels/       Telegram, Discord, Slack integrations
+    channels/       Telegram, Discord, Slack, Teams, generic webhook, LINE
     cliui/          ANSI styling, banner, command help rendering
     component/      Shared components
     config/         Version constants and on-disk config model
