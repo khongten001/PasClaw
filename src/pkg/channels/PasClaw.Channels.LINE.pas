@@ -82,6 +82,44 @@ uses
   PasClaw.Tools.ToolLoop,
   PasClaw.Crypto.HMAC;
 
+type
+  (* One-shot worker that calls TLineBot.ProcessEvent off the Indy
+     dispatcher thread. HandleWebhook spawns one of these per event and
+     returns; Indy then flushes the 200 ack within milliseconds instead
+     of holding it open while RunToolLoop chases tools. LINE's webhook
+     timeout is 1s — without async, a slow turn (long tool loop, large
+     model response) blows past it and LINE retries the event up to 3
+     more times, generating 4× duplicate replies even though we set
+     ResponseNo := 200 early. FreeOnTerminate := True so the worker
+     cleans itself up after Execute returns. *)
+  TLineEventWorker = class(TThread)
+  private
+    FBot:       TLineBot;
+    FEventJSON: string;
+  public
+    constructor Create(Bot: TLineBot; const EventJSON: string);
+    procedure Execute; override;
+  end;
+
+constructor TLineEventWorker.Create(Bot: TLineBot; const EventJSON: string);
+begin
+  inherited Create(False);   { CreateSuspended=False — start immediately }
+  FreeOnTerminate := True;
+  FBot       := Bot;
+  FEventJSON := EventJSON;
+end;
+
+procedure TLineEventWorker.Execute;
+begin
+  try
+    FBot.ProcessEvent(FEventJSON);
+  except
+    on E: Exception do
+      LogWarn('line worker: ProcessEvent raised %s: %s',
+              [E.ClassName, E.Message]);
+  end;
+end;
+
 const
   LINE_PUSH_URL  = 'https://api.line.me/v2/bot/message/push';
   LINE_REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
@@ -334,7 +372,12 @@ begin
         EvObj := Events.ItemObject(i);
         if EvObj = nil then Continue;
         try
-          ProcessEvent(EvObj.ToJSON);
+          { Hand the event off to a self-freeing worker thread so the
+            handler can return and Indy can flush the 200 ack inside
+            LINE's 1s timeout window. The worker owns its own copy of
+            the event JSON; FBot fields are read-only after construction
+            so the thread reads them without locking. }
+          TLineEventWorker.Create(Self, EvObj.ToJSON);
         finally
           EvObj.Free;
         end;

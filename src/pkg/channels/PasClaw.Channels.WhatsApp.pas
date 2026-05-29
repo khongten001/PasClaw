@@ -102,6 +102,46 @@ uses
   PasClaw.Tools.ToolLoop,
   PasClaw.Crypto.HMAC;
 
+type
+  (* One-shot worker that calls TWhatsAppBot.ProcessMessage off the Indy
+     dispatcher thread. HandleEvents spawns one per inbound text message
+     and returns; Indy then flushes the 200 ack right away instead of
+     holding it open while RunToolLoop chases tools. Meta's webhook
+     ingestion times out around 20s and backs off exponentially on
+     retry — without async, a long tool loop tips the request past the
+     timeout and the same event gets re-delivered, duplicating replies.
+     FreeOnTerminate so the worker cleans up after Execute returns. *)
+  TWhatsAppMessageWorker = class(TThread)
+  private
+    FBot:        TWhatsAppBot;
+    FFromNumber: string;
+    FText:       string;
+  public
+    constructor Create(Bot: TWhatsAppBot; const FromNumber, Text: string);
+    procedure Execute; override;
+  end;
+
+constructor TWhatsAppMessageWorker.Create(Bot: TWhatsAppBot;
+                                            const FromNumber, Text: string);
+begin
+  inherited Create(False);   { CreateSuspended=False — start immediately }
+  FreeOnTerminate := True;
+  FBot         := Bot;
+  FFromNumber  := FromNumber;
+  FText        := Text;
+end;
+
+procedure TWhatsAppMessageWorker.Execute;
+begin
+  try
+    FBot.ProcessMessage(FFromNumber, FText);
+  except
+    on E: Exception do
+      LogWarn('whatsapp worker: ProcessMessage raised %s: %s',
+              [E.ClassName, E.Message]);
+  end;
+end;
+
 const
   WA_API_BASE = 'https://graph.facebook.com/v18.0';
 
@@ -370,7 +410,13 @@ begin
                           TextObj.Free;
                         end;
                         if (From_ = '') or (Text = '') then Continue;
-                        ProcessMessage(From_, Text);
+                        { Hand the message off to a self-freeing worker
+                          thread so HandleEvents returns and Indy can
+                          flush the 200 ack before Meta times the
+                          delivery out. FBot fields are read-only after
+                          construction; FromNumber + Text are
+                          per-thread locals. }
+                        TWhatsAppMessageWorker.Create(Self, From_, Text);
                       finally
                         MsgObj.Free;
                       end;
