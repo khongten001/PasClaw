@@ -35,6 +35,15 @@ uses
   PasClaw.Tools.Registry;
 
 type
+  { Method-of-object signature any channel (LINE, WhatsApp, Slack Events
+    API, …) can register on the gateway via MountWebhook so the model
+    can be reached from a public IM platform without spinning a second
+    HTTP server. The handler owns its own response: signature check,
+    parse, run the agent loop, write the reply object. }
+  TWebhookHandler = procedure(AContext: TIdContext;
+                              ARequest: TIdHTTPRequestInfo;
+                              AResponse: TIdHTTPResponseInfo) of object;
+
   { Wraps TIdHTTPServer and dispatches requests to handler methods. Pass a
     provider + tool registry in at construction; ownership stays with the
     caller. Stop() blocks until the listener has fully torn down. }
@@ -48,6 +57,11 @@ type
     FStopFlag: TEvent;
     FDebugIO:  Boolean;
     FMaxIter:  Integer;
+    FWebhookPaths:    TStringList;
+    FWebhookHandlers: array of TWebhookHandler;
+    function DispatchWebhook(AContext: TIdContext;
+                             ARequest: TIdHTTPRequestInfo;
+                             AResponse: TIdHTTPResponseInfo): Boolean;
     procedure OnCommandGet(AContext: TIdContext;
                            ARequest: TIdHTTPRequestInfo;
                            AResponse: TIdHTTPResponseInfo);
@@ -83,6 +97,12 @@ type
     procedure Start(const BindAddr: string; Port: Integer);
     procedure Stop;
     procedure WaitForStop;
+    { Channel webhook registration. Adds an exact-match POST route at Path
+      that runs Handler when a client POSTs to it. Handlers must respond
+      with 401 for unauthenticated requests; the dispatcher does not
+      authenticate on its behalf. Mount must be called before Start so
+      the route is in place when Indy binds. }
+    procedure MountWebhook(const Path: string; Handler: TWebhookHandler);
   end;
 
 implementation
@@ -105,6 +125,9 @@ begin
   FRegistry := Registry;
   FMaxIter  := 25;
   FStopFlag := TEvent.Create(nil, True, False, '');
+  FWebhookPaths := TStringList.Create;
+  FWebhookPaths.CaseSensitive := False;
+  SetLength(FWebhookHandlers, 0);
   FHTTP := TIdHTTPServer.Create(nil);
   FHTTP.OnCommandGet := OnCommandGet;
   FHTTP.KeepAlive    := True;
@@ -116,7 +139,41 @@ begin
   Stop;
   FHTTP.Free;
   FStopFlag.Free;
+  FWebhookPaths.Free;
   inherited Destroy;
+end;
+
+procedure TGatewayServer.MountWebhook(const Path: string; Handler: TWebhookHandler);
+var
+  Idx: Integer;
+begin
+  Idx := FWebhookPaths.IndexOf(Path);
+  if Idx >= 0 then
+  begin
+    FWebhookHandlers[Idx] := Handler;
+    Exit;
+  end;
+  FWebhookPaths.Add(Path);
+  SetLength(FWebhookHandlers, FWebhookPaths.Count);
+  FWebhookHandlers[FWebhookPaths.Count - 1] := Handler;
+  LogInfo('gateway: mounted webhook %s', [Path]);
+end;
+
+function TGatewayServer.DispatchWebhook(AContext: TIdContext;
+                                         ARequest: TIdHTTPRequestInfo;
+                                         AResponse: TIdHTTPResponseInfo): Boolean;
+var
+  Idx: Integer;
+  Handler: TWebhookHandler;
+begin
+  Result := False;
+  if ARequest.Command <> 'POST' then Exit;
+  Idx := FWebhookPaths.IndexOf(ARequest.Document);
+  if Idx < 0 then Exit;
+  Handler := FWebhookHandlers[Idx];
+  if not Assigned(Handler) then Exit;
+  Handler(AContext, ARequest, AResponse);
+  Result := True;
 end;
 
 procedure TGatewayServer.Start(const BindAddr: string; Port: Integer);
@@ -225,7 +282,7 @@ begin
     else if Doc = '/v1' then
       WriteJSON(AResponse, 200,
         '{"name":"pasclaw","routes":["/v1/health","/v1/version","/v1/status","/v1/tools","/v1/chat","/v1/chat/completions","/v1/responses","/v1/models"]}')
-    else
+    else if not DispatchWebhook(AContext, ARequest, AResponse) then
       WriteJSON(AResponse, 404, '{"error":"not found","path":"' + Doc + '"}');
   except
     on E: Exception do
