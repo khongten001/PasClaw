@@ -2209,13 +2209,13 @@ begin
       else if Req.Has('max_tokens') then
         PassthroughOpts.MaxTokens := Req.GetInt('max_tokens', PassthroughOpts.MaxTokens);
 
-      { tool_choice forwarding. Accept the three string forms every
+      (* tool_choice forwarding. Accept the three string forms every
         provider understands ("auto", "none", "required"). Anything
         else — most notably the object form
         {"type":"function","function":{"name":"..."}}, which would
         need per-provider translation — is logged at debug and
         dropped; the provider's default behaviour (typically
-        "auto" when tools are present) applies. }
+        "auto" when tools are present) applies. *)
       if Req.Has('tool_choice') then
       begin
         ToolKind := LowerCase(Trim(Req.GetStr('tool_choice', '')));
