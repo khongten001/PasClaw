@@ -141,7 +141,7 @@ pasclaw mcp edit
 
 MCP entries are stored in the config as `mcp_servers`. A command starting with `http://` or `https://` is tested with the HTTP MCP client; other commands are spawned with the stdio MCP client.
 
-### Cron and skills
+### Cron
 
 ```sh
 pasclaw cron list
@@ -149,19 +149,27 @@ pasclaw cron add daily-summary "0 9 * * *" summarize "workspace/memory"
 pasclaw cron disable daily-summary
 pasclaw cron enable daily-summary
 pasclaw cron remove daily-summary
+```
 
+### Skills
+
+A skill is a markdown manifest under `$PASCLAW_HOME/workspace/skills/`. The system prompt lists each installed skill (name + one-line description + path); the model reads the full body with `fs_read` when a matching task comes up. Skills tagged `kind: shell` or `kind: prompt` also register as a callable `skill_<name>` tool.
+
+```sh
 pasclaw skills list
-pasclaw skills install owner/repo                         # GitHub: repo root SKILL.md
-pasclaw skills install owner/repo/path/to/skill           # GitHub: subdirectory
-pasclaw skills install owner/repo/path/to/skill@v1.2.3    # GitHub: pinned ref
-pasclaw skills install clawhub:code-review                # ClawHub: by slug (latest version)
+pasclaw skills install owner/repo                         # GitHub repo root
+pasclaw skills install owner/repo/path/to/skill           # GitHub subdirectory
+pasclaw skills install owner/repo/path/to/skill@v1.2.3    # GitHub at a pinned ref
+pasclaw skills install clawhub:code-review                # ClawHub: latest version
 pasclaw skills install clawhub:code-review@1.2.3          # ClawHub: pinned version
 pasclaw skills search "code review"                       # ClawHub: search the registry
 pasclaw skills install my-skill                           # Legacy: record name in config.json
-pasclaw skills remove my-skill                            # Deletes workspace dir + config entry
+pasclaw skills remove my-skill                            # Delete workspace dir + config entry
 ```
 
-Skills live under `$PASCLAW_HOME/workspace/skills/`. PasClaw accepts two layouts:
+#### On-disk layout
+
+PasClaw accepts two layouts:
 
 - **Per-directory `SKILL.md`** (preferred — same format picoclaw, nanobot, ClawHub, and Anthropic agent-skills use):
 
@@ -187,17 +195,41 @@ Skills live under `$PASCLAW_HOME/workspace/skills/`. PasClaw accepts two layouts
 
   A copy-pasteable starter lives at [`samples/skills/hello/SKILL.md`](samples/skills/hello/SKILL.md).
 
-- **Legacy single `*.json`** (`workspace/skills/<name>.json`) — still loaded for backwards compat. New skills should use the directory layout; per-directory entries shadow same-named JSON entries.
+- **Legacy single `*.json`** (`workspace/skills/<name>.json`) — still loaded for backwards compat. Per-directory `SKILL.md` entries shadow same-named JSON entries; new skills should use the directory layout. The JSON shape mirrors the frontmatter:
 
-**GitHub install** (Phase 2, this release):
+  ```json
+  {
+    "name": "my-skill",
+    "description": "One-line summary the model uses to pick the skill",
+    "kind": "shell",
+    "schema": "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}"
+  }
+  ```
 
-`pasclaw skills install owner/repo[/path][@ref]` downloads a zip snapshot from `codeload.github.com`, extracts it via the bundled zip library (`Zipper.TUnZipper` under FPC, `System.Zip.TZipFile` under Delphi — no tar dependency), locates SKILL.md at the requested subpath, validates it through `ParseSkillMD`, and copies the containing directory tree into `$PASCLAW_HOME/workspace/skills/<name>/`. If no `@ref` is given the installer tries `main` then falls back to `master`. The destination directory name defaults to the last segment of the subpath, or the repo name when no subpath was given. Refuses to overwrite an existing skill directory — `pasclaw skills remove <name>` first if you want to reinstall.
+  `kind` and `schema` are only needed for callable skills; knowledge-only skills carry just `name` + `description`.
 
-**ClawHub install** (Phase 3, this release):
+#### Install from GitHub
 
-`pasclaw skills install clawhub:<slug>[@<version>]` hits ClawHub (`https://clawhub.ai`) — the slug-based registry picoclaw and nanobot standardised on. It optionally fetches metadata first (`/api/v1/skills/<slug>`) to surface the moderation flags and resolve `latestVersion` when no version is pinned, then downloads the zip from `/api/v1/download?slug=<slug>&version=<version>` and runs it through the same `PasClaw.Skills.Zip` + `ParseSkillMD` validation pipeline as the GitHub path. Malware-flagged skills are refused; suspicious skills install with a warning. Slugs are lowercase alphanumerics with `-` / `_`. The explicit `clawhub:` prefix is required so a bare slug-shaped name like `my-skill` keeps falling through to the legacy `config.json`-only record (preserving backwards compat with pre-Phase-3 scripts) instead of silently swapping places with a same-named registry entry.
+`pasclaw skills install owner/repo[/path][@ref]`:
 
-`pasclaw skills search <query>` queries `/api/v1/search` and prints slug / version / display-name / summary rows.
+- Fetches a zip snapshot from `codeload.github.com`.
+- Extracts it via the bundled zip library — `Zipper.TUnZipper` under FPC, `System.Zip.TZipFile` under Delphi. No tar dependency.
+- Locates `SKILL.md` at the requested subpath and validates it through `ParseSkillMD`.
+- Copies the containing directory tree into `$PASCLAW_HOME/workspace/skills/<dest>/`, where `<dest>` is the last segment of the subpath, or the repo name when no subpath was given.
+- When `@ref` is omitted, tries `main` first and falls back to `master`.
+- Refuses to overwrite an existing skill directory — run `pasclaw skills remove <name>` first to reinstall.
+
+#### Install from ClawHub
+
+`pasclaw skills install clawhub:<slug>[@<version>]` talks to ClawHub (`https://clawhub.ai`), the slug-based registry picoclaw and nanobot standardised on:
+
+- `GET /api/v1/skills/<slug>` — fetches metadata, surfaces moderation flags, and resolves `latestVersion` when no `@<version>` is pinned.
+- `GET /api/v1/download?slug=<slug>&version=<version>` — pulls the zip, then runs it through the same `PasClaw.Skills.Zip` + `ParseSkillMD` validation pipeline as the GitHub install path.
+- Malware-flagged skills are refused; skills flagged as suspicious install with a warning.
+- Slugs are lowercase alphanumerics with `-` or `_`.
+- The `clawhub:` prefix is required. A bare slug-shaped name like `my-skill` still falls through to the legacy `config.json`-only record, so pre-Phase-3 install scripts keep working unchanged.
+
+`pasclaw skills search <query>` hits `/api/v1/search` and prints slug / version / display-name / summary rows.
 
 Subsequent phases will add `scripts/` (callable helpers) + `references/` (lazy-loaded context) runtime support.
 
