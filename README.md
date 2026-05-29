@@ -57,6 +57,10 @@ Environment variables:
 | `PASCLAW_TELEGRAM_TOKEN` | Default Telegram bot token for `pasclaw gateway --telegram`. |
 | `PASCLAW_LINE_TOKEN` | LINE Messaging API channel access token. Used by `pasclaw post line` and `pasclaw gateway --line`. |
 | `PASCLAW_LINE_SECRET` | LINE channel secret. Required by `pasclaw gateway --line` to verify `X-Line-Signature` on inbound events. |
+| `PASCLAW_WHATSAPP_TOKEN` | WhatsApp Cloud API system-user access token. Used by `pasclaw post whatsapp` and `pasclaw gateway --whatsapp`. |
+| `PASCLAW_WHATSAPP_PHONE_ID` | WhatsApp phone-number ID (the numeric ID, not the phone number itself). |
+| `PASCLAW_WHATSAPP_VERIFY_TOKEN` | User-chosen string used to verify Meta's `GET /webhooks/whatsapp` subscription handshake. |
+| `PASCLAW_WHATSAPP_APP_SECRET` | Meta App Secret used to validate `X-Hub-Signature-256` on inbound events. |
 | `NO_COLOR` | Disables ANSI color output. |
 
 Useful config commands:
@@ -95,7 +99,7 @@ Top-level commands are dispatched by `src/cmd/PasClaw.Cmd.Root.pas`:
 | `migrate` | Run data migrations for older versions. |
 | `skills` | List, install, or remove skill extensions. |
 | `model` | Show or change the default model. |
-| `post` | Send a one-shot message to a Discord, Slack, Microsoft Teams, generic, or LINE webhook target. |
+| `post` | Send a one-shot message to a Discord, Slack, Microsoft Teams, generic, LINE, or WhatsApp webhook target. |
 | `membench` | Benchmark the memory log subsystem. |
 | `update` | Check GitHub releases or self-update. |
 | `version` | Print version/build information. |
@@ -242,6 +246,7 @@ pasclaw gateway
 pasclaw gateway --addr 0.0.0.0 --port 8088
 pasclaw gateway --telegram --token <BOT_TOKEN>
 pasclaw gateway --line                              # also pass $PASCLAW_LINE_TOKEN + $PASCLAW_LINE_SECRET
+pasclaw gateway --whatsapp                          # also pass $PASCLAW_WHATSAPP_{TOKEN,PHONE_ID,VERIFY_TOKEN,APP_SECRET}
 pasclaw gateway --no-tools --no-mcp --no-hashline
 
 pasclaw serve
@@ -496,7 +501,7 @@ src/
   cmd/              CLI command units and root dispatcher
   pkg/
     agent/          Agent execution and prompts
-    channels/       Telegram, Discord, Slack, Teams, generic webhook, LINE
+    channels/       Telegram, Discord, Slack, Teams, generic webhook, LINE, WhatsApp
     cliui/          ANSI styling, banner, command help rendering
     component/      Shared components
     config/         Version constants and on-disk config model

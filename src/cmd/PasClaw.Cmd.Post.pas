@@ -34,17 +34,21 @@ uses
   PasClaw.Channels.Slack,
   PasClaw.Channels.Teams,
   PasClaw.Channels.Webhook,
-  PasClaw.Channels.LINE;
+  PasClaw.Channels.LINE,
+  PasClaw.Channels.WhatsApp;
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw post <discord|slack|teams|webhook|line> <target> "<content>"');
+  WriteLn('Usage: pasclaw post <discord|slack|teams|webhook|line|whatsapp> <target> "<content>"');
   WriteLn('  discord  <webhook-url> "<text>"');
   WriteLn('  slack    <webhook-url> "<text>"');
   WriteLn('  teams    <webhook-url> "<text>"');
   WriteLn('  webhook  <url> "<text>"           (auth via $PASCLAW_WEBHOOK_AUTH)');
   WriteLn('  line     <userId|groupId|roomId> "<text>"');
   WriteLn('                                    (token via $PASCLAW_LINE_TOKEN)');
+  WriteLn('  whatsapp <to-phone-number> "<text>"');
+  WriteLn('                                    (token via $PASCLAW_WHATSAPP_TOKEN,');
+  WriteLn('                                     phone-id via $PASCLAW_WHATSAPP_PHONE_ID)');
 end;
 
 function ReportResult(Success: Boolean; const ChannelName: string): Integer;
@@ -115,14 +119,37 @@ begin
   finally L.Free; end;
 end;
 
+function DoWhatsApp(const ToPhone, Content: string): Integer;
+var
+  W: TWhatsAppPush;
+  Token, PhoneId: string;
+begin
+  Token   := GetEnvironmentVariable('PASCLAW_WHATSAPP_TOKEN');
+  PhoneId := GetEnvironmentVariable('PASCLAW_WHATSAPP_PHONE_ID');
+  if Token = '' then
+  begin
+    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'whatsapp: set PASCLAW_WHATSAPP_TOKEN to a system-user access token');
+    Exit(1);
+  end;
+  if PhoneId = '' then
+  begin
+    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'whatsapp: set PASCLAW_WHATSAPP_PHONE_ID to your phone-number-id');
+    Exit(1);
+  end;
+  W := TWhatsAppPush.Create(Token, PhoneId);
+  try Result := ReportResult(W.Push(ToPhone, Content), 'whatsapp');
+  finally W.Free; end;
+end;
+
 function Cmd_Post_Run(const Argv: array of string): Integer;
 begin
   if Length(Argv) < 3 then begin Help; Exit(1); end;
   if      Argv[0] = 'discord' then Result := DoDiscord(Argv[1], Argv[2])
   else if Argv[0] = 'slack'   then Result := DoSlack  (Argv[1], Argv[2])
   else if Argv[0] = 'teams'   then Result := DoTeams  (Argv[1], Argv[2])
-  else if Argv[0] = 'webhook' then Result := DoWebhook(Argv[1], Argv[2])
-  else if Argv[0] = 'line'    then Result := DoLine   (Argv[1], Argv[2])
+  else if Argv[0] = 'webhook'  then Result := DoWebhook (Argv[1], Argv[2])
+  else if Argv[0] = 'line'     then Result := DoLine    (Argv[1], Argv[2])
+  else if Argv[0] = 'whatsapp' then Result := DoWhatsApp(Argv[1], Argv[2])
   else begin Help; Result := 1; end;
 end;
 
