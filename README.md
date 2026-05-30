@@ -63,6 +63,8 @@ Environment variables:
 | `PASCLAW_WHATSAPP_APP_SECRET` | Meta App Secret used to validate `X-Hub-Signature-256` on inbound events. |
 | `PASCLAW_BRAVE_API_KEY` | Brave Search API key for the `web_search` tool when `web_search.provider = brave`. |
 | `PASCLAW_TAVILY_API_KEY` | Tavily API key for the `web_search` tool when `web_search.provider = tavily`. |
+| `PASCLAW_SEARXNG_API_KEY` | Bearer token for protected SearXNG instances (most public ones don't need it). |
+| `PASCLAW_PERPLEXITY_API_KEY` | Perplexity API key for the `web_search` tool when `web_search.provider = perplexity`. |
 | `NO_COLOR` | Disables ANSI color output. |
 
 Useful config commands:
@@ -187,8 +189,10 @@ Provider is set under `web_search` in `~/.pasclaw/config.json`:
 | `duckduckgo` (default) | no | HTML scrape of `html.duckduckgo.com/html/` |
 | `brave` | yes — `$PASCLAW_BRAVE_API_KEY` overrides `api_key` | `api.search.brave.com/res/v1/web/search` |
 | `tavily` | yes — `$PASCLAW_TAVILY_API_KEY` overrides `api_key` | `api.tavily.com/search` |
+| `searxng` | no (most public instances); optional `$PASCLAW_SEARXNG_API_KEY` for protected ones | `<web_search.base_url>/search?format=json` |
+| `perplexity` | yes — `$PASCLAW_PERPLEXITY_API_KEY` overrides `api_key` | `api.perplexity.ai/chat/completions` (Sonar model — returns one synthesised answer plus citation URLs) |
 
-Env-var values win over the `api_key` field so secrets can stay out of `config.json`.
+Env-var values win over the `api_key` field so secrets can stay out of `config.json`. SearXNG additionally needs `web_search.base_url` set since every instance is self-hosted (e.g. `"base_url": "https://searx.be"`).
 
 ### Skills
 
@@ -549,7 +553,7 @@ src/
     memory/         Memory log storage
     platform/       Platform helpers
     providers/      Provider catalog and LLM HTTP clients
-    search/         Web-search providers (DuckDuckGo, Brave, Tavily) + HTML→text
+    search/         Web-search providers (DuckDuckGo, Brave, Tavily, SearXNG, Perplexity) + HTML→text
     skills/         Skill manifest loading and tool registration
     tokenizer/      Token counting helpers
     tools/          Built-in tool registry, filesystem, shell, and tool loop
