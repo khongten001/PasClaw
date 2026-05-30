@@ -16,13 +16,10 @@
   plus Indy's three. The Makefile spells them out.
 
   Build (Delphi):
-    drop the .dpr into a console project that mirrors PasClaw.dproj's
-    DCC_UnitSearchPath. The list lives in src/pasclaw/PasClaw.dproj
-    near the top of the file — copy-paste it into the sample's
-    project options Search Path, swap the leading `..\` for
-    `..\..\src\`, and the sample compiles. (A dedicated sample
-    .dproj is on the to-do list; until then the main project file
-    is the source of truth.)
+    cd samples/component-console
+    msbuild SampleConsole.dproj   # or open SampleConsole.dproj in RAD Studio
+    dcc32 SampleConsole.dpr       # cmdline only — dcc32.cfg in this dir
+                                  # carries the search paths
 
   Runtime: the agent inherits config from ~/.pasclaw/config.json,
   so run `pasclaw onboard` and `pasclaw auth login <provider>` once

@@ -10,9 +10,15 @@
     3. Call Run(prompt): string and let it raise EPasClawRun on
        failure instead of unpacking a Boolean + out-parameter.
 
-  Build:
+  Build (FPC):
     cd samples/component-console
     make simple
+
+  Build (Delphi):
+    cd samples/component-console
+    msbuild SampleSimple.dproj    # or open SampleSimple.dproj in RAD Studio
+    dcc32 SampleSimple.dpr        # cmdline only — dcc32.cfg in this dir
+                                  # carries the search paths
 
   Runtime: the agent inherits config from ~/.pasclaw/config.json,
   so run `pasclaw onboard` and `pasclaw auth login <provider>` once

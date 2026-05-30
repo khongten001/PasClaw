@@ -22,9 +22,15 @@
   signal-handling strategy and don't want a library to fight them
   for it.
 
-  Build:
+  Build (FPC):
     cd samples/component-console
     make server
+
+  Build (Delphi):
+    cd samples/component-console
+    msbuild SampleServer.dproj    # or open SampleServer.dproj in RAD Studio
+    dcc32 SampleServer.dpr        # cmdline only — dcc32.cfg in this dir
+                                  # carries the search paths
 
   Runtime: the server inherits config from ~/.pasclaw/config.json,
   so run `pasclaw onboard` and `pasclaw auth login <provider>` once
