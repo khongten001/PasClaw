@@ -45,6 +45,7 @@ type
     destructor  Destroy; override;
     class function Parse(const S: string): TJsonObject;
     function Has(const Key: string): Boolean;
+    function Keys: TStringList;   { caller frees; one entry per top-level key }
     function GetStr (const Key: string; const Default: string = ''): string;
     function GetInt (const Key: string; Default: Int64 = 0): Int64;
     function GetBool(const Key: string; Default: Boolean = False): Boolean;
@@ -182,6 +183,17 @@ end;
 function TJsonObject.Has(const Key: string): Boolean;
 begin
   Result := fpjson.TJSONObject(FBacking).IndexOfName(Key) >= 0;
+end;
+
+function TJsonObject.Keys: TStringList;
+var
+  Obj: fpjson.TJSONObject;
+  i: Integer;
+begin
+  Result := TStringList.Create;
+  Obj := fpjson.TJSONObject(FBacking);
+  for i := 0 to Obj.Count - 1 do
+    Result.Add(Obj.Names[i]);
 end;
 
 function TJsonObject.GetStr(const Key: string; const Default: string): string;
@@ -505,6 +517,22 @@ end;
 function TJsonObject.Has(const Key: string): Boolean;
 begin
   Result := System.JSON.TJSONObject(FBacking).GetValue(Key) <> nil;
+end;
+
+function TJsonObject.Keys: TStringList;
+var
+  Obj: System.JSON.TJSONObject;
+  i: Integer;
+  Pair: System.JSON.TJSONPair;
+begin
+  Result := TStringList.Create;
+  Obj := System.JSON.TJSONObject(FBacking);
+  for i := 0 to Obj.Count - 1 do
+  begin
+    Pair := Obj.Pairs[i];
+    if (Pair <> nil) and (Pair.JsonString <> nil) then
+      Result.Add(Pair.JsonString.Value);
+  end;
 end;
 
 function TJsonObject.GetStr(const Key: string; const Default: string): string;

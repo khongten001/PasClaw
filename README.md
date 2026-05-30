@@ -66,6 +66,13 @@ Environment variables:
 | `PASCLAW_SEARXNG_API_KEY` | Bearer token for protected SearXNG instances (most public ones don't need it). |
 | `PASCLAW_PERPLEXITY_API_KEY` | Perplexity API key for the `web_search` tool when `web_search.provider = perplexity`. |
 | `PASCLAW_GEMINI_API_KEY` | Google AI Studio key for the `web_search` tool when `web_search.provider = gemini`. `PASCLAW_GOOGLE_API_KEY` works too. |
+| `PASCLAW_MATRIX_HOMESERVER` | Matrix homeserver base URL (e.g. `https://matrix.org`) for `pasclaw gateway --matrix`. |
+| `PASCLAW_MATRIX_TOKEN` | Matrix access token (provisioned out-of-band via `/login` or the homeserver admin UI). |
+| `PASCLAW_IRC_SERVER` | IRC server hostname (e.g. `irc.libera.chat`) for `pasclaw gateway --irc`. |
+| `PASCLAW_IRC_PORT` | IRC server port (default `6667`). |
+| `PASCLAW_IRC_NICK` | IRC nickname the bot connects with. |
+| `PASCLAW_IRC_CHANNEL` | IRC channel to join on connect (must start with `#`). |
+| `PASCLAW_IRC_PASSWORD` | Optional NickServ / server password. |
 | `NO_COLOR` | Disables ANSI color output. |
 
 Useful config commands:
@@ -286,6 +293,8 @@ pasclaw gateway --addr 0.0.0.0 --port 8088
 pasclaw gateway --telegram --token <BOT_TOKEN>
 pasclaw gateway --line                              # also pass $PASCLAW_LINE_TOKEN + $PASCLAW_LINE_SECRET
 pasclaw gateway --whatsapp                          # also pass $PASCLAW_WHATSAPP_{TOKEN,PHONE_ID,VERIFY_TOKEN,APP_SECRET}
+pasclaw gateway --matrix                            # also pass $PASCLAW_MATRIX_HOMESERVER + $PASCLAW_MATRIX_TOKEN
+pasclaw gateway --irc                               # also pass $PASCLAW_IRC_{SERVER,NICK,CHANNEL}
 pasclaw gateway --no-tools --no-mcp --no-hashline
 
 pasclaw serve
@@ -542,7 +551,7 @@ src/
   cmd/              CLI command units and root dispatcher
   pkg/
     agent/          Agent execution and prompts
-    channels/       Telegram, Discord, Slack, Teams, generic webhook, LINE, WhatsApp
+    channels/       Telegram, Discord, Slack, Teams, generic webhook, LINE, WhatsApp, Matrix, IRC
     cliui/          ANSI styling, banner, command help rendering
     component/      Shared components
     config/         Version constants and on-disk config model
