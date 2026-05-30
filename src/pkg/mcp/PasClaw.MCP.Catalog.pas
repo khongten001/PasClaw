@@ -77,7 +77,7 @@ begin
   SetLength(Result, 5);
 
   Result[0].Name    := 'replicate';
-  Result[0].URL     := 'https://mcp.replicate.com';
+  Result[0].URL     := 'https://mcp.replicate.com/mcp';
   Result[0].EnvVar  := 'REPLICATE_API_TOKEN';
   Result[0].AuthFmt := 'Bearer %s';
   Result[0].Desc    := 'Run AI models (text, image, video, audio) on Replicate.';
