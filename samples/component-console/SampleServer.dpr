@@ -32,13 +32,20 @@
     dcc32 SampleServer.dpr        # cmdline only — dcc32.cfg in this dir
                                   # carries the search paths
 
-  Runtime: the server inherits config from ~/.pasclaw/config.json,
-  so run `pasclaw onboard` and `pasclaw auth login <provider>` once
-  first. Then test from another shell:
+  Runtime:
+    export ANTHROPIC_API_KEY=sk-ant-...
+    ./build/SampleServer
+
+  Then test from another shell:
 
     curl http://localhost:8088/v1/chat/completions \
       -H 'content-type: application/json' \
       -d '{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hi"}]}'
+
+  SetProvider is configured in code below — no ~/.pasclaw/config.json
+  or `pasclaw onboard` required. Swap to "openai" / "gemini" / "groq"
+  / "ollama" via the Kind argument; see PasClaw.Providers.Catalog
+  for the full list.
 *)
 program SampleServer;
 
@@ -59,9 +66,18 @@ uses
 
 var
   Server: TPasClawServer;
+  ApiKey: string;
 begin
+  ApiKey := GetEnvironmentVariable('ANTHROPIC_API_KEY');
+  if ApiKey = '' then
+  begin
+    WriteLn('ANTHROPIC_API_KEY not set — export it and re-run.');
+    Halt(2);
+  end;
+
   Server := TPasClawServer.Create('0.0.0.0', 8088);
   try
+    Server.SetProvider('anthropic', ApiKey);
     Server.RegisterTool(TWebSearchTool.Create);
     Server.RegisterTool(TWebFetchTool.Create);
     Server.RegisterTool(TFileSystemTool.Create);

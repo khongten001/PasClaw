@@ -5,9 +5,13 @@
   property-driven API). This file shows the code-friendly API:
 
     1. Pass the model name directly to Create.
-    2. Register tools as class instances rather than as records
+    2. Configure the provider in code with SetProvider — no
+       ~/.pasclaw/config.json or `pasclaw onboard` required.
+       The API key is read from an env var so the binary doesn't
+       carry secrets.
+    3. Register tools as class instances rather than as records
        full of function pointers.
-    3. Call Run(prompt): string and let it raise EPasClawRun on
+    4. Call Run(prompt): string and let it raise EPasClawRun on
        failure instead of unpacking a Boolean + out-parameter.
 
   Build (FPC):
@@ -20,10 +24,17 @@
     dcc32 SampleSimple.dpr        # cmdline only — dcc32.cfg in this dir
                                   # carries the search paths
 
-  Runtime: the agent inherits config from ~/.pasclaw/config.json,
-  so run `pasclaw onboard` and `pasclaw auth login <provider>` once
-  first. PASCLAW_AUTH_PROVIDER / PASCLAW_AUTH_TOKEN env vars also
-  work if you'd rather not write to disk.
+  Runtime:
+    export ANTHROPIC_API_KEY=sk-ant-...
+    ./build/SampleSimple
+
+  Switch providers by changing the SetProvider() Kind argument —
+  "openai", "gemini", "groq", "ollama" are all in
+  PasClaw.Providers.Catalog. Each has its own default base URL and
+  expected env var name; the catalog one-liner below covers the
+  Anthropic case end-to-end. If ~/.pasclaw/config.json IS present,
+  the SetProvider call overrides whatever provider entry it had
+  for "anthropic".
 *)
 program SampleSimple;
 
@@ -38,9 +49,18 @@ uses
 
 var
   Agent: TPasClawAgent;
+  ApiKey: string;
 begin
+  ApiKey := GetEnvironmentVariable('ANTHROPIC_API_KEY');
+  if ApiKey = '' then
+  begin
+    WriteLn('ANTHROPIC_API_KEY not set — export it and re-run.');
+    Halt(2);
+  end;
+
   Agent := TPasClawAgent.Create('claude-opus-4-7');
   try
+    Agent.SetProvider('anthropic', ApiKey);
     Agent.RegisterTool(TWebSearchTool.Create);
     Agent.RegisterTool(TWebFetchTool.Create);
     Agent.RegisterTool(TFileSystemTool.Create);

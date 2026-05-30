@@ -96,6 +96,12 @@ type
                                     the registry early without skipping
                                     the lazy built-in install on first
                                     Chat. }
+    FProviderOverride:    TProviderConfig;  { populated by SetProvider, then
+                                              folded into FConfig.Providers
+                                              when EnsureConfig runs (if before
+                                              first Chat) or immediately (if
+                                              FConfig is already loaded). }
+    FHasProviderOverride: Boolean;
     FOnText:         TPasClawTextEvent;
     FOnToolCall:     TPasClawToolEvent;
     FOnToolResult:   TPasClawToolResultEvent;
@@ -129,6 +135,30 @@ type
       RegisterTool ensures it exists. }
     procedure RegisterTool(ATool: TPasClawTool);
 
+    { Code-driven provider configuration. Builds a TProviderConfig
+      in-memory from a catalog Kind ("anthropic", "openai", "gemini",
+      etc. — see PasClaw.Providers.Catalog) plus the API key the
+      caller supplies (typically read from an env var). The catalog
+      fills in DefaultBase and DefaultModel; Model/APIBase overloads
+      override either default.
+
+      Effect:
+        * FConfig.Providers gets the new entry appended, or any
+          existing entry with the same Kind replaced.
+        * FConfig.DefaultProvider := Kind.
+        * FConfig.DefaultModel    := (Model or catalog default).
+        * Any cached FProvider is released so the next Chat/Run
+          rebuilds with the new credentials.
+
+      Lets an embedded agent run without a populated
+      ~/.pasclaw/config.json — the binary ships with its own
+      provider config and reads the API key from wherever the
+      embedder chooses. Raises EPasClawRun if Kind isn't in the
+      catalog. }
+    procedure SetProvider(const Kind, APIKey: string); overload;
+    procedure SetProvider(const Kind, APIKey, Model: string); overload;
+    procedure SetProvider(const Kind, APIKey, Model, APIBase: string); overload;
+
     function Chat(const Prompt: string; out Reply, ErrMsg: string): Boolean;
     function ChatHistory(const History: array of TMessage;
                          out Reply, ErrMsg: string): Boolean;
@@ -157,6 +187,8 @@ type
     FRegistry:       TToolRegistry;
     FMCPClients:     TMCPClientList;
     FOwnedTools:     TObjectList;     { TPasClawTool instances handed in via RegisterTool }
+    FProviderOverride:    TProviderConfig;  { same purpose as TPasClawAgent's }
+    FHasProviderOverride: Boolean;
     FServer:         TGatewayServer;
     FThread:         TThread;
     FStopSignal:     TEvent;          { lives as long as TPasClawServer itself; WaitForStop
@@ -205,6 +237,18 @@ type
       EnableTools := False the server still installs OOP tools the
       caller hands us, so a custom-only registry is achievable. }
     procedure RegisterTool(ATool: TPasClawTool);
+
+    { Code-driven provider configuration. Same shape as
+      TPasClawAgent.SetProvider — see that method's header for the
+      contract. Must be called BEFORE Start; the override is applied
+      after LoadConfig in Start. Calling after Start is a no-op
+      because TGatewayServer was already constructed with the
+      previous provider; Stop / SetProvider / Start cleanly restarts
+      with the new one. }
+    procedure SetProvider(const Kind, APIKey: string); overload;
+    procedure SetProvider(const Kind, APIKey, Model: string); overload;
+    procedure SetProvider(const Kind, APIKey, Model, APIBase: string); overload;
+
     property Server: TGatewayServer read FServer;
     property LastError: string read FLastError;
   published
@@ -228,6 +272,7 @@ implementation
 
 uses
   PasClaw.Cmd.Root,
+  PasClaw.Providers.Catalog,
   PasClaw.Providers.Factory,
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
@@ -238,6 +283,53 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
   PasClaw.Tools.ToolLoop;
+
+{ ------------------------------ helpers ------------------------------ }
+
+{ Build a TProviderConfig for catalog Kind, filling APIBase and Model
+  from the catalog defaults when the caller didn't override them.
+  Raises EPasClawRun if Kind isn't in the catalog. }
+function BuildProviderOverride(const Kind, APIKey, Model, APIBase: string): TProviderConfig;
+var
+  Spec: TProviderSpec;
+begin
+  if not LookupProvider(Kind, Spec) then
+    raise EPasClawRun.CreateFmt(
+      'unknown provider kind "%s" — see PasClaw.Providers.Catalog ' +
+      'for the canonical list (anthropic / openai / gemini / ...)',
+      [Kind]);
+  Result.Name    := Kind;
+  Result.Kind    := Kind;
+  Result.APIBase := APIBase;
+  if Result.APIBase = '' then Result.APIBase := Spec.DefaultBase;
+  Result.APIKey  := APIKey;
+  Result.Model   := Model;
+  if Result.Model = '' then Result.Model := Spec.DefaultModel;
+end;
+
+{ Fold the override into Cfg: replace any existing Provider with the
+  same Kind, or append; promote to default. Used by both
+  TPasClawAgent.EnsureConfig and TPasClawServer.Start. }
+procedure ApplyProviderOverride(var Cfg: TConfig; const Override: TProviderConfig);
+var
+  i, Idx: Integer;
+begin
+  Idx := -1;
+  for i := 0 to High(Cfg.Providers) do
+    if SameText(Cfg.Providers[i].Kind, Override.Kind) then
+    begin
+      Idx := i;
+      Break;
+    end;
+  if Idx < 0 then
+  begin
+    SetLength(Cfg.Providers, Length(Cfg.Providers) + 1);
+    Idx := High(Cfg.Providers);
+  end;
+  Cfg.Providers[Idx] := Override;
+  Cfg.DefaultProvider := Override.Kind;
+  if Override.Model <> '' then Cfg.DefaultModel := Override.Model;
+end;
 
 var
   { Tracks the live instance of each component class. Set in the
@@ -291,6 +383,12 @@ begin
       The component sits next to the CLI in one process so this is
       the same global state Cmd.Agent / Cmd.Serve seed at startup. }
     ConfigureSandbox(FConfig.Sandbox, '');
+    { Fold in any provider configured in code via SetProvider. Has
+      to land AFTER LoadConfig so a code-supplied entry wins over
+      whatever ~/.pasclaw/config.json had, and BEFORE
+      EnsureProvider runs so NewProviderFromConfig sees it. }
+    if FHasProviderOverride then
+      ApplyProviderOverride(FConfig, FProviderOverride);
   end;
 end;
 
@@ -370,6 +468,37 @@ begin
     FRegistry := TToolRegistry.Create;
   FOwnedTools.Add(ATool);
   ATool.Install(FRegistry);
+end;
+
+procedure TPasClawAgent.SetProvider(const Kind, APIKey: string);
+begin
+  SetProvider(Kind, APIKey, '', '');
+end;
+
+procedure TPasClawAgent.SetProvider(const Kind, APIKey, Model: string);
+begin
+  SetProvider(Kind, APIKey, Model, '');
+end;
+
+procedure TPasClawAgent.SetProvider(const Kind, APIKey, Model, APIBase: string);
+begin
+  FProviderOverride    := BuildProviderOverride(Kind, APIKey, Model, APIBase);
+  FHasProviderOverride := True;
+  { If FConfig is already loaded (later SetProvider calls after a
+    first Chat), apply now so subsequent Chats see the change.
+    Otherwise EnsureConfig will pick it up when it first loads. }
+  if FConfig <> nil then
+    ApplyProviderOverride(FConfig, FProviderOverride);
+  { Drop any cached provider so EnsureProvider rebuilds with the
+    new credentials on the next Chat. }
+  FProvider := nil;
+  { If the caller didn't pick a model on TPasClawAgent, mirror the
+    catalog default into FModel so EnsureProvider's model lookup
+    sees it. ChatHistory falls back to FConfig.DefaultModel when
+    FModel is empty so this is technically redundant, but keeping
+    the two in sync matches what a user typing it manually expects. }
+  if (FModel = '') and (FProviderOverride.Model <> '') then
+    FModel := FProviderOverride.Model;
 end;
 
 procedure TPasClawAgent.ForwardText(const S: string);
@@ -600,6 +729,11 @@ begin
 
   FConfig := LoadConfig;
   ConfigureSandbox(FConfig.Sandbox, '');
+  { Fold in the code-supplied provider (from SetProvider) AFTER
+    LoadConfig and BEFORE the NewProviderFromConfig block below,
+    so the synthetic entry is the one the gateway boots with. }
+  if FHasProviderOverride then
+    ApplyProviderOverride(FConfig, FProviderOverride);
   if FModel <> '' then
     FConfig.DefaultModel := FModel;
 
@@ -739,6 +873,30 @@ begin
   FOwnedTools.Add(ATool);
   if FRegistry <> nil then
     ATool.Install(FRegistry);
+end;
+
+procedure TPasClawServer.SetProvider(const Kind, APIKey: string);
+begin
+  SetProvider(Kind, APIKey, '', '');
+end;
+
+procedure TPasClawServer.SetProvider(const Kind, APIKey, Model: string);
+begin
+  SetProvider(Kind, APIKey, Model, '');
+end;
+
+procedure TPasClawServer.SetProvider(const Kind, APIKey, Model, APIBase: string);
+begin
+  FProviderOverride    := BuildProviderOverride(Kind, APIKey, Model, APIBase);
+  FHasProviderOverride := True;
+  { Mirror the catalog default into FModel so Start's
+    `if FModel <> '' then FConfig.DefaultModel := FModel` picks
+    it up. The Start path also calls ApplyProviderOverride which
+    re-applies the same DefaultModel, so the assignment here is
+    belt-and-suspenders for the case where the embedder later
+    sets FModel manually before Start. }
+  if (FModel = '') and (FProviderOverride.Model <> '') then
+    FModel := FProviderOverride.Model;
 end;
 
 { ============================== Registration ============================== }
