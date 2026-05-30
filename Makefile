@@ -44,6 +44,7 @@ UNIT_DIRS = \
 	src/pkg/gateway \
 	src/pkg/channels \
 	src/pkg/crypto \
+	src/pkg/net \
 	src/pkg/search \
 	src/pkg/cron \
 	src/pkg/skills \

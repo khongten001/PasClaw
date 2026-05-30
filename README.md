@@ -514,6 +514,7 @@ PasClaw's filesystem and shell tools are guarded by an opt-in workspace boundary
 | `allow_write_paths` | `[]` | Same for writes. |
 | `custom_shell_deny` | `[]` | Extra substrings appended to the built-in shell denylist. Case-insensitive. |
 | `shell_deny_enabled` | `true` | Master switch for the shell denylist. Set `false` only for trusted automation — doing so re-enables `sudo`, `rm`, `dd`, `mkfs`, `$( )`, `curl \| sh`, `format c:`, PowerShell `-EncodedCommand`, etc. |
+| `block_private_networks` | `true` | When `true`, `web_fetch` refuses URLs whose host resolves to a private / loopback / link-local IPv4 address (RFC1918, `127.0.0.0/8`, `169.254.0.0/16` — including the cloud-metadata endpoint `169.254.169.254`, CGNAT, IETF-reserved). Initial URL and every redirect hop are both checked. Flip to `false` only when you actually need the model to reach private addresses. See `PasClaw.Net.SSRF` for the full blocklist. |
 
 **Cross-target regex**: `PasClaw.Tools.Regex` wraps FPC's `RegExpr` and Delphi's `System.RegularExpressions` behind one call, so `allow_*_paths` patterns are full PCRE on either toolchain. Invalid patterns return False (the sandbox falls through to the workspace boundary) rather than crashing.
 
@@ -553,6 +554,7 @@ src/
     mcp/            MCP stdio/HTTP clients and tool bridge
     membench/       Memory benchmark helpers
     memory/         Memory log storage
+    net/            SSRF guard (IPv4 blocklist + DNS re-resolution)
     platform/       Platform helpers
     providers/      Provider catalog and LLM HTTP clients
     search/         Web-search providers (DuckDuckGo, Brave, Tavily, SearXNG, Perplexity, Gemini) + HTML→text

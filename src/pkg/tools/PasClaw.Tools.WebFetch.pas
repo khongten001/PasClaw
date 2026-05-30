@@ -47,7 +47,38 @@ uses
   IdHTTP, IdSSLOpenSSL,
   PasClaw.JSON,
   PasClaw.Logger,
-  PasClaw.Search.HTMLText;
+  PasClaw.Search.HTMLText,
+  PasClaw.Net.SSRF,
+  PasClaw.Tools.Sandbox;
+
+type
+  (* Indy's OnRedirect callback is `of object`; this tiny holder gives
+     us the method to assign without leaking helper state outside. The
+     redirect handler runs URLIsLocal on every 3xx target so a
+     public→private redirect can't smuggle a request past the
+     pre-check. Raising aborts the redirect chain — the outer
+     try/except in Tool_WebFetch turns it into the same "SSRF
+     blocked" surface as a direct hit. *)
+  TWebFetchRedirectGuard = class
+    procedure OnRedirect(Sender: TObject; var Dest: string;
+                          var NumRedirect: Integer;
+                          var Handled: Boolean;
+                          var VMethod: TIdHTTPMethod);
+  end;
+
+procedure TWebFetchRedirectGuard.OnRedirect(Sender: TObject; var Dest: string;
+                                              var NumRedirect: Integer;
+                                              var Handled: Boolean;
+                                              var VMethod: TIdHTTPMethod);
+var
+  Reason: string;
+begin
+  if not NetworkBlockingActive then Exit;
+  if URLIsLocal(Dest, Reason) then
+    raise Exception.CreateFmt('SSRF: redirect to %s refused (%s; ' +
+      'flip sandbox.block_private_networks=false in config.json to allow)',
+      [Dest, Reason]);
+end;
 
 const
   DEFAULT_MAX_CHARS = 50000;
@@ -105,6 +136,7 @@ var
   MaxChars: Integer;
   HTTP: TIdHTTP;
   SSLHandler: TIdSSLIOHandlerSocketOpenSSL;
+  RedirectGuard: TWebFetchRedirectGuard;
   Body: string;
   ContentType: string;
 begin
@@ -126,7 +158,21 @@ begin
   if MaxChars < 100           then MaxChars := 100;
   if MaxChars > HARD_MAX_CHARS then MaxChars := HARD_MAX_CHARS;
 
+  { SSRF pre-check on the initial URL. The redirect handler covers
+    subsequent hops; both layers must pass for the request to land. }
+  if NetworkBlockingActive then
+  begin
+    if URLIsLocal(URL, ErrMsg) then
+    begin
+      ErrMsg := 'web_fetch: SSRF: ' + URL + ' refused (' + ErrMsg +
+        '; flip sandbox.block_private_networks=false in config.json to allow)';
+      Exit;
+    end;
+    ErrMsg := '';
+  end;
+
   HTTP := TIdHTTP.Create(nil);
+  RedirectGuard := TWebFetchRedirectGuard.Create;
   SSLHandler := nil;
   try
     HTTP.HandleRedirects   := True;
@@ -135,6 +181,7 @@ begin
     HTTP.ReadTimeout       := 30000;
     HTTP.Request.UserAgent := 'Mozilla/5.0 (PasClaw web_fetch)';
     HTTP.Request.Accept    := 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5';
+    HTTP.OnRedirect        := RedirectGuard.OnRedirect;
 
     if LowerStartsWith(URL, 'https://') then
     begin
@@ -171,6 +218,7 @@ begin
     end;
   finally
     HTTP.Free;
+    RedirectGuard.Free;
     if SSLHandler <> nil then SSLHandler.Free;
   end;
 
