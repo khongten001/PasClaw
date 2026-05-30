@@ -113,6 +113,7 @@ uses
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
+  PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.WebUI;
@@ -436,6 +437,8 @@ begin
   LoopCfg.OnText        := nil;
   LoopCfg.OnToolCall    := nil;
   LoopCfg.OnToolResult  := nil;
+  LoopCfg.CompactEnabled := True;
+  LoopCfg.CompactOpts    := DefaultCompactOptions;
 
   if not RunToolLoop(LoopCfg, Msgs, Loop) then
   begin
@@ -974,6 +977,8 @@ begin
     LoopCfg.OnText        := nil;
     LoopCfg.OnToolCall    := nil;
     LoopCfg.OnToolResult  := nil;
+    LoopCfg.CompactEnabled := True;
+    LoopCfg.CompactOpts    := DefaultCompactOptions;
 
     CompId := GenChatCompletionId;
 

@@ -15,7 +15,8 @@ uses
   SysUtils, Classes,
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
-  PasClaw.Tools.Registry;
+  PasClaw.Tools.Registry,
+  PasClaw.Agent.Compact;
 
 type
   TToolLoopConfig = record
@@ -27,6 +28,15 @@ type
     OnText:        procedure(const S: string) of object;   { streaming-ish stdout }
     OnToolCall:    procedure(const Name, ArgsJSON: string) of object;
     OnToolResult:  procedure(const Name, ResultText, Err: string) of object;
+    (* Compaction: when the running history exceeds Compact.ThresholdTokens,
+       slice off the older portion, summarise it via Provider.Chat, and
+       replace it with a single system message before the next round.
+       CompactEnabled gates the whole thing — default off; the
+       command-layer enables it from Cfg.Compaction. CompactOpts is the
+       full options struct (threshold, recent-turn count, summary budget,
+       and the OnBefore memory-flush hook). *)
+    CompactEnabled: Boolean;
+    CompactOpts:    TCompactOptions;
   end;
 
   TToolLoopResult = record
@@ -196,6 +206,16 @@ begin
   begin
     Inc(Iter);
     LogDebug('toolloop iteration %d / %d', [Iter, Cfg.MaxIterations]);
+
+    { Pre-call compaction. NeedsCompact is a cheap token estimate;
+      only when it trips do we pay for a summariser round. The new
+      history wholesale replaces Hist — last KeepRecentTurns are
+      preserved verbatim. CompactMessages logs warn and returns
+      verbatim on failure, so a broken summariser can never wipe
+      live context. }
+    if Cfg.CompactEnabled and
+       NeedsCompact(Hist, Cfg.CompactOpts.ThresholdTokens) then
+      Hist := CompactMessages(Cfg.Provider, Cfg.Model, Hist, Cfg.CompactOpts);
 
     Resp := Cfg.Provider.Chat(Hist, Tools, Cfg.Model, Cfg.Options);
     Loop.LastResp := Resp;

@@ -31,6 +31,7 @@ uses
   PasClaw.Tools.WebSearch,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.ToolLoop,
+  PasClaw.Agent.Compact,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
@@ -173,6 +174,14 @@ begin
   Result.OnText        := nil;
   Result.OnToolCall    := Handlers.OnToolCall;
   Result.OnToolResult  := Handlers.OnToolResult;
+  { Conversation-history compaction: on by default with picoclaw-ish
+    defaults (80K-token threshold, last 8 turns preserved). The tool
+    loop only pays the cost of a summariser round when the running
+    history actually trips the threshold, so short conversations
+    are unaffected. Channels that thread their own RunToolLoop
+    config can opt in the same way. }
+  Result.CompactEnabled := True;
+  Result.CompactOpts    := DefaultCompactOptions;
 end;
 
 procedure RunSingleTurn(const Cfg: TConfig; const A: TAgentArgs; const Prompt: string);
