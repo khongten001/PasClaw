@@ -27,6 +27,21 @@
 # The first build needs Indy vendored under ../../vendor/Indy; the
 # top-level Makefile's `make get-indy` target handles that. Run it
 # once from the repository root before building the sample.
+#
+# Delphi / RAD Studio users have three project files alongside the
+# .dpr sources:
+#
+#   SampleConsole.dproj   open in RAD Studio or build with msbuild
+#   SampleSimple.dproj
+#   SampleServer.dproj
+#
+# Each one carries the same DCC_UnitSearchPath as the main pasclaw
+# binary, re-rooted at ..\..\src\. The dcc32.cfg / dcc64.cfg files
+# in this directory carry the same paths for cmdline-only builds
+# (dcc32 / dcc64 auto-load *.cfg from the current dir).
+#
+# Indy comes from RAD Studio's bundled packages — no vendoring needed
+# on Delphi; this is the same pattern src/pasclaw/PasClaw.dproj uses.
 
 ROOT     := ../..
 FPC      ?= fpc
