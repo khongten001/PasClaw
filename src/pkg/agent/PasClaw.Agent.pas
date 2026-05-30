@@ -582,6 +582,7 @@ begin
   Cfg.Registry      := FRegistry;
   Cfg.Model         := ModelName;
   Cfg.MaxIterations := FMaxIterations;
+  Cfg.Parallel := True;
   Cfg.Options       := DefaultChatOptions;
   { Derive ToolsEnabled from the registry we are about to hand to
     RunToolLoop, NOT from FUseTools. EnsureRegistry caches FRegistry

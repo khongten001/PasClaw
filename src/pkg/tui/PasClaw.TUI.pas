@@ -237,6 +237,7 @@ begin
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
   Cfg.MaxIterations := 6;
+  Cfg.Parallel := True;
   Cfg.Options       := DefaultChatOptions;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
@@ -422,6 +423,7 @@ begin
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
   Cfg.MaxIterations := 6;
+  Cfg.Parallel := True;
   Cfg.Options       := DefaultChatOptions;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;

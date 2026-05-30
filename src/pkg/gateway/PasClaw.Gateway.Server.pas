@@ -985,6 +985,7 @@ begin
   LoopCfg.Registry      := FRegistry;
   LoopCfg.Model         := FCfg.DefaultModel;
   LoopCfg.MaxIterations := 8;
+  LoopCfg.Parallel := True;
   LoopCfg.Options       := DefaultChatOptions;
   LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
   LoopCfg.OnText        := nil;
@@ -1512,6 +1513,7 @@ begin
     LoopCfg.Registry      := FRegistry;
     LoopCfg.Model         := ReqModel;
     LoopCfg.MaxIterations := FMaxIter;
+    LoopCfg.Parallel := True;
     LoopCfg.Options       := DefaultChatOptions;
     { Inject the composed PasClaw system prompt — but only if the client
       didn't already supply one of their own. Third-party tooling calling
@@ -3000,6 +3002,7 @@ begin
       LoopCfg.Registry      := FRegistry;
       LoopCfg.Model         := ReqModel;
       LoopCfg.MaxIterations := FMaxIter;
+      LoopCfg.Parallel := True;
       LoopCfg.Options       := DefaultChatOptions;
       if not HasSystemMessage(Msgs) then
         LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
