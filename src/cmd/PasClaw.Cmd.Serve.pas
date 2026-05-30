@@ -40,6 +40,8 @@ uses
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
   PasClaw.Tools.Memory,
+  PasClaw.Tools.WebSearch,
+  PasClaw.Tools.WebFetch,
   PasClaw.Tools.Sandbox,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
@@ -118,6 +120,8 @@ begin
       RegisterFSTools(Reg, not Args.NoHashline);
       RegisterShellTool(Reg);
       RegisterMemoryTools(Reg);
+      RegisterWebSearchTool(Reg);
+      RegisterWebFetchTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       if Length(Skills) > 0 then

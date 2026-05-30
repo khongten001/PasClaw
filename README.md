@@ -61,6 +61,8 @@ Environment variables:
 | `PASCLAW_WHATSAPP_PHONE_ID` | WhatsApp phone-number ID (the numeric ID, not the phone number itself). |
 | `PASCLAW_WHATSAPP_VERIFY_TOKEN` | User-chosen string used to verify Meta's `GET /webhooks/whatsapp` subscription handshake. |
 | `PASCLAW_WHATSAPP_APP_SECRET` | Meta App Secret used to validate `X-Hub-Signature-256` on inbound events. |
+| `PASCLAW_BRAVE_API_KEY` | Brave Search API key for the `web_search` tool when `web_search.provider = brave`. |
+| `PASCLAW_TAVILY_API_KEY` | Tavily API key for the `web_search` tool when `web_search.provider = tavily`. |
 | `NO_COLOR` | Disables ANSI color output. |
 
 Useful config commands:
@@ -160,6 +162,33 @@ pasclaw cron remove daily-summary
 ```
 
 Each cron entry persists its last successful fire time to `$PASCLAW_HOME/workspace/cron/state.json` so a missed slot (gateway down, laptop closed) fires exactly once on the next tick instead of either silently skipping or double-firing. Skill output is appended to `workspace/memory/<today>.md` for the model to recall on subsequent turns, and — if `--channel <kind>:<target>` was set — posted to the configured channel. Channel kinds: `discord`, `slack`, `teams`, `webhook` (URL is the target), `line` (target is userId, token from `$PASCLAW_LINE_TOKEN`), `whatsapp` (target is phone number, credentials from `$PASCLAW_WHATSAPP_TOKEN` + `$PASCLAW_WHATSAPP_PHONE_ID`).
+
+### Web search
+
+Two tools, both registered automatically alongside the filesystem and shell tools:
+
+- **`web_search(query, k?)`** — returns up to k results as title + URL + snippet. Dispatches to the configured provider; defaults to DuckDuckGo when nothing is set.
+- **`web_fetch(url, max_chars?)`** — fetches an `http://` or `https://` URL and returns the response body as readable plain text (HTML tags stripped, entities decoded, whitespace collapsed, capped at 50 KB by default).
+
+Provider is set under `web_search` in `~/.pasclaw/config.json`:
+
+```json
+{
+  "web_search": {
+    "provider":    "brave",
+    "api_key":     "",
+    "max_results": 5
+  }
+}
+```
+
+| Provider | API key needed? | Source |
+|---|---|---|
+| `duckduckgo` (default) | no | HTML scrape of `html.duckduckgo.com/html/` |
+| `brave` | yes — `$PASCLAW_BRAVE_API_KEY` overrides `api_key` | `api.search.brave.com/res/v1/web/search` |
+| `tavily` | yes — `$PASCLAW_TAVILY_API_KEY` overrides `api_key` | `api.tavily.com/search` |
+
+Env-var values win over the `api_key` field so secrets can stay out of `config.json`.
 
 ### Skills
 
@@ -319,7 +348,8 @@ argument, followed by a short result summary on the next line:
 ```
 
 Known tools (`fs_read`, `fs_write`, `fs_list`, `fs_grep`,
-`fs_edit_hashline`, `shell_exec`) surface their most meaningful argument;
+`fs_edit_hashline`, `shell_exec`, `memory_search`, `web_search`, `web_fetch`)
+surface their most meaningful argument;
 MCP and other tools fall back to a compact one-line dump of the raw
 arguments. The full argument and result text also go to the SSE comment
 lines (`: tool_call ...` / `: tool_result ...`) for consumers that log
@@ -519,6 +549,7 @@ src/
     memory/         Memory log storage
     platform/       Platform helpers
     providers/      Provider catalog and LLM HTTP clients
+    search/         Web-search providers (DuckDuckGo, Brave, Tavily) + HTML→text
     skills/         Skill manifest loading and tool registration
     tokenizer/      Token counting helpers
     tools/          Built-in tool registry, filesystem, shell, and tool loop
