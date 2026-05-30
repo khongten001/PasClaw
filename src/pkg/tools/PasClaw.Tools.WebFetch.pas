@@ -66,6 +66,19 @@ type
                           var VMethod: TIdHTTPMethod);
   end;
 
+function IsAbsoluteHttpURL(const S: string): Boolean;
+{ True iff S has an http:// or https:// scheme. Anything else is
+  either path-relative ("/login", "next.html") or protocol-relative
+  ("//cdn.example.com/a"). Indy hands TIdHTTP.OnRedirect whatever
+  the server's Location header said — which is frequently a bare
+  path, NOT a full URL. Codex PR #85 P2 caught that we were
+  rejecting "/login" as malformed. }
+begin
+  Result := (Length(S) >= 7) and
+            (SameText(Copy(S, 1, 7),  'http://')  or
+             (Length(S) >= 8) and SameText(Copy(S, 1, 8), 'https://'));
+end;
+
 procedure TWebFetchRedirectGuard.OnRedirect(Sender: TObject; var Dest: string;
                                               var NumRedirect: Integer;
                                               var Handled: Boolean;
@@ -74,6 +87,34 @@ var
   Reason: string;
 begin
   if not NetworkBlockingActive then Exit;
+
+  { Same-origin redirects retain the host that already passed the
+    pre-check. Two flavours:
+      "/path/next"     — path-relative; same scheme, host, port.
+      "next.html"      — path-relative without leading slash; same.
+    A protocol-relative URL ("//cdn.example.com/a") DOES change
+    host so we still pass it through URLIsLocal — ExtractHost
+    handles those since "//" parses as an authority without a
+    scheme, and a bare authority is enough to read the host. }
+  if not IsAbsoluteHttpURL(Dest) then
+  begin
+    if (Length(Dest) >= 2) and (Dest[1] = '/') and (Dest[2] = '/') then
+    begin
+      { Protocol-relative. Synthesise an http:// prefix purely for
+        the parse — Indy itself will re-prefix with the current
+        URL's scheme before connecting. }
+      if URLIsLocal('http:' + Dest, Reason) then
+        raise Exception.CreateFmt(
+          'SSRF: protocol-relative redirect to %s refused (%s; ' +
+          'flip sandbox.block_private_networks=false in config.json to allow)',
+          [Dest, Reason]);
+      Exit;
+    end;
+    { Path-relative — same host as the request that just passed
+      the check. Let Indy proceed. }
+    Exit;
+  end;
+
   if URLIsLocal(Dest, Reason) then
     raise Exception.CreateFmt('SSRF: redirect to %s refused (%s; ' +
       'flip sandbox.block_private_networks=false in config.json to allow)',

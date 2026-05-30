@@ -223,8 +223,8 @@ end;
 
 function ExtractHost(const URL: string): string;
 var
-  S: string;
-  SchemeEnd, HostEnd, BracketEnd: Integer;
+  S, Authority: string;
+  SchemeEnd, AuthEnd, HostEnd, BracketEnd, AtPos: Integer;
   i: Integer;
   C: Char;
 begin
@@ -235,27 +235,54 @@ begin
   S := Copy(S, SchemeEnd + 3, MaxInt);
   if S = '' then Exit;
 
-  { Strip userinfo: user:pass@host… → host… }
-  HostEnd := Pos('@', S);
-  if HostEnd > 0 then S := Copy(S, HostEnd + 1, MaxInt);
-
-  { Bracketed IPv6 literal: [::1]:port → ::1 (no v6 handling in
-    HostIsLocal — keep it for future, return the bare brackets so
-    a caller can see we extracted SOMETHING). }
-  if (Length(S) > 0) and (S[1] = '[') then
-  begin
-    BracketEnd := Pos(']', S);
-    if BracketEnd <= 1 then Exit;
-    Result := Copy(S, 2, BracketEnd - 2);
-    Exit;
-  end;
-
-  { Up to the first '/', '?', '#', or ':'. }
-  HostEnd := Length(S) + 1;
+  { Slice the authority component out FIRST — everything from the
+    end of '://' to the first '/', '?', or '#'. Codex PR #85 P1
+    caught the bug where Pos('@', S) operated on the WHOLE
+    post-scheme string, so a benign-looking userinfo-shaped
+    fragment inside the path (e.g.
+    http://169.254.169.254/latest/meta-data/@example.com) bypassed
+    the SSRF check by retargeting the host to "example.com" while
+    Indy connected to the real host before the slash. Bounding
+    userinfo parsing to the authority closes that hole. }
+  AuthEnd := Length(S) + 1;
   for i := 1 to Length(S) do
   begin
     C := S[i];
-    if (C = '/') or (C = '?') or (C = '#') or (C = ':') then
+    if (C = '/') or (C = '?') or (C = '#') then
+    begin
+      AuthEnd := i;
+      Break;
+    end;
+  end;
+  Authority := Copy(S, 1, AuthEnd - 1);
+  if Authority = '' then Exit;
+
+  { Now strip userinfo from the authority ONLY. user:pass@host:port
+    → host:port. The @ here is unambiguously the userinfo
+    delimiter because it's still inside the authority. }
+  AtPos := Pos('@', Authority);
+  if AtPos > 0 then Authority := Copy(Authority, AtPos + 1, MaxInt);
+
+  { Bracketed IPv6 literal: [::1]:port → ::1 (no v6 handling in
+    HostIsLocal beyond the symbolic ::1 short-circuit — keep the
+    extraction logic anyway so a caller sees the bare host). }
+  if (Length(Authority) > 0) and (Authority[1] = '[') then
+  begin
+    BracketEnd := Pos(']', Authority);
+    if BracketEnd <= 1 then Exit;
+    Result := Copy(Authority, 2, BracketEnd - 2);
+    Exit;
+  end;
+
+  { Trim the port: host:port → host. Operates on the authority,
+    so a real ':' inside the path or fragment further on can't
+    mask the boundary. Only ':' matters here — '/', '?', '#'
+    were already used to slice the authority. }
+  S := Authority;
+  HostEnd := Length(S) + 1;
+  for i := 1 to Length(S) do
+  begin
+    if S[i] = ':' then
     begin
       HostEnd := i;
       Break;
