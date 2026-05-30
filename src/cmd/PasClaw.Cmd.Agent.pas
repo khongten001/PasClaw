@@ -246,7 +246,9 @@ var
   i: Integer;
   Names: TStringArray;
   MCPClients: TMCPClientList;
+  SystemPromptOverride: string;   { tracks the compacted system prompt across turns }
 begin
+  SystemPromptOverride := '';
   Offline := not PickProvider(Cfg, A, Provider, Err);
   if Offline then
     WriteLn(Ansi.Yellow, '(offline preview — ', Err, ')', Ansi.Reset);
@@ -269,6 +271,7 @@ begin
       if Line = '/reset' then
       begin
         SetLength(Msgs, 0);
+        SystemPromptOverride := '';   { drop the compacted summary too }
         WriteLn(Ansi.Dim, '(history cleared)', Ansi.Reset);
         Continue;
       end;
@@ -297,12 +300,41 @@ begin
       end;
 
       LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
+      { After the first compaction the summary lives in
+        LiveOptions.SystemPrompt inside RunToolLoop and gets returned
+        via Loop.FinalSystemPrompt. We override here so the next turn
+        ships the summary back to the provider; without it
+        BuildSystemPrompt rebuilds the original prompt and the
+        compacted summary leaks out of the conversation. }
+      if SystemPromptOverride <> '' then
+        LoopCfg.Options.SystemPrompt := SystemPromptOverride;
+
       if RunToolLoop(LoopCfg, Msgs, Loop) then
       begin
         WriteLn(Ansi.Cyan, 'assistant', Ansi.Reset, ' (', Provider.GetName, '/', Model, '):');
         WriteLn(Loop.Content);
-        SetLength(Msgs, Length(Msgs) + 1);
-        Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
+
+        { Pick up the compacted history from RunToolLoop so the next
+          interactive turn starts from the summarised state, not the
+          full pre-compaction transcript (Codex PR #87 P2). If
+          compaction didn't fire this turn, Loop.FinalMessages mirrors
+          Msgs + new assistant/tool entries — same growth path as
+          before. If it DID fire, Msgs shrinks to the compacted view
+          and SystemPromptOverride below preserves the summary across
+          subsequent BuildLoopConfig calls. }
+        if Length(Loop.FinalMessages) > 0 then
+        begin
+          SetLength(Msgs, Length(Loop.FinalMessages) + 1);
+          for i := 0 to High(Loop.FinalMessages) do
+            Msgs[i] := Loop.FinalMessages[i];
+          Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
+        end
+        else
+        begin
+          SetLength(Msgs, Length(Msgs) + 1);
+          Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
+        end;
+        SystemPromptOverride := Loop.FinalSystemPrompt;
       end;
     end;
   finally

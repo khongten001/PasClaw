@@ -43,6 +43,16 @@ type
     Content:     string;
     Iterations:  Integer;
     LastResp:    TLLMResponse;
+    (* The final history at the moment RunToolLoop returns, with all
+       in-flight compactions applied. Interactive callers (Cmd.Agent's
+       RunInteractive, the TUI) read this back into their own message
+       array so the NEXT turn starts from the compacted state instead
+       of re-summarising the original transcript on every prompt
+       (Codex PR #87 P2). Includes assistant + tool messages produced
+       during the loop; leading mrSystem entries that compaction lifted
+       into Options.SystemPrompt are NOT in this list. *)
+    FinalMessages:    TMessageArray;
+    FinalSystemPrompt: string;
   end;
 
 function RunToolLoop(const Cfg: TToolLoopConfig;
@@ -182,10 +192,11 @@ var
   Iter, i: Integer;
   Tools: TToolDefinitionArray;
   Resp: TLLMResponse;
-  Hist: array of TMessage;
+  Hist: TMessageArray;
   ResultText, Err, RetryArgs, Patch, CanonicalPatch, N1, N2: string;
   ArgsObj: TJsonObject;
   HasUnsup: Boolean;
+  LiveOptions: TChatOptions;
 begin
   Loop.Content    := '';
   Loop.Iterations := 0;
@@ -195,6 +206,12 @@ begin
   { Copy input messages to a growable history. }
   SetLength(Hist, Length(Messages));
   for i := 0 to High(Messages) do Hist[i] := Messages[i];
+
+  { Local mutable copy of Cfg.Options so compaction can fold the
+    summary into LiveOptions.SystemPrompt without touching the
+    caller's const Cfg. The provider call uses LiveOptions, not
+    Cfg.Options, from here on. }
+  LiveOptions := Cfg.Options;
 
   if Cfg.Registry <> nil then
     Tools := Cfg.Registry.ToProviderDefs
@@ -208,16 +225,19 @@ begin
     LogDebug('toolloop iteration %d / %d', [Iter, Cfg.MaxIterations]);
 
     { Pre-call compaction. NeedsCompact is a cheap token estimate;
-      only when it trips do we pay for a summariser round. The new
-      history wholesale replaces Hist — last KeepRecentTurns are
-      preserved verbatim. CompactMessages logs warn and returns
-      verbatim on failure, so a broken summariser can never wipe
-      live context. }
+      only when it trips do we pay for a summariser round.
+      CompactMessages may rewrite Hist AND modify
+      LiveOptions.SystemPrompt — the summary folds into the system
+      prompt because both OpenAI and Anthropic builders silently
+      drop in-message mrSystem entries when SystemPrompt is set
+      (Codex PR #87 P1). Returns verbatim on summariser failure,
+      so a broken summary can never wipe live context. }
     if Cfg.CompactEnabled and
        NeedsCompact(Hist, Cfg.CompactOpts.ThresholdTokens) then
-      Hist := CompactMessages(Cfg.Provider, Cfg.Model, Hist, Cfg.CompactOpts);
+      Hist := CompactMessages(Cfg.Provider, Cfg.Model, Hist,
+                               LiveOptions, Cfg.CompactOpts);
 
-    Resp := Cfg.Provider.Chat(Hist, Tools, Cfg.Model, Cfg.Options);
+    Resp := Cfg.Provider.Chat(Hist, Tools, Cfg.Model, LiveOptions);
     Loop.LastResp := Resp;
 
     { Stream the text part to the caller now so they can show progress. }
@@ -228,6 +248,8 @@ begin
     begin
       Loop.Content    := Resp.Content;
       Loop.Iterations := Iter;
+      Loop.FinalMessages    := Hist;
+      Loop.FinalSystemPrompt := LiveOptions.SystemPrompt;
       Exit(True);
     end;
 
@@ -306,6 +328,8 @@ begin
   { Max iterations exhausted; return whatever we last got. }
   Loop.Content    := Resp.Content;
   Loop.Iterations := Iter;
+  Loop.FinalMessages    := Hist;
+  Loop.FinalSystemPrompt := LiveOptions.SystemPrompt;
   Result := True;
 end;
 
