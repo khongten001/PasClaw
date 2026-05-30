@@ -32,6 +32,8 @@ make webui-res
 
 This produces `src/pkg/gateway/webui.res`, which is linked by `PasClaw.Gateway.WebUI` using `{$R webui.res}`. The default `make` target runs this step before compiling `src/pasclaw/PasClaw.dpr`.
 
+`webui.res` is **tracked in git** — committing the resource lets Delphi users and fresh clones run the gateway without first having `fpcres` or `brcc32` on PATH. The trade-off: editing `webui.html` requires regenerating `webui.res` and committing both. Under FPC, `make` (or `make webui-res`) does the regen automatically and `git status` then shows the updated `.res`. Under Delphi, run `brcc32 webui.rc` in `src/pkg/gateway` before committing.
+
 ## Build commands
 
 ```sh
