@@ -4,6 +4,38 @@
 # Indy is required for HTTP client/server (TIdHTTP, TIdHTTPServer). Under FPC
 # we vendor it via `make get-indy` (clones IndySockets/Indy into vendor/Indy).
 # Under Delphi, Indy ships with RAD Studio — no vendoring needed.
+#
+# OS / arch autodetect — picks the default fcl-db / sqlite / iconvenc /
+# lazutils unit paths so `make` works on a fresh Debian or Homebrew install
+# without the user having to override every dir. Override any of them by
+# setting the variable on the make command line, e.g.
+#   make FCLDB_DIR=/opt/fpc/units/x86_64-linux/fcl-db
+UNAME_S      := $(shell uname -s)
+UNAME_M      := $(shell uname -m)
+FPC_VERSION  ?= 3.2.2
+
+ifeq ($(UNAME_S),Darwin)
+  # Homebrew FPC lays units under <prefix>/lib/fpc/<ver>/units/<arch>-darwin/.
+  # Prefix is /opt/homebrew on Apple Silicon, /usr/local on Intel.
+  ifeq ($(UNAME_M),arm64)
+    HOMEBREW_PREFIX ?= /opt/homebrew
+    FPC_ARCH        ?= aarch64-darwin
+  else
+    HOMEBREW_PREFIX ?= /usr/local
+    FPC_ARCH        ?= x86_64-darwin
+  endif
+  FPC_UNITS_DIR ?= $(HOMEBREW_PREFIX)/lib/fpc/$(FPC_VERSION)/units/$(FPC_ARCH)
+  LAZUTILS_DIR  ?= $(HOMEBREW_PREFIX)/share/lazarus/components/lazutils
+else
+  # Debian / Ubuntu default layout (apt: fp-units-db, fp-units-misc, lazarus-src).
+  ifeq ($(UNAME_M),aarch64)
+    FPC_ARCH ?= aarch64-linux
+  else
+    FPC_ARCH ?= x86_64-linux
+  endif
+  FPC_UNITS_DIR ?= /usr/lib/$(UNAME_M)-linux-gnu/fpc/$(FPC_VERSION)/units/$(FPC_ARCH)
+  LAZUTILS_DIR  ?= /usr/lib/lazarus/3.0/components/lazutils
+endif
 
 FPC      ?= fpc
 BUILDDIR ?= build
@@ -13,22 +45,22 @@ INDY_DIR     ?= vendor/Indy
 INDY_REPO    ?= https://github.com/IndySockets/Indy.git
 # iconvenc lives in fp-units-misc on Debian; FPC's default config picks it up
 # on most distros but not always.
-ICONVENC_DIR ?= /usr/lib/x86_64-linux-gnu/fpc/3.2.2/units/x86_64-linux/iconvenc
+ICONVENC_DIR ?= $(FPC_UNITS_DIR)/iconvenc
 
 # fcl-db + sqlite ship with FPC's standard distribution but live outside the
 # default search path (Debian package: fp-units-db). PasClaw.Memory.Index
-# pulls TSQLite3Connection / TSQLQuery from these. libsqlite3.so must be
-# present at runtime — every modern Linux/Mac has it; Windows builds need
+# pulls TSQLite3Connection / TSQLQuery from these. libsqlite3.{so,dylib} must
+# be present at runtime — every modern Linux/Mac has it; Windows builds need
 # sqlite3.dll on PATH.
-FCLDB_DIR    ?= /usr/lib/x86_64-linux-gnu/fpc/3.2.2/units/x86_64-linux/fcl-db
-SQLITE_DIR   ?= /usr/lib/x86_64-linux-gnu/fpc/3.2.2/units/x86_64-linux/sqlite
+FCLDB_DIR    ?= $(FPC_UNITS_DIR)/fcl-db
+SQLITE_DIR   ?= $(FPC_UNITS_DIR)/sqlite
 
 # PasClaw.Tools.FS uses the Masks unit (case-insensitive glob matching for
 # fs_grep's `include` filter). On Debian, Masks lives in Lazarus's lazutils
-# source tree rather than the fpc rtl, so callers that don't already have it
-# on their unit path can set LAZUTILS_DIR (apt: lazarus-src). Defaults to the
-# Debian path; empty string skips the include.
-LAZUTILS_DIR ?= /usr/lib/lazarus/3.0/components/lazutils
+# source tree rather than the fpc rtl. On macOS the Homebrew lazarus formula
+# drops it under <prefix>/share/lazarus/components/lazutils. Set
+# LAZUTILS_DIR= (empty) to skip the include when Masks is already on the
+# default search path.
 
 # PasClaw source dirs.
 UNIT_DIRS = \
