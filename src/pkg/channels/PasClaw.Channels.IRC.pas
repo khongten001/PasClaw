@@ -94,6 +94,53 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop;
 
+type
+  (* PR #86 Codex P2: RunToolLoop inside OnPrivateMessage blocks
+     Indy's TIdCmdTCPClient listener thread. A slow model turn
+     (tool loop chasing fs_read / shell_exec) keeps the listener
+     from servicing PING from the server, the server kills the
+     connection after its ping-timeout, and the bot drops.
+
+     Fix: hand each inbound message off to a self-freeing worker
+     thread. OnPrivateMessage returns immediately, the listener
+     keeps PONGing on schedule, and the worker drives RunToolLoop +
+     the FClient.Say reply asynchronously. Same suspended-then-
+     Start idiom from PR #78's LINE/WhatsApp worker fix. *)
+  TIRCMessageWorker = class(TThread)
+  private
+    FBot:         TIRCBot;
+    FReplyTarget: string;
+    FUserText:    string;
+    FSenderNick:  string;
+  public
+    constructor Create(Bot: TIRCBot;
+                       const ReplyTarget, UserText, SenderNick: string);
+    procedure Execute; override;
+  end;
+
+constructor TIRCMessageWorker.Create(Bot: TIRCBot;
+                                      const ReplyTarget, UserText, SenderNick: string);
+begin
+  inherited Create(True);   { suspended }
+  FreeOnTerminate := True;
+  FBot         := Bot;
+  FReplyTarget := ReplyTarget;
+  FUserText    := UserText;
+  FSenderNick  := SenderNick;
+  Start;
+end;
+
+procedure TIRCMessageWorker.Execute;
+begin
+  try
+    FBot.RunAgentReply(FReplyTarget, FUserText, FSenderNick);
+  except
+    on E: Exception do
+      LogWarn('irc worker: RunAgentReply raised %s: %s',
+              [E.ClassName, E.Message]);
+  end;
+end;
+
 constructor TIRCBot.Create(const Server: string; Port: Integer;
                             const Nick, Channel, Password: string;
                             Cfg: TConfig; Provider: ILLMProvider;
@@ -205,8 +252,10 @@ begin
 
   if SameText(ATarget, FNick) then
   begin
-    { Direct PM. Reply privately to the sender. }
-    RunAgentReply(ANickname, AMessage, ANickname);
+    { Direct PM. Spawn a worker so RunToolLoop doesn't block the
+      Indy listener (server PINGs would time out and disconnect
+      the bot). Worker frees itself on terminate. }
+    TIRCMessageWorker.Create(Self, ANickname, AMessage, ANickname);
     Exit;
   end;
 
@@ -217,7 +266,7 @@ begin
     if not IsAddressed then Exit;
     if Trim(Text) = '' then Exit;
     ReplyTarget := ATarget;
-    RunAgentReply(ReplyTarget, Text, ANickname);
+    TIRCMessageWorker.Create(Self, ReplyTarget, Text, ANickname);
   end;
 end;
 

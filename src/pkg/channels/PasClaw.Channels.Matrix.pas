@@ -67,6 +67,8 @@ type
     function  GetSync(out RawJSON: string): Boolean;
     function  PostSend(const RoomId, Text: string): Boolean;
     function  WhoAmI(out UserId: string): Boolean;
+    function  WhoAmIWithRetry(out UserId: string; Attempts: Integer): Boolean;
+    function  InitialSyncToken: Boolean;
     procedure ProcessSync(const RawJSON: string);
     procedure ProcessEvent(const RoomId, EventJSON: string);
   public
@@ -209,6 +211,77 @@ begin
   try
     UserId := Root.GetStr('user_id', '');
     Result := UserId <> '';
+  finally
+    Root.Free;
+  end;
+end;
+
+function TMatrixBot.WhoAmIWithRetry(out UserId: string; Attempts: Integer): Boolean;
+var
+  i: Integer;
+begin
+  (* PR #86 Codex P1: starting the sync thread before /whoami
+     succeeds leaves FUserId empty. ProcessEvent's
+     "if Sender = FUserId" then matches Sender='' rather than
+     the bot's actual user_id, so every outbound reply
+     re-enters the loop as a fresh prompt and the bot spam-
+     replies to itself until the server boots it or the API
+     quota dies. Retry a few times with exponential-ish
+     backoff before giving up; if all attempts fail, Start
+     refuses to launch the loop. *)
+  Result := False;
+  UserId := '';
+  for i := 0 to Attempts - 1 do
+  begin
+    if WhoAmI(UserId) then Exit(True);
+    if i = Attempts - 1 then Break;
+    if FStopEvt.WaitFor(1000 * (1 shl i)) = wrSignaled then Break;
+  end;
+end;
+
+function TMatrixBot.InitialSyncToken: Boolean;
+var
+  URL, Body: string;
+  Headers: array of THeaderPair;
+  Resp: THTTPResult;
+  Root: TJsonObject;
+begin
+  (* PR #86 Codex P1: the first /sync without a since=
+     parameter returns whatever recent timeline the homeserver
+     has cached for each joined room. ProcessSync would then
+     reply to every old message and look like the bot just
+     time-travelled. Spec workaround: do a one-shot sync with
+     timeline.limit=0 so we get only the next_batch token and
+     no events; the long-poll loop in TMatrixSyncThread then
+     starts strictly from that token. *)
+  Result := False;
+  URL := ApiURL('/_matrix/client/v3/sync?timeout=0&filter=' +
+                '%7B%22room%22%3A%7B%22timeline%22%3A%7B%22limit%22%3A0%7D%7D%7D');
+  SetLength(Headers, 1);
+  Headers[0] := MakeHeader('Authorization', 'Bearer ' + FToken);
+  Resp := GetJSONURL(URL, Headers, 30);
+  if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
+  begin
+    LogWarn('matrix: initial sync status=%d body=%s',
+            [Resp.StatusCode, Copy(Resp.Body, 1, 200)]);
+    Exit;
+  end;
+  try
+    Root := TJsonObject.Parse(Resp.Body);
+  except
+    on E: Exception do
+    begin
+      LogWarn('matrix: initial sync bad JSON: %s', [E.Message]);
+      Exit;
+    end;
+  end;
+  if Root = nil then Exit;
+  try
+    FNextBatch := Root.GetStr('next_batch', '');
+    Result := FNextBatch <> '';
+    Body := FNextBatch;
+    if Result then
+      LogDebug('matrix: initial sync token len=%d', [Length(Body)]);
   finally
     Root.Free;
   end;
@@ -414,18 +487,27 @@ begin
     Exit;
   end;
 
-  if not WhoAmI(FUserId) then
-    LogWarn('matrix: whoami failed — own messages may echo into the loop', [])
-  else
-    LogInfo('matrix: logged in as %s on %s', [FUserId, FHomeserver]);
+  if not WhoAmIWithRetry(FUserId, 3) then
+  begin
+    LogError('matrix: /whoami failed after retries — refusing to start ' +
+             '(without a confirmed user_id the bot would reply to its own ' +
+             'echoes; check $PASCLAW_MATRIX_TOKEN and homeserver reachability)', []);
+    Exit;
+  end;
+  LogInfo('matrix: logged in as %s on %s', [FUserId, FHomeserver]);
 
-  { Initial sync gets the latest token without delivering history —
-    we set since='' and the first call returns "now". Subsequent
-    calls long-poll for new events only. }
+  if not InitialSyncToken then
+  begin
+    LogError('matrix: initial sync token fetch failed — refusing to start ' +
+             '(without an anchor token, the first long-poll would replay ' +
+             'old timeline events and reply to each)', []);
+    Exit;
+  end;
+
   T := TMatrixSyncThread.Create(Self);
   FThread := T;
   FThread.Start;
-  LogInfo('matrix: sync loop started', []);
+  LogInfo('matrix: sync loop started from token len=%d', [Length(FNextBatch)]);
 end;
 
 procedure TMatrixBot.RequestStop;
