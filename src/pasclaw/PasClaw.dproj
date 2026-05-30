@@ -178,6 +178,7 @@
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Types.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.StdioClient.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.HttpClient.pas"/>
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Catalog.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Bridge.pas"/>
 
         <!-- pkg/gateway -->

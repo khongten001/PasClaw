@@ -155,9 +155,22 @@ pasclaw mcp show filesystem
 pasclaw mcp test filesystem
 pasclaw mcp remove filesystem
 pasclaw mcp edit
+
+pasclaw mcp catalog          # list public MCP servers PasClaw knows about
+pasclaw mcp install <name>   # add one from the catalog; auth from $ENV_VAR
 ```
 
 MCP entries are stored in the config as `mcp_servers`. A command starting with `http://` or `https://` is tested with the HTTP MCP client; other commands are spawned with the stdio MCP client.
+
+**Catalog** (curated public MCP servers; opt-in, never preloaded). `pasclaw mcp install <name>` writes a normal `mcp_servers` entry — list/remove/test/show all just work afterwards. Auth is read from the env var the catalog entry names; installing with the env unset writes an empty Authorization header and a hint to re-run after setting it.
+
+| name | env var | provider |
+|---|---|---|
+| `replicate` | `REPLICATE_API_TOKEN` | Run AI models on Replicate. |
+| `digitalocean-apps` | `DIGITALOCEAN_TOKEN` | Manage DigitalOcean App Platform. |
+| `digitalocean-databases` | `DIGITALOCEAN_TOKEN` | Manage DigitalOcean Managed Databases. |
+| `runpod-docs` | _(none)_ | Search RunPod documentation. |
+| `huggingface` | `HF_TOKEN` | Search models / datasets / papers / Spaces. |
 
 ### Cron
 
