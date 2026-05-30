@@ -1,22 +1,28 @@
-# Sample build: standalone FPC binaries that embed TPasClawAgent.
+# Sample build: standalone FPC binaries that embed PasClaw.
 #
-# Two binaries from one Makefile:
+# Three binaries from one Makefile:
 #
-#   SampleConsole — legacy property-driven API
+#   SampleConsole — TPasClawAgent, legacy property-driven API
 #                   (PC.Model := ...; PC.Chat(prompt, reply, err))
-#   SampleSimple  — code-driven one-liner API
+#   SampleSimple  — TPasClawAgent, code-driven one-liner API
 #                   (Agent := TPasClawAgent.Create('model');
 #                    Agent.RegisterTool(TWebSearchTool.Create);
 #                    WriteLn(Agent.Run('prompt')))
+#   SampleServer  — TPasClawServer, hosts the OpenAI-compatible
+#                   HTTP gateway in-process
+#                   (Server := TPasClawServer.Create('0.0.0.0', 8088);
+#                    Server.RegisterTool(TWebSearchTool.Create);
+#                    Server.Run)
 #
-# Both pick up the same unit search paths as the top-level PasClaw
-# build (../../Makefile) so the samples stay in sync without
+# All three pick up the same unit search paths as the top-level
+# PasClaw build (../../Makefile) so the samples stay in sync without
 # duplicating the list. Run:
 #
 #   cd samples/component-console
-#   make            # builds both
+#   make            # builds all three
 #   make simple     # just SampleSimple
 #   make console    # just SampleConsole
+#   make server     # just SampleServer
 #
 # The first build needs Indy vendored under ../../vendor/Indy; the
 # top-level Makefile's `make get-indy` target handles that. Run it
@@ -102,18 +108,22 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 	-FE$(BUILDDIR) \
 	-FU$(BUILDDIR)/lib
 
-.PHONY: all clean console simple
+.PHONY: all clean console simple server
 
-all: console simple
+all: console simple server
 
 console: $(BUILDDIR)/SampleConsole
 simple:  $(BUILDDIR)/SampleSimple
+server:  $(BUILDDIR)/SampleServer
 
 $(BUILDDIR)/SampleConsole: SampleConsole.dpr | $(BUILDDIR) $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) SampleConsole.dpr
 
 $(BUILDDIR)/SampleSimple: SampleSimple.dpr | $(BUILDDIR) $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) SampleSimple.dpr
+
+$(BUILDDIR)/SampleServer: SampleServer.dpr | $(BUILDDIR) $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) SampleServer.dpr
 
 $(BUILDDIR):
 	mkdir -p $@

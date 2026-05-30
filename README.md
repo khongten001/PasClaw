@@ -463,14 +463,34 @@ if PC.Chat('hi', Reply, Err) then WriteLn(Reply);
 
 Built-in tools available as classes: `TWebSearchTool`, `TWebFetchTool`, `TFileSystemTool` (bundle: fs_read/write/grep/list/edit), `TShellTool`, `TMemoryTool`. Custom tools subclass `TPasClawTool` (unit `PasClaw.Tools.Obj`) and override `Name` / `Description` / `Schema` / `Run`.
 
-`TPasClawServer` (same unit) hosts the full HTTP gateway inside the calling process — `Start` returns once it's listening, `Stop` joins the worker thread.
+`TPasClawServer` (same unit) hosts the full HTTP gateway inside the calling process. Same OOP shape as `TPasClawAgent`:
 
-`samples/component-console/` ships both sample binaries:
+```pascal
+uses PasClaw.Agent, PasClaw.Tools;
+
+var
+  Server: TPasClawServer;
+begin
+  Server := TPasClawServer.Create('0.0.0.0', 8088);
+  try
+    Server.RegisterTool(TWebSearchTool.Create);
+    Server.Run;  { blocks until Stop is signalled from another thread }
+  finally
+    Server.Free;
+  end;
+end;
+```
+
+`Run` does `Start + WaitForStop` in one call and raises `EPasClawRun` if startup fails. Use `Start` / `WaitForStop` / `Stop` separately when you need to do something between binding the socket and entering the wait. SIGINT handling is the embedder's problem — most hosting apps already have their own signal-handling strategy, so the component doesn't install one.
+
+`samples/component-console/` ships three sample binaries:
 
 ```sh
 cd samples/component-console
 make get-indy   # only needed once, from repo root
-make            # builds SampleConsole (property form) and SampleSimple (code form)
+make            # builds all three (SampleConsole, SampleSimple, SampleServer)
+make simple     # just the agent code-form sample
+make server     # just the server sample
 ```
 
 `PasClaw.Component` is still available as the legacy unit name — it now re-exports everything from `PasClaw.Agent`, so existing code keeps compiling.
