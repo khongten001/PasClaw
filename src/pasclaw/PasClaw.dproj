@@ -229,6 +229,7 @@
 
         <!-- pkg/agent -->
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Prompt.pas"/>
+        <DCCReference Include="..\pkg\agent\PasClaw.Agent.Compact.pas"/>
 
         <!-- pkg/memory -->
         <DCCReference Include="..\pkg\memory\PasClaw.Memory.pas"/>
