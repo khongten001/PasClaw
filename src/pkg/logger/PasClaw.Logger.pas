@@ -94,27 +94,36 @@ end;
 
 procedure FanoutListeners(const Tag, Msg: string);
 var
-  Snapshot: array of TListenerSlot;
   i: Integer;
 begin
-  { Copy under the lock so the dispatch happens unlocked — a slow
-    listener (HTTP-write blocking on a slow client) doesn't pin
-    the buffer mutex and serialise every subsequent log call. }
+  { Dispatch UNDER the lock. PR #88 Codex P2 caught the prior
+    "copy-then-dispatch-unlocked" pattern: it let a /v1/logs
+    handler call UnsubscribeLog + free the TLogStreamWriter while
+    another thread was mid-fanout holding a stale method pointer,
+    classic use-after-free. Holding the lock during dispatch
+    eliminates that race — UnsubscribeLog can't free anything
+    while a fanout is in flight, and the in-flight fanout always
+    sees a still-live listener.
+
+    Trade-off: a slow listener (HTTP-write blocking on a slow
+    network client) now pins GBufferLock and throttles every
+    log call until it returns. Listeners are supposed to write
+    to a buffered IOHandler and return immediately — if one is
+    legitimately slow, the fix is to make IT async, not to
+    re-introduce the use-after-free window. }
   GBufferLock.Acquire;
   try
-    SetLength(Snapshot, Length(GListeners));
-    for i := 0 to High(GListeners) do Snapshot[i] := GListeners[i];
+    for i := 0 to High(GListeners) do
+    begin
+      if not Assigned(GListeners[i].Listener) then Continue;
+      try
+        GListeners[i].Listener(Tag, Msg);
+      except
+        { Swallow — a misbehaving listener must NOT abort the log. }
+      end;
+    end;
   finally
     GBufferLock.Release;
-  end;
-  for i := 0 to High(Snapshot) do
-  begin
-    if not Assigned(Snapshot[i].Listener) then Continue;
-    try
-      Snapshot[i].Listener(Tag, Msg);
-    except
-      { Swallow — a misbehaving listener must NOT abort the log. }
-    end;
   end;
 end;
 

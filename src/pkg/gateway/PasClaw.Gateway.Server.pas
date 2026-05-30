@@ -129,6 +129,7 @@ uses
   PasClaw.Logger,
   PasClaw.Utils,
   PasClaw.Skills.Loader,
+  PasClaw.Tools.Sandbox,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
@@ -566,12 +567,16 @@ end;
 procedure TGatewayServer.HandleConfig(AResp: TIdHTTPResponseInfo);
 var
   Body: string;
-  Root, Provider: TJsonObject;
+  Root, Item: TJsonObject;
   Arr: TJsonArray;
   i: Integer;
 begin
-  { Mask api_key in providers — return its length as "•••" so the UI
-    can show "set" vs "unset" without leaking the value. }
+  { Mask secret-bearing fields. PR #88 Codex P1 caught that the
+    original implementation only masked providers[].api_key and
+    left mcp_servers[].env exposed — which typically contains
+    OPENAI_API_KEY=, GITHUB_TOKEN=, etc. for stdio MCP servers.
+    Mask any non-empty secret field with "•••" so the UI can show
+    "set vs unset" without leaking the value. }
   Body := FCfg.ToJSON;
   Root := TJsonObject.Parse(Body);
   if Root = nil then
@@ -585,18 +590,41 @@ begin
     try
       for i := 0 to Arr.Count - 1 do
       begin
-        Provider := Arr.ItemObject(i);
-        if Provider = nil then Continue;
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
         try
-          if Provider.GetStr('api_key', '') <> '' then
-            Provider.PutStr('api_key', '•••');
+          if Item.GetStr('api_key', '') <> '' then
+            Item.PutStr('api_key', '•••');
         finally
-          Provider.Free;
+          Item.Free;
         end;
       end;
     finally
       Arr.Free;
     end;
+
+    Arr := Root.ChildArray('mcp_servers');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          { env strings are typically KEY=value pairs separated by
+            newlines or semicolons — anything from "OPENAI_API_KEY=sk-…"
+            to bearer tokens. Mask the whole string when non-empty;
+            the UI just needs "is configured" signal, not the literal. }
+          if Item.GetStr('env', '') <> '' then
+            Item.PutStr('env', '•••');
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
@@ -606,7 +634,7 @@ end;
 procedure TGatewayServer.HandleFSList(ARequest: TIdHTTPRequestInfo;
                                        AResp: TIdHTTPResponseInfo);
 var
-  Path, Dir: string;
+  Path, Dir, Reason: string;
   Root: TJsonObject;
   Arr: TJsonArray;
   Item: TJsonObject;
@@ -614,12 +642,15 @@ var
 begin
   Path := ARequest.Params.Values['path'];
   if Path = '' then Path := GetHome;
-  { Hard refuse: traversal, scheme prefix. Anything getting past
-    here still goes through PasClaw.Tools.FS at fs_read time
-    when the user clicks into a file. }
-  if (Pos('..', Path) > 0) then
+  { Route through the same sandbox CanReadPath check that fs_read
+    uses. PR #88 Codex P1: the original "reject `..`" check let
+    absolute paths like /etc/passwd through even when
+    sandbox.restrict_to_workspace was on. CanReadPath honours
+    workspace bounds, allow_read_paths globs, and
+    allow_read_outside_workspace. }
+  if not CanReadPath(Path, Reason) then
   begin
-    WriteJSON(AResp, 400, '{"error":"path traversal"}');
+    WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
     Exit;
   end;
   Dir := Path;
@@ -657,7 +688,7 @@ procedure TGatewayServer.HandleFSRead(ARequest: TIdHTTPRequestInfo;
 const
   MAX_BYTES = 256 * 1024;   { 256 KB display cap }
 var
-  Path, Body: string;
+  Path, Body, Reason: string;
   Root: TJsonObject;
   Strm: TFileStream;
   Truncated: Boolean;
@@ -665,9 +696,17 @@ var
   Bytes: TBytes;
 begin
   Path := ARequest.Params.Values['path'];
-  if (Path = '') or (Pos('..', Path) > 0) then
+  if Path = '' then
   begin
     WriteJSON(AResp, 400, '{"error":"bad path"}');
+    Exit;
+  end;
+  { Same sandbox gate as HandleFSList — fs_read's policy applies
+    here too. PR #88 Codex P1 caught the original "reject `..`"
+    check that let /etc/passwd through. }
+  if not CanReadPath(Path, Reason) then
+  begin
+    WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
     Exit;
   end;
   if not FileExists(Path) then
