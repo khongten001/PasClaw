@@ -207,6 +207,7 @@
         <DCCReference Include="..\pkg\search\PasClaw.Search.Tavily.pas"/>
         <DCCReference Include="..\pkg\search\PasClaw.Search.SearXNG.pas"/>
         <DCCReference Include="..\pkg\search\PasClaw.Search.Perplexity.pas"/>
+        <DCCReference Include="..\pkg\search\PasClaw.Search.Gemini.pas"/>
         <DCCReference Include="..\pkg\search\PasClaw.Search.Factory.pas"/>
 
         <!-- pkg/cron -->
