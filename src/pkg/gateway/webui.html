@@ -5,157 +5,602 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   :root{color-scheme:dark;
-        --bg:#050611;--bg2:#0b1026;--fg:#f5f7ff;--mut:#8f9bc6;
-        --cyan:#20f6ff;--mag:#ff37d5;--violet:#8f5cff;--red:#ff4d6d;--orange:#ff9f1c;
-        --panel:rgba(12,18,43,.72);--panel2:rgba(23,13,46,.62);--line:rgba(32,246,255,.22);
-        --glow-cyan:0 0 18px rgba(32,246,255,.55),0 0 42px rgba(32,246,255,.18);
-        --glow-mag:0 0 18px rgba(255,55,213,.55),0 0 42px rgba(255,55,213,.18);
-        --glow-hot:0 0 20px rgba(255,77,109,.42),0 0 48px rgba(255,159,28,.16);
-        --shadow:0 18px 60px rgba(0,0,0,.45)}
+    --bg:#050611;--bg2:#0b1026;--fg:#f5f7ff;--mut:#8f9bc6;
+    --cyan:#20f6ff;--mag:#ff37d5;--violet:#8f5cff;--red:#ff4d6d;--orange:#ff9f1c;--green:#3df281;
+    --panel:rgba(12,18,43,.72);--panel2:rgba(23,13,46,.62);--line:rgba(32,246,255,.22);
+    --glow-cyan:0 0 18px rgba(32,246,255,.55),0 0 42px rgba(32,246,255,.18);
+    --glow-mag:0 0 18px rgba(255,55,213,.55),0 0 42px rgba(255,55,213,.18);
+    --glow-hot:0 0 20px rgba(255,77,109,.42),0 0 48px rgba(255,159,28,.16);
+    --shadow:0 18px 60px rgba(0,0,0,.45)}
   *{box-sizing:border-box}
   body{margin:0;min-height:100vh;color:var(--fg);
-       font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-       display:flex;flex-direction:column;height:100vh;overflow:hidden;
-       background:
-         radial-gradient(circle at 15% 10%,rgba(255,55,213,.22),transparent 28rem),
-         radial-gradient(circle at 85% 0%,rgba(32,246,255,.18),transparent 26rem),
-         radial-gradient(circle at 55% 100%,rgba(255,77,109,.2),transparent 30rem),
-         linear-gradient(135deg,var(--bg),var(--bg2) 48%,#13051f)}
+    font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    display:flex;flex-direction:column;height:100vh;overflow:hidden;
+    background:
+      radial-gradient(circle at 15% 10%,rgba(255,55,213,.22),transparent 28rem),
+      radial-gradient(circle at 85% 0%,rgba(32,246,255,.18),transparent 26rem),
+      radial-gradient(circle at 55% 100%,rgba(255,77,109,.2),transparent 30rem),
+      linear-gradient(135deg,var(--bg),var(--bg2) 48%,#13051f)}
   body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.34;
-       background-image:
-         linear-gradient(rgba(32,246,255,.16) 1px,transparent 1px),
-         linear-gradient(90deg,rgba(255,55,213,.12) 1px,transparent 1px);
-       background-size:42px 42px;
-       mask-image:linear-gradient(to bottom,transparent,black 14%,black 72%,transparent)}
-  body::after{content:"";position:fixed;inset:auto -10% 0;pointer-events:none;height:32vh;
-       background:linear-gradient(to top,rgba(255,55,213,.12),transparent),
-                  repeating-linear-gradient(to bottom,rgba(32,246,255,.22) 0 1px,transparent 1px 18px);
-       transform:perspective(380px) rotateX(62deg);transform-origin:bottom;opacity:.36}
-  header{position:relative;z-index:1;margin:.75rem .9rem 0;padding:.75rem .9rem;
-         border:1px solid var(--line);border-radius:16px;background:linear-gradient(120deg,var(--panel),rgba(14,8,29,.7));
-         box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.08);
-         display:flex;align-items:center;gap:.75rem;backdrop-filter:blur(14px)}
-  header .logo{font-weight:900;letter-spacing:.16em;font-size:18px;text-transform:uppercase;
-       text-shadow:var(--glow-cyan);filter:drop-shadow(0 0 10px rgba(32,246,255,.25))}
-  header .blue{color:var(--cyan)}
-  header .red{color:var(--mag);text-shadow:var(--glow-mag)}
-  header .ver{margin-left:auto;color:#dbe7ff;font-size:11px;letter-spacing:.02em;
-       border:1px solid rgba(32,246,255,.28);border-radius:999px;padding:.32rem .62rem;
-       background:linear-gradient(90deg,rgba(32,246,255,.12),rgba(255,55,213,.12));
-       box-shadow:inset 0 0 18px rgba(32,246,255,.08),0 0 24px rgba(32,246,255,.11);white-space:nowrap}
-  #log{position:relative;z-index:1;flex:1;overflow:auto;padding:1rem;display:flex;flex-direction:column;gap:.75rem;scrollbar-color:var(--mag) transparent}
-  .empty{margin:auto;max-width:46rem;text-align:center;padding:1.25rem;border:1px solid rgba(255,55,213,.2);
-       border-radius:20px;background:linear-gradient(135deg,rgba(12,18,43,.64),rgba(37,10,54,.52));
-       box-shadow:var(--shadow),inset 0 0 32px rgba(32,246,255,.05)}
-  .empty .mark{display:inline-block;margin-bottom:.5rem;color:var(--cyan);letter-spacing:.2em;font-weight:900;text-shadow:var(--glow-cyan)}
-  .empty .hint{color:var(--mut);font-size:12px}
-  .row{display:flex;gap:.7rem;align-items:flex-start;animation:rise .18s ease-out}
+    background-image:linear-gradient(rgba(32,246,255,.16) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(255,55,213,.12) 1px,transparent 1px);
+    background-size:42px 42px;
+    mask-image:linear-gradient(to bottom,transparent,black 14%,black 72%,transparent)}
+  header{position:relative;z-index:1;margin:.7rem .9rem 0;padding:.55rem .8rem;
+    border:1px solid var(--line);border-radius:14px;
+    background:linear-gradient(120deg,var(--panel),rgba(14,8,29,.7));
+    box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.08);
+    display:flex;align-items:center;gap:.75rem;backdrop-filter:blur(14px);flex-wrap:wrap}
+  .logo{font-weight:900;letter-spacing:.16em;font-size:16px;text-transform:uppercase;
+    text-shadow:var(--glow-cyan)}
+  .logo .blue{color:var(--cyan)} .logo .red{color:var(--mag);text-shadow:var(--glow-mag)}
+  .meta{color:#dbe7ff;font-size:11px;letter-spacing:.02em;
+    border:1px solid rgba(32,246,255,.28);border-radius:999px;padding:.28rem .55rem;
+    background:linear-gradient(90deg,rgba(32,246,255,.12),rgba(255,55,213,.12));white-space:nowrap}
+  nav{display:flex;gap:.32rem;margin-left:auto;flex-wrap:wrap}
+  nav button{background:transparent;color:var(--mut);border:1px solid rgba(255,255,255,.08);
+    border-radius:8px;padding:.32rem .68rem;font:inherit;font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;font-weight:700;cursor:pointer;transition:all .15s}
+  nav button:hover{border-color:var(--cyan);color:var(--cyan)}
+  nav button.active{background:linear-gradient(120deg,rgba(32,246,255,.18),rgba(255,55,213,.18));
+    color:var(--fg);border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  main{position:relative;z-index:1;flex:1;display:flex;margin:.7rem .9rem .9rem;overflow:hidden;gap:.7rem}
+  .tab{display:none;flex:1;min-width:0;border:1px solid rgba(143,92,255,.26);border-radius:16px;
+    background:linear-gradient(120deg,var(--panel),rgba(32,12,45,.7));
+    box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.08);backdrop-filter:blur(14px);
+    overflow:hidden}
+  .tab.active{display:flex}
+
+  /* ===== Chat tab ===== */
+  #tab-chat{display:none}
+  #tab-chat.active{display:flex}
+  aside.sessions{flex:0 0 14rem;border-right:1px solid rgba(255,255,255,.08);
+    display:flex;flex-direction:column;background:rgba(2,5,15,.32)}
+  aside.sessions header{margin:0;padding:.55rem .7rem;border:0;border-radius:0;
+    background:transparent;box-shadow:none;display:flex;align-items:center;justify-content:space-between}
+  aside.sessions header .title{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em}
+  .icon-btn{background:transparent;color:var(--cyan);border:1px solid rgba(32,246,255,.32);
+    border-radius:8px;padding:.2rem .55rem;font:inherit;font-size:11px;cursor:pointer;letter-spacing:.05em}
+  .icon-btn:hover{background:rgba(32,246,255,.12);box-shadow:var(--glow-cyan)}
+  .session-list{flex:1;overflow:auto;padding:.3rem;margin:0;list-style:none}
+  .session-list li{padding:.45rem .55rem;border-radius:8px;margin-bottom:.2rem;cursor:pointer;
+    color:var(--mut);font-size:12px;border:1px solid transparent;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .session-list li:hover{background:rgba(255,255,255,.04);color:var(--fg);border-color:rgba(255,55,213,.2)}
+  .session-list li.active{background:rgba(32,246,255,.1);color:var(--cyan);
+    border-color:rgba(32,246,255,.4);box-shadow:var(--glow-cyan)}
+  .session-list li .del{float:right;color:var(--red);font-weight:700;opacity:0;padding-left:.5rem}
+  .session-list li:hover .del{opacity:.7}
+  .session-list li .del:hover{opacity:1}
+  .chat-pane{flex:1;display:flex;flex-direction:column;min-width:0}
+  #log{flex:1;overflow:auto;padding:.85rem;display:flex;flex-direction:column;gap:.55rem;
+    scrollbar-color:var(--mag) transparent}
+  .row{display:flex;gap:.6rem;align-items:flex-start;animation:rise .18s ease-out}
   @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-  .role{flex-shrink:0;width:5rem;text-transform:uppercase;font-size:11px;letter-spacing:.1em;padding-top:.66rem;color:var(--mut)}
+  .role{flex-shrink:0;width:4.2rem;text-transform:uppercase;font-size:10.5px;
+    letter-spacing:.1em;padding-top:.6rem;color:var(--mut)}
   .row.u .role{color:var(--cyan);text-shadow:var(--glow-cyan)}
   .row.a .role{color:var(--mag);text-shadow:var(--glow-mag)}
   .row.e .role{color:var(--red);text-shadow:var(--glow-hot)}
-  .bub{white-space:pre-wrap;flex:1;min-width:0;border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:.75rem .85rem;
-       background:var(--panel);box-shadow:0 10px 28px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.06)}
-  .row.u .bub{border-color:rgba(32,246,255,.32);background:linear-gradient(135deg,rgba(12,42,61,.72),rgba(10,19,42,.7));box-shadow:var(--glow-cyan),var(--shadow)}
-  .row.a .bub{border-color:rgba(255,55,213,.28);background:linear-gradient(135deg,rgba(36,16,62,.72),rgba(14,17,44,.72));box-shadow:var(--glow-mag),var(--shadow)}
-  .row.e .bub{border-color:rgba(255,77,109,.42);background:linear-gradient(135deg,rgba(65,17,32,.78),rgba(37,14,25,.72));box-shadow:var(--glow-hot),var(--shadow)}
-  form{position:relative;z-index:1;display:flex;gap:.65rem;margin:0 .9rem .9rem;padding:.75rem;
-       border:1px solid rgba(143,92,255,.26);border-radius:18px;background:linear-gradient(120deg,rgba(9,13,31,.84),rgba(32,12,45,.74));
-       box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.08);backdrop-filter:blur(14px)}
+  .bub{white-space:pre-wrap;flex:1;min-width:0;border:1px solid rgba(255,255,255,.08);
+    border-radius:14px;padding:.65rem .8rem;background:var(--panel);
+    box-shadow:0 10px 28px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.06);
+    font-size:13px}
+  .row.u .bub{border-color:rgba(32,246,255,.32);
+    background:linear-gradient(135deg,rgba(12,42,61,.72),rgba(10,19,42,.7));box-shadow:var(--glow-cyan)}
+  .row.a .bub{border-color:rgba(255,55,213,.28);
+    background:linear-gradient(135deg,rgba(36,16,62,.72),rgba(14,17,44,.72));box-shadow:var(--glow-mag)}
+  .row.e .bub{border-color:rgba(255,77,109,.42);
+    background:linear-gradient(135deg,rgba(65,17,32,.78),rgba(37,14,25,.72));box-shadow:var(--glow-hot)}
+  .toolcall{color:var(--cyan);font-weight:600}
+  .toolresult{color:var(--mut);padding-left:1.2rem}
+  form.send{display:flex;gap:.5rem;margin:0;padding:.6rem;
+    border-top:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
   textarea{flex:1;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
-           border:1px solid rgba(32,246,255,.32);border-radius:12px;padding:.68rem .75rem;font:inherit;resize:none;
-           min-height:2.8rem;max-height:9rem;outline:none;box-shadow:inset 0 0 18px rgba(32,246,255,.05);transition:border-color .16s,box-shadow .16s,background .16s}
-  textarea::placeholder{color:rgba(143,155,198,.78)}
-  textarea:hover{border-color:rgba(255,55,213,.46)}
-  textarea:focus{border-color:var(--cyan);background:rgba(4,8,22,.9);box-shadow:var(--glow-cyan),inset 0 0 24px rgba(32,246,255,.07)}
-  button{color:#fff;border:0;border-radius:12px;padding:.55rem 1.1rem;cursor:pointer;font:inherit;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
-         background:linear-gradient(135deg,var(--cyan),var(--violet) 48%,var(--mag));box-shadow:0 0 20px rgba(255,55,213,.28),0 10px 28px rgba(0,0,0,.35);transition:transform .16s,filter .16s,box-shadow .16s,opacity .16s}
-  button:hover:not(:disabled){transform:translateY(-1px);filter:saturate(1.18) brightness(1.08);box-shadow:var(--glow-mag),0 14px 34px rgba(0,0,0,.4)}
-  button:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
-  button:active:not(:disabled){transform:translateY(0)}
-  button:disabled{opacity:.45;cursor:wait;filter:grayscale(.35)}
-  .dim{color:var(--mut)}
-  @media (max-width:640px){header{align-items:flex-start;flex-direction:column}.role{width:3.8rem}.row{gap:.45rem}form{flex-direction:column}button{width:100%}}
+    border:1px solid rgba(32,246,255,.32);border-radius:10px;padding:.55rem .65rem;font:inherit;
+    resize:none;min-height:2.4rem;max-height:9rem;outline:none}
+  textarea:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  button.primary{color:#fff;border:0;border-radius:10px;padding:.42rem .9rem;cursor:pointer;
+    font:inherit;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+    background:linear-gradient(135deg,var(--cyan),var(--violet) 48%,var(--mag));
+    box-shadow:0 0 16px rgba(255,55,213,.24)}
+  button.primary:disabled{opacity:.45;cursor:wait}
+
+  /* ===== Generic two-column tabs ===== */
+  .two-col{display:flex;flex:1;min-width:0}
+  .col-list{flex:0 0 16rem;border-right:1px solid rgba(255,255,255,.08);
+    overflow:auto;padding:.5rem;background:rgba(2,5,15,.32)}
+  .col-view{flex:1;overflow:auto;padding:.85rem;min-width:0;
+    font-family:ui-monospace,monospace;font-size:12.5px;white-space:pre-wrap}
+  .col-list .item{padding:.4rem .55rem;border-radius:8px;margin-bottom:.18rem;cursor:pointer;
+    color:var(--mut);font-size:12px;border:1px solid transparent;
+    display:flex;justify-content:space-between;align-items:center}
+  .col-list .item:hover{background:rgba(255,255,255,.04);color:var(--fg);border-color:rgba(255,55,213,.2)}
+  .col-list .item.active{background:rgba(32,246,255,.1);color:var(--cyan);
+    border-color:rgba(32,246,255,.4)}
+  .col-list .item .size{color:var(--mut);font-size:10px}
+  .col-list .crumb{font-size:11px;color:var(--mut);padding:.3rem .55rem;
+    border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:.3rem;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* ===== Table tabs (MCP, Cron) ===== */
+  .pane{flex:1;overflow:auto;padding:.85rem;min-width:0}
+  table.data{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.data th{text-align:left;color:var(--cyan);padding:.42rem .55rem;
+    border-bottom:1px solid var(--line);text-transform:uppercase;font-size:10.5px;letter-spacing:.08em}
+  table.data td{padding:.42rem .55rem;border-bottom:1px solid rgba(255,255,255,.05);vertical-align:top}
+  table.data tr:hover td{background:rgba(32,246,255,.04)}
+  .badge{display:inline-block;padding:.1rem .45rem;border-radius:999px;font-size:10px;
+    text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+  .badge.on{background:rgba(61,242,129,.16);color:var(--green);border:1px solid rgba(61,242,129,.4)}
+  .badge.off{background:rgba(255,77,109,.16);color:var(--red);border:1px solid rgba(255,77,109,.4)}
+
+  /* ===== Skills tab ===== */
+  .skill-card{padding:.7rem .85rem;border:1px solid rgba(255,255,255,.08);border-radius:10px;
+    margin-bottom:.55rem;background:rgba(2,5,15,.32)}
+  .skill-card .name{font-weight:700;color:var(--cyan)}
+  .skill-card .kind{display:inline-block;margin-left:.5rem;padding:.05rem .4rem;border-radius:999px;
+    font-size:10px;background:rgba(255,55,213,.16);color:var(--mag);text-transform:uppercase;letter-spacing:.06em}
+  .skill-card .desc{color:var(--mut);font-size:12px;margin-top:.3rem}
+  .skill-card .path{color:rgba(143,155,198,.5);font-size:10.5px;margin-top:.3rem;word-break:break-all}
+
+  /* ===== Logs tab ===== */
+  #tab-logs{display:none;flex-direction:column}
+  #tab-logs.active{display:flex}
+  .logs-bar{display:flex;gap:.5rem;align-items:center;padding:.55rem .7rem;
+    border-bottom:1px solid rgba(255,255,255,.06)}
+  .logs-bar .spacer{flex:1}
+  #logs-view{flex:1;overflow:auto;margin:0;padding:.7rem .9rem;
+    font:12px ui-monospace,monospace;white-space:pre-wrap;color:#cdd6ff}
+
+  /* ===== Settings tab ===== */
+  #config-view{font:12px ui-monospace,monospace;white-space:pre-wrap;color:#cdd6ff;
+    padding:.85rem;margin:0;overflow:auto;flex:1}
+
+  .empty-pane{margin:auto;color:var(--mut);text-align:center;padding:2rem;font-size:12px}
+
+  @media (max-width:760px){
+    nav{order:99;width:100%;margin-left:0}
+    aside.sessions,.col-list{flex-basis:8rem}
+    .role{width:3.4rem}
+  }
 </style>
 </head><body>
 <header>
-  <span class="logo">
-    <span class="blue">PAS</span><span class="red">CLAW</span>
-  </span>
-  <span id="meta" class="ver">loading...</span>
+  <span class="logo"><span class="blue">PAS</span><span class="red">CLAW</span></span>
+  <span id="meta" class="meta">loading...</span>
+  <nav id="tabs">
+    <button data-tab="chat" class="active">Chat</button>
+    <button data-tab="memory">Memory</button>
+    <button data-tab="files">Files</button>
+    <button data-tab="mcp">MCP</button>
+    <button data-tab="cron">Cron</button>
+    <button data-tab="skills">Skills</button>
+    <button data-tab="logs">Logs</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
 </header>
-<div id="log">
-  <div id="empty" class="empty">
-    <div class="mark">PASCLAW GATEWAY</div>
-    <div>Native Pascal agent console, tuned for neon-night hacking.</div>
-    <div class="hint">Ask a question to light up the tool loop.</div>
+<main>
+  <div id="tab-chat" class="tab active">
+    <aside class="sessions">
+      <header>
+        <span class="title">Sessions</span>
+        <button class="icon-btn" id="session-new">+ New</button>
+      </header>
+      <ul class="session-list" id="session-list"></ul>
+    </aside>
+    <div class="chat-pane">
+      <div id="log"></div>
+      <form class="send" id="f">
+        <textarea id="m" rows="2"
+          placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline)"></textarea>
+        <button class="primary" id="b">Send</button>
+      </form>
+    </div>
   </div>
-</div>
-<form id="f">
-  <textarea id="m" rows="2"
-            placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline)"></textarea>
-  <button id="b">Send</button>
-</form>
-<script>
-const log = document.getElementById("log");
-const meta = document.getElementById("meta");
-const f = document.getElementById("f");
-const m = document.getElementById("m");
-const b = document.getElementById("b");
-const empty = document.getElementById("empty");
 
-function add(role, text) {
-  if (role === "u" && empty) empty.hidden = true;
+  <div id="tab-memory" class="tab">
+    <div class="two-col">
+      <div class="col-list">
+        <div class="crumb">workspace/memory/</div>
+        <div id="mem-list"></div>
+      </div>
+      <pre class="col-view" id="mem-view"><div class="empty-pane">Pick a file to view.</div></pre>
+    </div>
+  </div>
+
+  <div id="tab-files" class="tab">
+    <div class="two-col">
+      <div class="col-list">
+        <div class="crumb" id="fs-crumb">…</div>
+        <div id="fs-list"></div>
+      </div>
+      <pre class="col-view" id="fs-view"><div class="empty-pane">Pick a file to view.</div></pre>
+    </div>
+  </div>
+
+  <div id="tab-mcp" class="tab">
+    <div class="pane">
+      <table class="data" id="mcp-table">
+        <thead><tr><th>Name</th><th>Command</th><th>Args</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="tab-cron" class="tab">
+    <div class="pane">
+      <table class="data" id="cron-table">
+        <thead><tr><th>Id</th><th>Spec</th><th>Skill</th><th>Args</th><th>Channel</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="tab-skills" class="tab">
+    <div class="pane" id="skills-pane"></div>
+  </div>
+
+  <div id="tab-logs" class="tab">
+    <div class="logs-bar">
+      <span class="meta" id="logs-status">disconnected</span>
+      <span class="spacer"></span>
+      <button class="icon-btn" id="logs-clear">Clear</button>
+    </div>
+    <pre id="logs-view"></pre>
+  </div>
+
+  <div id="tab-settings" class="tab">
+    <pre id="config-view">loading config…</pre>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+/* ===== Tab switching ===== */
+const tabLoaded = {};
+function showTab(name) {
+  $$("nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  $$(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
+  if (!tabLoaded[name] && typeof tabLoaders[name] === "function") {
+    tabLoaders[name]();
+    tabLoaded[name] = true;
+  }
+}
+$$("nav button").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
+
+/* ===== Header status ===== */
+fetch("/v1/status").then(r => r.json()).then(s => {
+  $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
+}).catch(_ => $("#meta").textContent = "offline");
+
+/* ===== Sessions (localStorage) ===== */
+const SESS_KEY = "pasclaw.sessions.v1";
+let sessions = loadSessions();
+let activeSessionId = null;
+function loadSessions() {
+  try { return JSON.parse(localStorage.getItem(SESS_KEY) || "[]"); } catch { return []; }
+}
+function saveSessions() { localStorage.setItem(SESS_KEY, JSON.stringify(sessions)); }
+function newSession() {
+  const id = "s" + Date.now();
+  const s = { id, title: "New chat", created: Date.now(), turns: [] };
+  sessions.unshift(s);
+  saveSessions();
+  renderSessions();
+  activateSession(id);
+}
+function deleteSession(id) {
+  sessions = sessions.filter(s => s.id !== id);
+  saveSessions();
+  renderSessions();
+  if (activeSessionId === id) {
+    activeSessionId = sessions.length ? sessions[0].id : null;
+    if (activeSessionId) activateSession(activeSessionId); else clearLog();
+  }
+}
+function renderSessions() {
+  const ul = $("#session-list");
+  ul.innerHTML = "";
+  for (const s of sessions) {
+    const li = document.createElement("li");
+    if (s.id === activeSessionId) li.className = "active";
+    li.title = new Date(s.created).toLocaleString();
+    const span = document.createElement("span");
+    span.textContent = s.title || "(untitled)";
+    const del = document.createElement("span");
+    del.className = "del"; del.textContent = "×";
+    del.addEventListener("click", e => { e.stopPropagation(); deleteSession(s.id); });
+    li.appendChild(span); li.appendChild(del);
+    li.addEventListener("click", () => activateSession(s.id));
+    ul.appendChild(li);
+  }
+}
+function activateSession(id) {
+  activeSessionId = id;
+  renderSessions();
+  const s = sessions.find(x => x.id === id);
+  clearLog();
+  if (!s) return;
+  for (const t of s.turns) addLine(t.role, t.text);
+}
+function activeSession() {
+  let s = sessions.find(x => x.id === activeSessionId);
+  if (!s) { newSession(); s = sessions[0]; }
+  return s;
+}
+function recordTurn(role, text) {
+  const s = activeSession();
+  s.turns.push({ role, text });
+  if (role === "u" && (!s.title || s.title === "New chat")) {
+    s.title = text.slice(0, 40);
+  }
+  saveSessions();
+  renderSessions();
+}
+$("#session-new").addEventListener("click", () => newSession());
+
+/* ===== Chat surface ===== */
+const log = $("#log");
+const f = $("#f"), m = $("#m"), b = $("#b");
+
+function clearLog() { log.innerHTML = ""; }
+function addLine(role, text) {
   const r = document.createElement("div");
   r.className = "row " + role;
-  r.innerHTML = `<div class="role">${
-    role === "u" ? "you" : role === "a" ? "pasclaw" : "error"
-  }</div><div class="bub"></div>`;
-  r.querySelector(".bub").textContent = text;
+  r.innerHTML = `<div class="role">${role==="u"?"you":role==="a"?"pasclaw":"error"}</div>`
+              + `<div class="bub"></div>`;
+  r.querySelector(".bub").textContent = text || "";
   log.appendChild(r);
   log.scrollTop = log.scrollHeight;
+  return r.querySelector(".bub");
 }
 
-fetch("/v1/status")
-  .then(r => r.json())
-  .then(s => {
-    meta.textContent =
-      `${s.default_provider}/${s.default_model} • ` +
-      `tools:${s.tools} • mcp:${s.mcp_servers}`;
-  })
-  .catch(_ => meta.textContent = "offline");
-
 m.addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    f.requestSubmit();
-  }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); }
 });
 
 f.addEventListener("submit", async e => {
   e.preventDefault();
   const msg = m.value.trim();
   if (!msg) return;
-  add("u", msg);
-  m.value = "";
-  b.disabled = true;
+  addLine("u", msg);
+  recordTurn("u", msg);
+  m.value = ""; b.disabled = true;
+
+  const bub = addLine("a", "");
+  let assistantText = "";
+
+  /* Use /v1/chat/completions with stream:true so tool calls + results
+     surface as content deltas (the gateway emits ⏺/⎿ markers per
+     PasClaw.Gateway.ToolView). */
+  const s = activeSession();
+  const history = s.turns.filter(t => t.role === "u" || t.role === "a")
+                          .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
   try {
-    const r = await fetch("/v1/chat", {
+    const r = await fetch("/v1/chat/completions", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: msg })
+      headers: { "content-type": "application/json", "accept": "text/event-stream" },
+      /* Model omitted on purpose — gateway falls back to FCfg.DefaultModel,
+         which the operator set via `pasclaw model set`. Letting the
+         server choose keeps the web UI from having to know provider/model
+         strings ahead of time. */
+      body: JSON.stringify({ messages: history, stream: true })
     });
-    const j = await r.json();
-    if (r.ok) add("a", j.content || "(empty)");
-    else add("e", j.error || String(r.status));
+    if (!r.ok) {
+      bub.textContent = `(http ${r.status})`;
+      bub.parentElement.className = "row e";
+      bub.parentElement.querySelector(".role").textContent = "error";
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") break;
+        try {
+          const j = JSON.parse(data);
+          const delta = (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || "";
+          if (delta) {
+            assistantText += delta;
+            bub.textContent = assistantText;
+            log.scrollTop = log.scrollHeight;
+          }
+        } catch { /* ignore parse errors on SSE comments */ }
+      }
+    }
   } catch (err) {
-    add("e", String(err));
+    bub.textContent = String(err);
+    bub.parentElement.className = "row e";
   } finally {
+    recordTurn("a", assistantText);
     b.disabled = false;
     m.focus();
   }
 });
+
+/* ===== Loaders for the read-only tabs (lazy-bound on first show) ===== */
+const tabLoaders = {
+  chat() { /* always loaded */ },
+
+  async memory() {
+    const list = $("#mem-list");
+    list.innerHTML = "loading…";
+    try {
+      const j = await (await fetch("/v1/memory")).json();
+      list.innerHTML = "";
+      if (!j.files || !j.files.length) {
+        list.innerHTML = `<div class="empty-pane">No memory files yet.</div>`;
+        return;
+      }
+      for (const f of j.files) {
+        const el = document.createElement("div");
+        el.className = "item";
+        el.innerHTML = `<span>${escapeHtml(f.name)}</span><span class="size">${f.size}b</span>`;
+        el.addEventListener("click", async () => {
+          $$("#mem-list .item").forEach(x => x.classList.remove("active"));
+          el.classList.add("active");
+          try {
+            const r = await (await fetch("/v1/memory/" + encodeURIComponent(f.name))).json();
+            $("#mem-view").textContent = r.content || "";
+          } catch (e) { $("#mem-view").textContent = String(e); }
+        });
+        list.appendChild(el);
+      }
+    } catch (e) { list.textContent = String(e); }
+  },
+
+  async files() {
+    let cwd = "";
+    async function load(path) {
+      $("#fs-crumb").textContent = path || "(home)";
+      const list = $("#fs-list");
+      list.innerHTML = "loading…";
+      try {
+        const url = path ? "/v1/fs?path=" + encodeURIComponent(path) : "/v1/fs";
+        const j = await (await fetch(url)).json();
+        cwd = j.path || path || "";
+        list.innerHTML = "";
+        if (cwd) {
+          const up = document.createElement("div");
+          up.className = "item"; up.innerHTML = `<span>../</span>`;
+          up.addEventListener("click", () => load(parentPath(cwd)));
+          list.appendChild(up);
+        }
+        for (const e of (j.entries || [])) {
+          const el = document.createElement("div");
+          el.className = "item";
+          el.innerHTML = `<span>${escapeHtml(e.name)}${e.dir?"/":""}</span>`
+                       + `<span class="size">${e.dir?"":e.size+"b"}</span>`;
+          el.addEventListener("click", async () => {
+            const full = (cwd ? cwd.replace(/\/$/, "") + "/" : "") + e.name;
+            if (e.dir) load(full);
+            else {
+              try {
+                const r = await (await fetch("/v1/fs/read?path=" + encodeURIComponent(full))).json();
+                $("#fs-view").textContent = r.content + (r.truncated ? "\n…(truncated)" : "");
+              } catch (err) { $("#fs-view").textContent = String(err); }
+            }
+          });
+          list.appendChild(el);
+        }
+      } catch (e) { list.textContent = String(e); }
+    }
+    function parentPath(p) {
+      const i = p.replace(/\/$/, "").lastIndexOf("/");
+      return i > 0 ? p.slice(0, i) : "";
+    }
+    load("");
+  },
+
+  async mcp() {
+    const tbody = $("#mcp-table tbody"); tbody.innerHTML = "";
+    try {
+      const j = await (await fetch("/v1/mcp")).json();
+      if (!j.servers || !j.servers.length) {
+        tbody.innerHTML = `<tr><td colspan=4><div class="empty-pane">No MCP servers configured.</div></td></tr>`;
+        return;
+      }
+      for (const s of j.servers) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${escapeHtml(s.name)}</td>`
+                     + `<td>${escapeHtml(s.cmd)}</td>`
+                     + `<td>${escapeHtml(s.args || "")}</td>`
+                     + `<td><span class="badge ${s.enabled?"on":"off"}">${s.enabled?"enabled":"disabled"}</span></td>`;
+        tbody.appendChild(tr);
+      }
+    } catch (e) { tbody.innerHTML = `<tr><td colspan=4>${escapeHtml(String(e))}</td></tr>`; }
+  },
+
+  async cron() {
+    const tbody = $("#cron-table tbody"); tbody.innerHTML = "";
+    try {
+      const j = await (await fetch("/v1/cron")).json();
+      if (!j.entries || !j.entries.length) {
+        tbody.innerHTML = `<tr><td colspan=6><div class="empty-pane">No cron entries.</div></td></tr>`;
+        return;
+      }
+      for (const c of j.entries) {
+        const tr = document.createElement("tr");
+        const ch = c.channel_kind ? `${c.channel_kind}:${c.channel_target}` : "—";
+        tr.innerHTML = `<td>${escapeHtml(c.id)}</td>`
+                     + `<td>${escapeHtml(c.spec)}</td>`
+                     + `<td>${escapeHtml(c.skill)}</td>`
+                     + `<td>${escapeHtml(c.args || "")}</td>`
+                     + `<td>${escapeHtml(ch)}</td>`
+                     + `<td><span class="badge ${c.enabled?"on":"off"}">${c.enabled?"on":"off"}</span></td>`;
+        tbody.appendChild(tr);
+      }
+    } catch (e) { tbody.innerHTML = `<tr><td colspan=6>${escapeHtml(String(e))}</td></tr>`; }
+  },
+
+  async skills() {
+    const pane = $("#skills-pane"); pane.innerHTML = "";
+    try {
+      const j = await (await fetch("/v1/skills")).json();
+      if (!j.skills || !j.skills.length) {
+        pane.innerHTML = `<div class="empty-pane">No skills installed. Run <code>pasclaw skills install &lt;owner/repo&gt;</code> or <code>pasclaw skills install clawhub:&lt;slug&gt;</code>.</div>`;
+        return;
+      }
+      for (const s of j.skills) {
+        const el = document.createElement("div");
+        el.className = "skill-card";
+        const kindLabel = s.kind || "knowledge";
+        el.innerHTML = `<div><span class="name">${escapeHtml(s.name)}</span>`
+                     + `<span class="kind">${escapeHtml(kindLabel)}</span></div>`
+                     + (s.description ? `<div class="desc">${escapeHtml(s.description)}</div>` : "")
+                     + `<div class="path">${escapeHtml(s.path || s.dir || "")}</div>`;
+        pane.appendChild(el);
+      }
+    } catch (e) { pane.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+  },
+
+  logs() {
+    const view = $("#logs-view"); const status = $("#logs-status");
+    view.textContent = "";
+    let es;
+    try {
+      es = new EventSource("/v1/logs");
+      es.onopen = () => status.textContent = "live";
+      es.onerror = () => status.textContent = "disconnected";
+      es.onmessage = e => {
+        let s; try { s = JSON.parse(e.data); } catch { s = e.data; }
+        view.textContent += s + "\n";
+        view.scrollTop = view.scrollHeight;
+      };
+    } catch (err) { status.textContent = "error: " + err; }
+    $("#logs-clear").addEventListener("click", () => { view.textContent = ""; });
+  },
+
+  async settings() {
+    const view = $("#config-view");
+    try {
+      const j = await (await fetch("/v1/config")).json();
+      view.textContent = JSON.stringify(j, null, 2);
+    } catch (e) { view.textContent = String(e); }
+  }
+};
+
+/* ===== Misc helpers ===== */
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+}
+
+/* ===== Boot ===== */
+if (sessions.length === 0) newSession();
+else { activeSessionId = sessions[0].id; renderSessions(); activateSession(sessions[0].id); }
 m.focus();
 </script>
 </body></html>

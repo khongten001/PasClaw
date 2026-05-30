@@ -69,6 +69,21 @@ type
     procedure HandleVersion(AResp: TIdHTTPResponseInfo);
     procedure HandleStatus(AResp: TIdHTTPResponseInfo);
     procedure HandleTools(AResp: TIdHTTPResponseInfo);
+    procedure HandleMCPList(AResp: TIdHTTPResponseInfo);
+    procedure HandleCronList(AResp: TIdHTTPResponseInfo);
+    procedure HandleSkillsList(AResp: TIdHTTPResponseInfo);
+    procedure HandleMemoryList(AResp: TIdHTTPResponseInfo);
+    procedure HandleMemoryRead(const Doc: string;
+                                ARequest: TIdHTTPRequestInfo;
+                                AResp: TIdHTTPResponseInfo);
+    procedure HandleConfig(AResp: TIdHTTPResponseInfo);
+    procedure HandleFSList(ARequest: TIdHTTPRequestInfo;
+                            AResp: TIdHTTPResponseInfo);
+    procedure HandleFSRead(ARequest: TIdHTTPRequestInfo;
+                            AResp: TIdHTTPResponseInfo);
+    procedure HandleLogs(AContext: TIdContext;
+                          ARequest: TIdHTTPRequestInfo;
+                          AResp: TIdHTTPResponseInfo);
     procedure HandleChat(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     procedure HandleChatCompletions(AContext: TIdContext;
                                     ARequest: TIdHTTPRequestInfo;
@@ -109,8 +124,12 @@ implementation
 
 uses
   DateUtils,
+  IdTCPConnection,
   PasClaw.JSON,
   PasClaw.Logger,
+  PasClaw.Utils,
+  PasClaw.Skills.Loader,
+  PasClaw.Tools.Sandbox,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
@@ -274,6 +293,16 @@ begin
     else if (ARequest.Command = 'POST') and (Doc = '/v1/responses') then
       HandleResponses(AContext, ARequest, AResponse, IsChatCompletionsStream, ResponseStarted)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/models')  then HandleModels(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp')     then HandleMCPList(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/cron')    then HandleCronList(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills')  then HandleSkillsList(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory')  then HandleMemoryList(AResponse)
+    else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 11) = '/v1/memory/') then
+      HandleMemoryRead(Doc, ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/config')  then HandleConfig(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs')      then HandleFSList(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
     else if Doc = '/' then
     begin
       AResponse.ResponseNo  := 200;
@@ -371,6 +400,465 @@ begin
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleMCPList(AResp: TIdHTTPResponseInfo);
+var
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  Item: TJsonObject;
+  i: Integer;
+begin
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    for i := 0 to High(FCfg.MCPServers) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr ('name',    FCfg.MCPServers[i].Name);
+      Item.PutStr ('cmd',     FCfg.MCPServers[i].Cmd);
+      Item.PutStr ('args',    FCfg.MCPServers[i].Args);
+      Item.PutBool('enabled', FCfg.MCPServers[i].Enabled);
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('servers', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleCronList(AResp: TIdHTTPResponseInfo);
+var
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  Item: TJsonObject;
+  i: Integer;
+begin
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    for i := 0 to High(FCfg.Crons) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr ('id',             FCfg.Crons[i].Id);
+      Item.PutStr ('spec',           FCfg.Crons[i].Spec);
+      Item.PutStr ('skill',          FCfg.Crons[i].Skill);
+      Item.PutStr ('args',           FCfg.Crons[i].Args);
+      Item.PutBool('enabled',        FCfg.Crons[i].Enabled);
+      Item.PutStr ('channel_kind',   FCfg.Crons[i].ChannelKind);
+      Item.PutStr ('channel_target', FCfg.Crons[i].ChannelTarget);
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('entries', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleSkillsList(AResp: TIdHTTPResponseInfo);
+var
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  Item: TJsonObject;
+  Skills: TSkillSpecArray;
+  i: Integer;
+begin
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    Skills := LoadSkillManifests(GetHome);
+    for i := 0 to High(Skills) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr('name',        Skills[i].Name);
+      Item.PutStr('description', Skills[i].Description);
+      Item.PutStr('kind',        Skills[i].Kind);
+      Item.PutStr('path',        Skills[i].Source);
+      Item.PutStr('dir',         Skills[i].Dir);
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('skills', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleMemoryList(AResp: TIdHTTPResponseInfo);
+var
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  Item: TJsonObject;
+  Dir: string;
+  SR: TSearchRec;
+begin
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    Dir := JoinPath(GetHome, 'workspace/memory');
+    if DirectoryExists(Dir) then
+    begin
+      if FindFirst(JoinPath(Dir, '*.md'), faAnyFile, SR) = 0 then
+      try
+        repeat
+          if (SR.Attr and faDirectory) <> 0 then Continue;
+          Item := TJsonObject.Create;
+          Item.PutStr('name', SR.Name);
+          Item.PutInt('size', SR.Size);
+          Arr.AddObject(Item);
+        until FindNext(SR) <> 0;
+      finally
+        FindClose(SR);
+      end;
+    end;
+    Root.PutArray('files', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleMemoryRead(const Doc: string;
+                                            ARequest: TIdHTTPRequestInfo;
+                                            AResp: TIdHTTPResponseInfo);
+var
+  Name, Path, Body: string;
+  Root: TJsonObject;
+  i: Integer;
+begin
+  Name := Copy(Doc, Length('/v1/memory/') + 1, MaxInt);
+  { Refuse any path-traversal — only bare filenames inside the
+    memory directory are addressable through this endpoint. }
+  if (Name = '') or (Pos('..', Name) > 0) or (Pos('/', Name) > 0) or
+     (Pos('\', Name) > 0) then
+  begin
+    WriteJSON(AResp, 400, '{"error":"bad name"}');
+    Exit;
+  end;
+  Path := JoinPath(JoinPath(GetHome, 'workspace/memory'), Name);
+  if not FileExists(Path) then
+  begin
+    WriteJSON(AResp, 404, '{"error":"not found"}');
+    Exit;
+  end;
+  try
+    Body := ReadFileText(Path);
+  except
+    on E: Exception do
+    begin
+      WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
+      Exit;
+    end;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr('name',    Name);
+    Root.PutStr('content', Body);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+  if i = 0 then;   { silence unused-var warning }
+end;
+
+procedure TGatewayServer.HandleConfig(AResp: TIdHTTPResponseInfo);
+var
+  Body: string;
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+  i: Integer;
+begin
+  { Mask secret-bearing fields. PR #88 Codex P1 caught that the
+    original implementation only masked providers[].api_key and
+    left mcp_servers[].env exposed — which typically contains
+    OPENAI_API_KEY=, GITHUB_TOKEN=, etc. for stdio MCP servers.
+    Mask any non-empty secret field with "•••" so the UI can show
+    "set vs unset" without leaking the value. }
+  Body := FCfg.ToJSON;
+  Root := TJsonObject.Parse(Body);
+  if Root = nil then
+  begin
+    WriteJSON(AResp, 500, '{"error":"could not reparse config"}');
+    Exit;
+  end;
+  try
+    Arr := Root.ChildArray('providers');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          if Item.GetStr('api_key', '') <> '' then
+            Item.PutStr('api_key', '•••');
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+
+    Arr := Root.ChildArray('mcp_servers');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          { env strings are typically KEY=value pairs separated by
+            newlines or semicolons — anything from "OPENAI_API_KEY=sk-…"
+            to bearer tokens. Mask the whole string when non-empty;
+            the UI just needs "is configured" signal, not the literal. }
+          if Item.GetStr('env', '') <> '' then
+            Item.PutStr('env', '•••');
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleFSList(ARequest: TIdHTTPRequestInfo;
+                                       AResp: TIdHTTPResponseInfo);
+var
+  Path, Dir, Reason: string;
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  Item: TJsonObject;
+  SR: TSearchRec;
+begin
+  Path := ARequest.Params.Values['path'];
+  if Path = '' then Path := GetHome;
+  { Route through the same sandbox CanReadPath check that fs_read
+    uses. PR #88 Codex P1: the original "reject `..`" check let
+    absolute paths like /etc/passwd through even when
+    sandbox.restrict_to_workspace was on. CanReadPath honours
+    workspace bounds, allow_read_paths globs, and
+    allow_read_outside_workspace. }
+  if not CanReadPath(Path, Reason) then
+  begin
+    WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
+    Exit;
+  end;
+  Dir := Path;
+  if not DirectoryExists(Dir) then
+  begin
+    WriteJSON(AResp, 404, '{"error":"not a directory"}');
+    Exit;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr('path', Dir);
+    Arr := TJsonArray.Create;
+    if FindFirst(JoinPath(Dir, '*'), faAnyFile, SR) = 0 then
+    try
+      repeat
+        if (SR.Name = '.') or (SR.Name = '..') then Continue;
+        Item := TJsonObject.Create;
+        Item.PutStr ('name', SR.Name);
+        Item.PutInt ('size', SR.Size);
+        Item.PutBool('dir',  (SR.Attr and faDirectory) <> 0);
+        Arr.AddObject(Item);
+      until FindNext(SR) <> 0;
+    finally
+      FindClose(SR);
+    end;
+    Root.PutArray('entries', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleFSRead(ARequest: TIdHTTPRequestInfo;
+                                       AResp: TIdHTTPResponseInfo);
+const
+  MAX_BYTES = 256 * 1024;   { 256 KB display cap }
+var
+  Path, Body, Reason: string;
+  Root: TJsonObject;
+  Strm: TFileStream;
+  Truncated: Boolean;
+  ToRead: Int64;
+  Bytes: TBytes;
+begin
+  Path := ARequest.Params.Values['path'];
+  if Path = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"bad path"}');
+    Exit;
+  end;
+  { Same sandbox gate as HandleFSList — fs_read's policy applies
+    here too. PR #88 Codex P1 caught the original "reject `..`"
+    check that let /etc/passwd through. }
+  if not CanReadPath(Path, Reason) then
+  begin
+    WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
+    Exit;
+  end;
+  if not FileExists(Path) then
+  begin
+    WriteJSON(AResp, 404, '{"error":"not found"}');
+    Exit;
+  end;
+  Truncated := False;
+  try
+    Strm := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
+    try
+      ToRead := Strm.Size;
+      if ToRead > MAX_BYTES then begin ToRead := MAX_BYTES; Truncated := True; end;
+      SetLength(Bytes, ToRead);
+      if ToRead > 0 then Strm.ReadBuffer(Bytes[0], ToRead);
+      {$IFDEF FPC}
+      if ToRead = 0 then Body := ''
+      else SetString(Body, PAnsiChar(@Bytes[0]), ToRead);
+      {$ELSE}
+      Body := TEncoding.UTF8.GetString(Bytes);
+      {$ENDIF}
+    finally
+      Strm.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
+      Exit;
+    end;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr ('path',      Path);
+    Root.PutStr ('content',   Body);
+    Root.PutBool('truncated', Truncated);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+type
+  TLogStreamWriter = class
+    Conn: TIdTCPConnection;
+    procedure WriteSSE(const Payload: string);
+    procedure OnLog(const Tag, Msg: string);
+  end;
+
+procedure TLogStreamWriter.WriteSSE(const Payload: string);
+(* HTTP/1.1 chunked-transfer chunk: <hex-length>\r\n<bytes>\r\n
+   Indy doesn't auto-frame when we set ContentLength := -1; if we
+   write raw text it bypasses chunking and the client sees a
+   Content-Length-bounded response that gets cut at the first byte
+   chunk. Match the manual framing TSSEStreamer in this same file
+   does for /v1/chat/completions. *)
+var
+  Bytes, Header, Frame: TBytes;
+  HeaderStr: string;
+  i, Offset: Integer;
+begin
+  if (Conn = nil) or (not Conn.Connected) then Exit;
+  Bytes := TEncoding.UTF8.GetBytes(Payload);
+  if Length(Bytes) = 0 then Exit;
+  HeaderStr := IntToHex(Length(Bytes), 1) + #13#10;
+  Header := TEncoding.ASCII.GetBytes(HeaderStr);
+  SetLength(Frame, Length(Header) + Length(Bytes) + 2);
+  Offset := 0;
+  for i := 0 to High(Header) do begin Frame[Offset] := Header[i]; Inc(Offset); end;
+  for i := 0 to High(Bytes)  do begin Frame[Offset] := Bytes[i];  Inc(Offset); end;
+  Frame[Offset]     := 13;
+  Frame[Offset + 1] := 10;
+  try
+    Conn.IOHandler.Write(Frame);
+  except
+    { Connection dropped — the unsubscribe in HandleLogs's finally
+      will tear us down on its next iteration. }
+  end;
+end;
+
+procedure TLogStreamWriter.OnLog(const Tag, Msg: string);
+begin
+  WriteSSE('data: ' + JsonEscape('[' + Tag + '] ' + Msg) + #10#10);
+end;
+
+procedure TGatewayServer.HandleLogs(AContext: TIdContext;
+                                     ARequest: TIdHTTPRequestInfo;
+                                     AResp: TIdHTTPResponseInfo);
+var
+  Writer: TLogStreamWriter;
+  Token: Integer;
+  Snapshot: TStringList;
+  i: Integer;
+  TabPos: Integer;
+  Tag, Body, Line: string;
+begin
+  { SSE stream — emit the recent buffer up front, then subscribe
+    for live tail. The handler doesn't return until the client
+    disconnects (or we throw); on either path the listener gets
+    unsubscribed. Pattern matches the existing
+    /v1/chat/completions stream path: explicit empty ContentText,
+    ContentLength := -1 to suppress Indy's auto Content-Length,
+    Transfer-Encoding via CustomHeaders (not via AResp.TransferEncoding
+    which on some Indy builds double-frames body writes). }
+  AResp.ResponseNo  := 200;
+  AResp.ContentText := '';
+  AResp.ContentType := 'text/event-stream; charset=utf-8';
+  AResp.CharSet     := 'utf-8';
+  AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
+  AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
+  AResp.CustomHeaders.AddValue('Transfer-Encoding', 'chunked');
+  AResp.ContentLength := -1;
+  AResp.WriteHeader;
+
+  Writer := TLogStreamWriter.Create;
+  Writer.Conn := AContext.Connection;
+
+  Snapshot := LogBufferSnapshot;
+  try
+    for i := 0 to Snapshot.Count - 1 do
+    begin
+      Line := Snapshot[i];
+      TabPos := Pos(#9, Line);
+      if TabPos > 0 then
+      begin
+        Tag  := Copy(Line, 1, TabPos - 1);
+        Body := Copy(Line, TabPos + 1, MaxInt);
+      end
+      else
+      begin
+        Tag  := 'info';
+        Body := Line;
+      end;
+      Writer.OnLog(Tag, Body);
+    end;
+  finally
+    Snapshot.Free;
+  end;
+
+  Token := SubscribeLog(Writer.OnLog);
+  try
+    { Park here until the client disconnects. WaitFor on the stop
+      event lets a server-side shutdown wake us cleanly too. }
+    while AContext.Connection.Connected do
+    begin
+      if FStopFlag.WaitFor(1000) = wrSignaled then Break;
+    end;
+  finally
+    UnsubscribeLog(Token);
+    { Best-effort terminator chunk so the client sees a clean end. }
+    try AContext.Connection.IOHandler.Write(TEncoding.ASCII.GetBytes('0'#13#10#13#10)); except end;
+    Writer.Free;
   end;
 end;
 

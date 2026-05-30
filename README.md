@@ -339,12 +339,21 @@ The gateway routes implemented in `src/pkg/gateway/` are:
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/` | `GET` | Embedded single-page web UI from `src/pkg/gateway/webui.html`. |
+| `/` | `GET` | Embedded single-page web UI from `src/pkg/gateway/webui.html`. Tabs for chat (with streaming + tool-call rendering + localStorage session history), memory browser, file browser, MCP servers, cron entries, skills, log tail (SSE), and a read-only config viewer. |
 | `/v1` | `GET` | JSON index listing gateway routes. |
 | `/v1/health` | `GET` | Health check with PasClaw version. |
 | `/v1/version` | `GET` | Version and build metadata. |
 | `/v1/status` | `GET` | Default provider/model plus provider, MCP, cron, skill, and tool counts. |
 | `/v1/tools` | `GET` | Registered tool descriptors. |
+| `/v1/mcp` | `GET` | Configured MCP servers (`name`, `cmd`, `args`, `enabled`). |
+| `/v1/cron` | `GET` | Cron entries (`id`, `spec`, `skill`, `args`, `channel_*`, `enabled`). |
+| `/v1/skills` | `GET` | Installed skills (`name`, `description`, `kind`, `path`, `dir`). |
+| `/v1/memory` | `GET` | Files in `workspace/memory/` with sizes. |
+| `/v1/memory/<name>` | `GET` | Contents of one memory file (rejects path-traversal). |
+| `/v1/config` | `GET` | Full config with `providers[].api_key` masked to `•••`. |
+| `/v1/fs?path=…` | `GET` | Directory listing (entries + sizes + dir-flag); defaults to `$PASCLAW_HOME`. |
+| `/v1/fs/read?path=…` | `GET` | File contents capped at 256 KB; `truncated` flag on response. |
+| `/v1/logs` | `GET` | SSE tail of the gateway log buffer (1000-entry ring); recent buffer dumps first, then live. |
 | `/v1/chat` | `POST` | PasClaw JSON chat endpoint accepting `{"message":"..."}`. |
 | `/v1/chat/completions` | `POST` | OpenAI Chat Completions-compatible endpoint; supports streaming with `stream: true`. |
 | `/v1/responses` | `POST` | OpenAI Responses-compatible endpoint accepting string or message-array `input`; non-streaming only. |
