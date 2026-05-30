@@ -156,6 +156,7 @@ type
     FProvider:       ILLMProvider;
     FRegistry:       TToolRegistry;
     FMCPClients:     TMCPClientList;
+    FOwnedTools:     TObjectList;     { TPasClawTool instances handed in via RegisterTool }
     FServer:         TGatewayServer;
     FThread:         TThread;
     FBindAddr:       string;
@@ -173,11 +174,33 @@ type
     FLastError:      string;
     procedure RaiseError(const Msg: string);
   public
-    constructor Create(AOwner: TComponent); override;
+    constructor Create(AOwner: TComponent); overload; override;
+    { Code-driven convenience constructor. Equivalent to
+        Create(nil); BindAddr := AAddr; Port := APort;
+      so the listener address and port are set before Start binds. }
+    constructor Create(const AAddr: string; APort: Integer); reintroduce; overload;
     destructor  Destroy; override;
     function  Start: Boolean;
     procedure Stop;
     function  IsRunning: Boolean;
+    { Block until the server stops accepting connections — either because
+      another thread (or signal handler) called Stop, or because the
+      listening socket failed mid-run. No-op when IsRunning is False. }
+    procedure WaitForStop;
+    { Start + WaitForStop in one call. Raises EPasClawRun on startup
+      failure (the same message that would appear in LastError);
+      otherwise blocks until Stop is signalled, then returns
+      normally. Use Start + WaitForStop separately if you need to
+      do something between binding the socket and entering the wait. }
+    procedure Run;
+    { Custom tool registration, mirrors TPasClawAgent.RegisterTool.
+      Must be called BEFORE Start — the registry is built once at
+      Start time. The server takes ownership of ATool and frees it
+      in Destroy. Tools registered this way layer on top of the
+      built-ins; name conflicts go to the custom tool. With
+      EnableTools := False the server still installs OOP tools the
+      caller hands us, so a custom-only registry is achievable. }
+    procedure RegisterTool(ATool: TPasClawTool);
     property Server: TGatewayServer read FServer;
     property LastError: string read FLastError;
   published
@@ -527,12 +550,21 @@ begin
   FEnableTools    := True;
   FEnableMCP      := True;
   FEnableHashline := True;
+  FOwnedTools     := TObjectList.Create(True);  { owns + frees its items }
   GServerInstance := Self;
+end;
+
+constructor TPasClawServer.Create(const AAddr: string; APort: Integer);
+begin
+  Create(TComponent(nil));
+  FBindAddr := AAddr;
+  FPort     := APort;
 end;
 
 destructor TPasClawServer.Destroy;
 begin
   Stop;
+  FreeAndNil(FOwnedTools);  { frees every TPasClawTool we accepted }
   if GServerInstance = Self then GServerInstance := nil;
   inherited Destroy;
 end;
@@ -542,6 +574,7 @@ var
   Skills: TSkillSpecArray;
   Err: string;
   StartupMsg: string;
+  i: Integer;
 const
   STARTUP_TIMEOUT_MS = 5000;
 begin
@@ -575,8 +608,8 @@ begin
     RegisterFSTools(FRegistry, FEnableHashline);
     RegisterShellTool(FRegistry);
     RegisterMemoryTools(FRegistry);
-  RegisterWebSearchTool(FRegistry);
-  RegisterWebFetchTool(FRegistry);
+    RegisterWebSearchTool(FRegistry);
+    RegisterWebFetchTool(FRegistry);
     Skills := LoadSkillManifests(GetHome);
     RegisterSkills(FRegistry, Skills);
   end;
@@ -584,6 +617,16 @@ begin
   SetLength(FMCPClients, 0);
   if FEnableMCP and (FRegistry <> nil) then
     FMCPClients := ConnectMCPServers(FConfig, FRegistry);
+
+  { Install OOP tools handed in via RegisterTool. Goes AFTER the
+    built-ins and MCP so user names override on conflict — same
+    semantic as TPasClawAgent.EnsureRegistry. When EnableTools is
+    False but the caller registered custom tools, create a bare
+    registry just for them. }
+  if (FOwnedTools.Count > 0) and (FRegistry = nil) then
+    FRegistry := TToolRegistry.Create;
+  for i := 0 to FOwnedTools.Count - 1 do
+    TPasClawTool(FOwnedTools[i]).Install(FRegistry);
 
   FServer := TGatewayServer.Create(FConfig, FProvider, FRegistry);
   FServer.DebugIO := FDebug;
@@ -640,6 +683,38 @@ end;
 procedure TPasClawServer.RaiseError(const Msg: string);
 begin
   if Assigned(FOnError) then FOnError(Self, Msg);
+end;
+
+procedure TPasClawServer.WaitForStop;
+begin
+  { Delegate to TGatewayServer.WaitForStop when the worker thread is
+    still alive. If Start hasn't been called, or Stop already ran,
+    return immediately so callers can blindly wrap Start + WaitForStop
+    without checking IsRunning. }
+  if (FServer <> nil) and IsRunning then
+    FServer.WaitForStop;
+end;
+
+procedure TPasClawServer.Run;
+begin
+  if not Start then
+    raise EPasClawRun.Create(FLastError);
+  WaitForStop;
+end;
+
+procedure TPasClawServer.RegisterTool(ATool: TPasClawTool);
+begin
+  if ATool = nil then Exit;
+  { Registry doesn't exist yet — Start hasn't been called. Park the
+    tool in FOwnedTools; Start's tail loop installs every entry on
+    top of the built-ins so name overrides win. Safe to call any
+    time before Start; calling after Start is technically allowed
+    (the tool gets installed directly into the live registry) but
+    the worker thread is already serving requests so callers should
+    prefer to Stop, RegisterTool, Start if they want defined timing. }
+  FOwnedTools.Add(ATool);
+  if FRegistry <> nil then
+    ATool.Install(FRegistry);
 end;
 
 { ============================== Registration ============================== }
