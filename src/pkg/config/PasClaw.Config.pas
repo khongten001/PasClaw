@@ -71,7 +71,19 @@ type
         Master switch for the shell denylist. Default True. Set
         False only for trusted automation; doing so re-enables
         `sudo`, `rm -rf`, `dd`, `mkfs`, command-substitution,
-        `curl | sh`, and every other pattern in the list.    *)
+        `curl | sh`, and every other pattern in the list.
+
+      BlockPrivateNetworks
+        When True (default), web_fetch refuses URLs whose host
+        resolves to a private / loopback / link-local IPv4
+        address. Protects against the cloud-metadata SSRF (e.g.
+        169.254.169.254 on AWS / GCP / Azure), against probes
+        of internal LAN services (RFC1918 ranges), and against
+        localhost service enumeration. See
+        PasClaw.Net.SSRF for the full blocklist.
+        Flip to False only when you actually need the model to
+        reach private addresses (local dev mode, intranet
+        scraping) and have weighed the credentials-leak risk.   *)
   TSandboxPolicy = record
     RestrictToWorkspace:       Boolean;
     AllowReadOutsideWorkspace: Boolean;
@@ -80,6 +92,7 @@ type
     AllowWritePaths:           array of string;
     CustomShellDeny:           array of string;
     ShellDenyEnabled:          Boolean;
+    BlockPrivateNetworks:      Boolean;
   end;
 
   TProviderConfig = record
@@ -177,6 +190,7 @@ begin
   Sandbox.AllowReadOutsideWorkspace := False;
   Sandbox.Workspace                 := '';
   Sandbox.ShellDenyEnabled          := True;
+  Sandbox.BlockPrivateNetworks      := True;
   WebSearch.Provider   := '';   { empty = duckduckgo fallback }
   WebSearch.APIKey     := '';
   WebSearch.BaseURL    := '';
@@ -245,6 +259,7 @@ begin
     Tmp.PutBool('allow_read_outside_workspace', Sandbox.AllowReadOutsideWorkspace);
     Tmp.PutStr ('workspace',                    Sandbox.Workspace);
     Tmp.PutBool('shell_deny_enabled',           Sandbox.ShellDenyEnabled);
+    Tmp.PutBool('block_private_networks',       Sandbox.BlockPrivateNetworks);
     Arr := TJsonArray.Create;
     for i := 0 to High(Sandbox.AllowReadPaths)  do Arr.AddStr(Sandbox.AllowReadPaths[i]);
     Tmp.PutArray('allow_read_paths',  Arr);
@@ -335,6 +350,7 @@ begin
       Sandbox.AllowReadOutsideWorkspace := Obj.GetBool('allow_read_outside_workspace', Sandbox.AllowReadOutsideWorkspace);
       Sandbox.Workspace                 := Obj.GetStr ('workspace',                    Sandbox.Workspace);
       Sandbox.ShellDenyEnabled          := Obj.GetBool('shell_deny_enabled',           Sandbox.ShellDenyEnabled);
+      Sandbox.BlockPrivateNetworks      := Obj.GetBool('block_private_networks',       Sandbox.BlockPrivateNetworks);
       Arr := Obj.ChildArray('allow_read_paths');
       if Arr <> nil then
       try

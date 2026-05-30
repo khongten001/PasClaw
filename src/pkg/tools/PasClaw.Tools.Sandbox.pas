@@ -97,6 +97,11 @@ function PathInsideDirectory(const Path, Directory: string): Boolean;
   Tool_Shell consults this to decide whether to pin cwd. }
 function RestrictionActive: Boolean;
 
+{ True iff outbound URL fetches should be SSRF-guarded against
+  private / loopback / link-local addresses. web_fetch consults
+  this before each request and inside its redirect handler. }
+function NetworkBlockingActive: Boolean;
+
 implementation
 
 uses
@@ -129,6 +134,11 @@ end;
 function RestrictionActive: Boolean;
 begin
   Result := GPolicy.RestrictToWorkspace;
+end;
+
+function NetworkBlockingActive: Boolean;
+begin
+  Result := GPolicy.BlockPrivateNetworks;
 end;
 
 { -------- path helpers -------- }

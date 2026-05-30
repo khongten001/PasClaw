@@ -47,7 +47,79 @@ uses
   IdHTTP, IdSSLOpenSSL,
   PasClaw.JSON,
   PasClaw.Logger,
-  PasClaw.Search.HTMLText;
+  PasClaw.Search.HTMLText,
+  PasClaw.Net.SSRF,
+  PasClaw.Tools.Sandbox;
+
+type
+  (* Indy's OnRedirect callback is `of object`; this tiny holder gives
+     us the method to assign without leaking helper state outside. The
+     redirect handler runs URLIsLocal on every 3xx target so a
+     public→private redirect can't smuggle a request past the
+     pre-check. Raising aborts the redirect chain — the outer
+     try/except in Tool_WebFetch turns it into the same "SSRF
+     blocked" surface as a direct hit. *)
+  TWebFetchRedirectGuard = class
+    procedure OnRedirect(Sender: TObject; var Dest: string;
+                          var NumRedirect: Integer;
+                          var Handled: Boolean;
+                          var VMethod: TIdHTTPMethod);
+  end;
+
+function IsAbsoluteHttpURL(const S: string): Boolean;
+{ True iff S has an http:// or https:// scheme. Anything else is
+  either path-relative ("/login", "next.html") or protocol-relative
+  ("//cdn.example.com/a"). Indy hands TIdHTTP.OnRedirect whatever
+  the server's Location header said — which is frequently a bare
+  path, NOT a full URL. Codex PR #85 P2 caught that we were
+  rejecting "/login" as malformed. }
+begin
+  Result := (Length(S) >= 7) and
+            (SameText(Copy(S, 1, 7),  'http://')  or
+             (Length(S) >= 8) and SameText(Copy(S, 1, 8), 'https://'));
+end;
+
+procedure TWebFetchRedirectGuard.OnRedirect(Sender: TObject; var Dest: string;
+                                              var NumRedirect: Integer;
+                                              var Handled: Boolean;
+                                              var VMethod: TIdHTTPMethod);
+var
+  Reason: string;
+begin
+  if not NetworkBlockingActive then Exit;
+
+  { Same-origin redirects retain the host that already passed the
+    pre-check. Two flavours:
+      "/path/next"     — path-relative; same scheme, host, port.
+      "next.html"      — path-relative without leading slash; same.
+    A protocol-relative URL ("//cdn.example.com/a") DOES change
+    host so we still pass it through URLIsLocal — ExtractHost
+    handles those since "//" parses as an authority without a
+    scheme, and a bare authority is enough to read the host. }
+  if not IsAbsoluteHttpURL(Dest) then
+  begin
+    if (Length(Dest) >= 2) and (Dest[1] = '/') and (Dest[2] = '/') then
+    begin
+      { Protocol-relative. Synthesise an http:// prefix purely for
+        the parse — Indy itself will re-prefix with the current
+        URL's scheme before connecting. }
+      if URLIsLocal('http:' + Dest, Reason) then
+        raise Exception.CreateFmt(
+          'SSRF: protocol-relative redirect to %s refused (%s; ' +
+          'flip sandbox.block_private_networks=false in config.json to allow)',
+          [Dest, Reason]);
+      Exit;
+    end;
+    { Path-relative — same host as the request that just passed
+      the check. Let Indy proceed. }
+    Exit;
+  end;
+
+  if URLIsLocal(Dest, Reason) then
+    raise Exception.CreateFmt('SSRF: redirect to %s refused (%s; ' +
+      'flip sandbox.block_private_networks=false in config.json to allow)',
+      [Dest, Reason]);
+end;
 
 const
   DEFAULT_MAX_CHARS = 50000;
@@ -105,6 +177,7 @@ var
   MaxChars: Integer;
   HTTP: TIdHTTP;
   SSLHandler: TIdSSLIOHandlerSocketOpenSSL;
+  RedirectGuard: TWebFetchRedirectGuard;
   Body: string;
   ContentType: string;
 begin
@@ -126,7 +199,21 @@ begin
   if MaxChars < 100           then MaxChars := 100;
   if MaxChars > HARD_MAX_CHARS then MaxChars := HARD_MAX_CHARS;
 
+  { SSRF pre-check on the initial URL. The redirect handler covers
+    subsequent hops; both layers must pass for the request to land. }
+  if NetworkBlockingActive then
+  begin
+    if URLIsLocal(URL, ErrMsg) then
+    begin
+      ErrMsg := 'web_fetch: SSRF: ' + URL + ' refused (' + ErrMsg +
+        '; flip sandbox.block_private_networks=false in config.json to allow)';
+      Exit;
+    end;
+    ErrMsg := '';
+  end;
+
   HTTP := TIdHTTP.Create(nil);
+  RedirectGuard := TWebFetchRedirectGuard.Create;
   SSLHandler := nil;
   try
     HTTP.HandleRedirects   := True;
@@ -135,6 +222,7 @@ begin
     HTTP.ReadTimeout       := 30000;
     HTTP.Request.UserAgent := 'Mozilla/5.0 (PasClaw web_fetch)';
     HTTP.Request.Accept    := 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5';
+    HTTP.OnRedirect        := RedirectGuard.OnRedirect;
 
     if LowerStartsWith(URL, 'https://') then
     begin
@@ -171,6 +259,7 @@ begin
     end;
   finally
     HTTP.Free;
+    RedirectGuard.Free;
     if SSLHandler <> nil then SSLHandler.Free;
   end;
 
