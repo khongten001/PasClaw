@@ -174,6 +174,7 @@ begin
     '},"required":["query"]}';
   T.Handler     := Tool_WebSearch;
   T.IsCore      := True;
+  T.Category    := tcReadOnly;  { HTTP GETs only, no shared state }
   R.Register(T);
 end;
 

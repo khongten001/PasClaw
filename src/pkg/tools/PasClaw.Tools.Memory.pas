@@ -175,6 +175,7 @@ begin
     '},"required":["query"]}';
   T.Handler     := Tool_MemorySearch;
   T.IsCore      := True;
+  T.Category    := tcReadOnly;  { SQLite SELECT only }
   R.Register(T);
 end;
 

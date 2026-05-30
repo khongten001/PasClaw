@@ -219,6 +219,7 @@ begin
   LoopCfg.Registry      := FRegistry;
   LoopCfg.Model         := FCfg.DefaultModel;
   LoopCfg.MaxIterations := 6;
+  LoopCfg.Parallel := True;
   LoopCfg.Options       := DefaultChatOptions;
   LoopCfg.OnText        := nil;
   LoopCfg.OnToolCall    := nil;

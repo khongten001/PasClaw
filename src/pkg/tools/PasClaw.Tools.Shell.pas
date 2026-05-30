@@ -97,6 +97,7 @@ begin
   T.Schema      := '{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute."}},"required":["command"]}';
   T.Handler     := Tool_Shell;
   T.IsCore      := True;
+  T.Category    := tcMutating;  { spawns subprocesses; default-mutating is correct }
   R.Register(T);
 end;
 

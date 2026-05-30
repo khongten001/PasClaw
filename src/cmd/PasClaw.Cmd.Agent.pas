@@ -161,6 +161,7 @@ begin
   Result.Registry      := Reg;
   Result.Model         := Model;
   Result.MaxIterations := A.MaxIterations;
+  Result.Parallel := True;
   Result.Options       := DefaultChatOptions;
   { ToolsEnabled tracks the registry we are about to hand RunToolLoop
     so the system prompt stays in sync with what the model can

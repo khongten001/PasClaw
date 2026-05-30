@@ -286,6 +286,7 @@ begin
     '},"required":["url"]}';
   T.Handler     := Tool_WebFetch;
   T.IsCore      := True;
+  T.Category    := tcReadOnly;  { HTTP GET only, no shared state }
   R.Register(T);
 end;
 

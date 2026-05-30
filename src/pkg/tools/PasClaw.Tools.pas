@@ -31,6 +31,7 @@ unit PasClaw.Tools;
 interface
 
 uses
+  PasClaw.Tools.Types,
   PasClaw.Tools.Obj,
   PasClaw.Tools.Registry;
 
@@ -38,21 +39,26 @@ type
   TWebSearchTool = class(TPasClawTool)
   public
     procedure Install(R: TToolRegistry); override;
+    function Category: TToolCategory; override;
   end;
 
   TWebFetchTool = class(TPasClawTool)
   public
     procedure Install(R: TToolRegistry); override;
+    function Category: TToolCategory; override;
   end;
 
   TShellTool = class(TPasClawTool)
   public
     procedure Install(R: TToolRegistry); override;
+    { Category stays tcMutating from the base class — shell spawns
+      subprocesses, can't safely parallelize. }
   end;
 
   TMemoryTool = class(TPasClawTool)
   public
     procedure Install(R: TToolRegistry); override;
+    function Category: TToolCategory; override;
   end;
 
   TFileSystemTool = class(TPasClawTool)
@@ -61,6 +67,11 @@ type
   public
     constructor Create(UseHashline: Boolean = True); reintroduce;
     procedure Install(R: TToolRegistry); override;
+    { Per-sub-tool categories are set by RegisterFSTools (fs_read /
+      fs_grep / fs_list = tcReadOnly; fs_write / fs_edit = tcMutating).
+      The bundle's own Category isn't used since Install delegates
+      directly to RegisterFSTools rather than going through the
+      default Install path. }
     property UseHashline: Boolean read FUseHashline write FUseHashline;
   end;
 
@@ -78,9 +89,19 @@ begin
   RegisterWebSearchTool(R);
 end;
 
+function TWebSearchTool.Category: TToolCategory;
+begin
+  Result := tcReadOnly;
+end;
+
 procedure TWebFetchTool.Install(R: TToolRegistry);
 begin
   RegisterWebFetchTool(R);
+end;
+
+function TWebFetchTool.Category: TToolCategory;
+begin
+  Result := tcReadOnly;
 end;
 
 procedure TShellTool.Install(R: TToolRegistry);
@@ -91,6 +112,11 @@ end;
 procedure TMemoryTool.Install(R: TToolRegistry);
 begin
   RegisterMemoryTools(R);
+end;
+
+function TMemoryTool.Category: TToolCategory;
+begin
+  Result := tcReadOnly;
 end;
 
 constructor TFileSystemTool.Create(UseHashline: Boolean);

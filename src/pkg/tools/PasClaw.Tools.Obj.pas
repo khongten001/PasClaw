@@ -59,6 +59,13 @@ type
     function Description: string; virtual;
     function Schema:      string; virtual;
     function Run(const ArgsJSON: string; out ErrMsg: string): string; virtual;
+
+    { Override to tcReadOnly if your Run does no shared-state mutation
+      — that lets the agent loop fan out concurrent calls to your tool
+      alongside other read-only tools in the same model turn. Default is
+      tcMutating for safety: a custom tool author who forgets to set
+      Category gets serial dispatch, never an accidental race. }
+    function Category: TToolCategory; virtual;
   end;
 
 implementation
@@ -73,12 +80,14 @@ begin
   T.Handler     := nil;
   T.HandlerObj  := Self.Run;
   T.IsCore      := False;
+  T.Category    := Category;
   R.Register(T);
 end;
 
 function TPasClawTool.Name:        string; begin Result := ''; end;
 function TPasClawTool.Description: string; begin Result := ''; end;
 function TPasClawTool.Schema:      string; begin Result := '{"type":"object"}'; end;
+function TPasClawTool.Category:    TToolCategory; begin Result := tcMutating; end;
 
 function TPasClawTool.Run(const ArgsJSON: string; out ErrMsg: string): string;
 begin

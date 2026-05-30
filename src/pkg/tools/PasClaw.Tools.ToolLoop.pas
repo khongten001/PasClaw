@@ -37,6 +37,15 @@ type
        and the OnBefore memory-flush hook). *)
     CompactEnabled: Boolean;
     CompactOpts:    TCompactOptions;
+    (* Parallel tool dispatch. When True, RunToolLoop partitions each
+       round's tool calls into batches: consecutive tcReadOnly calls
+       (see PasClaw.Tools.Types.TToolCategory) form one parallel batch
+       and run on dedicated worker threads; each tcMutating call is a
+       batch of one and runs serially. When False, every call runs
+       serially in array order — same as the pre-parallel behaviour.
+       Default False on the record (zero-init); the CLI and the
+       built-in components flip it on explicitly. *)
+    Parallel:       Boolean;
   end;
 
   TToolLoopResult = record
@@ -64,7 +73,37 @@ implementation
 uses
   PasClaw.Logger,
   PasClaw.JSON,
-  PasClaw.Hashline;
+  PasClaw.Hashline,
+  PasClaw.Tools.Types;
+
+type
+  { Per-call work unit. The same record is filled in by a worker thread
+    (parallel) or by an inline call (serial), then read by the main
+    loop to append the tool_result to history. Workers never touch the
+    history array directly — race-free by construction. }
+  TToolCallDispatch = record
+    Call:       TToolCall;
+    ResultText: string;
+    Err:        string;
+  end;
+  PToolCallDispatch = ^TToolCallDispatch;
+
+  { Worker thread that runs one tool call's PreflightToolCall +
+    Registry.RunTool + hashline retry logic, writes the result back
+    into a TToolCallDispatch slot, exits. FreeOnTerminate is False —
+    the main thread WaitFor's then Free's each worker in array order. }
+  TToolCallWorker = class(TThread)
+  private
+    FCfg:  TToolLoopConfig;
+    FSlot: PToolCallDispatch;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const ACfg: TToolLoopConfig; ASlot: PToolCallDispatch);
+  end;
+
+  TToolBatch      = array of Integer;        { indices into Resp.ToolCalls }
+  TToolBatchArray = array of TToolBatch;
 
 function IsPatchFormatError(const Err: string): Boolean;
 var
@@ -185,18 +224,162 @@ begin
   Result.ToolCallId := ToolCallId;
 end;
 
+{ Run one tool call: PreflightToolCall → Registry.RunTool → fs_edit_hashline
+  retry on format errors. Writes ResultText / Err into the dispatch slot.
+  Pure with respect to shared state (uses per-call HTTP clients, reads
+  the registry's name table read-only, calls thread-safe LogWarn), so it
+  is safe to call from a worker thread alongside other DispatchOneToolCall
+  invocations against different ToolCall inputs. Callers fire
+  OnToolCall / OnToolResult on the main thread before / after; we
+  deliberately don't invoke them in here to keep the worker stateless
+  with respect to the embedder's event-handler thread affinity. }
+procedure DispatchOneToolCall(const Cfg: TToolLoopConfig;
+                               var D: TToolCallDispatch);
+var
+  RetryArgs, Patch, CanonicalPatch, N1, N2: string;
+  ArgsObj: TJsonObject;
+  HasUnsup: Boolean;
+begin
+  D.Err        := '';
+  D.ResultText := '';
+  RetryArgs    := D.Call.Func.Arguments;
+  if not PreflightToolCall(D.Call.Func.Name, RetryArgs, D.Err) then
+    D.ResultText := ''
+  else if Cfg.Registry <> nil then
+    D.ResultText := Cfg.Registry.RunTool(D.Call.Func.Name, RetryArgs, D.Err)
+  else
+    D.Err := 'no tool registry';
+
+  if (D.Call.Func.Name = 'fs_edit_hashline') and IsPatchFormatError(D.Err) then
+  begin
+    LogWarn('tool-retry attempt=1 strategy=raw_hashline normalized_patch_len=%d has_unsupported_tokens=%s class=format_error',
+      [Length(NormalizePatchForCompare(RetryArgs)), BoolToStr(False, True)]);
+    ArgsObj := TJsonObject.Parse(RetryArgs);
+    Patch := '';
+    if ArgsObj <> nil then
+    begin
+      try
+        Patch := ArgsObj.GetStr('patch', '');
+      finally
+        ArgsObj.Free;
+      end;
+    end;
+    if (Patch <> '') and CanonicalizeHashlinePatch(Patch, CanonicalPatch, HasUnsup) then
+    begin
+      ArgsObj := TJsonObject.Create;
+      try
+        ArgsObj.PutStr('patch', CanonicalPatch);
+        RetryArgs := ArgsObj.ToJSON;
+      finally
+        ArgsObj.Free;
+      end;
+      N1 := NormalizePatchForCompare(Patch);
+      N2 := NormalizePatchForCompare(CanonicalPatch);
+      LogWarn('tool-retry attempt=2 strategy=strict_hashline_formatter normalized_patch_len=%d has_unsupported_tokens=%s class=format_error',
+        [Length(N2), BoolToStr(HasUnsup, True)]);
+      D.Err := '';
+      if not PreflightToolCall(D.Call.Func.Name, RetryArgs, D.Err) then
+        D.ResultText := ''
+      else if Cfg.Registry <> nil then
+        D.ResultText := Cfg.Registry.RunTool(D.Call.Func.Name, RetryArgs, D.Err)
+      else
+        D.Err := 'no tool registry';
+      if IsPatchFormatError(D.Err) and (N1 = N2) then
+        D.Err := 'format_error: deterministic fallback exhausted; two consecutive retries had equivalent normalized patch content. ' +
+                 'Regenerate patch intent or use safer apply-patch/unified-diff edit path.';
+    end
+    else
+      D.Err := 'format_error: unable to canonicalize patch for deterministic retry; regenerate patch intent or use safer apply-patch/unified-diff edit path. original=' + D.Err;
+  end;
+end;
+
+constructor TToolCallWorker.Create(const ACfg: TToolLoopConfig;
+                                    ASlot: PToolCallDispatch);
+begin
+  inherited Create(True);  { suspended; main thread calls Start after all workers in the batch are constructed }
+  FreeOnTerminate := False;
+  FCfg  := ACfg;
+  FSlot := ASlot;
+end;
+
+procedure TToolCallWorker.Execute;
+begin
+  try
+    DispatchOneToolCall(FCfg, FSlot^);
+  except
+    on E: Exception do
+    begin
+      FSlot^.ResultText := '';
+      FSlot^.Err        := 'worker exception: ' + E.ClassName + ': ' + E.Message;
+    end;
+  end;
+end;
+
+{ Partition a round's tool calls into batches that are safe to run in
+  parallel within each batch. Read-only tools (Category = tcReadOnly)
+  coalesce into one batch; each mutating tool is its own batch of one.
+  Tools not found in the registry are treated as tcMutating (safe
+  default — applies to skill / MCP tools and to any handler that
+  forgot to set the Category field). Order is preserved across
+  batches, so the agent loop appends tool_results in the same order
+  the model emitted tool_use blocks. }
+function PartitionToolBatches(const Calls: TToolCallArray;
+                              Reg: TToolRegistry): TToolBatchArray;
+var
+  i: Integer;
+  IsRO: Boolean;
+  T: TTool;
+  Cur: TToolBatch;
+
+  procedure FlushCur;
+  begin
+    if Length(Cur) > 0 then
+    begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := Cur;
+      SetLength(Cur, 0);
+    end;
+  end;
+
+begin
+  SetLength(Result, 0);
+  SetLength(Cur, 0);
+  for i := 0 to High(Calls) do
+  begin
+    IsRO := False;
+    if (Reg <> nil) and Reg.Find(Calls[i].Func.Name, T) and (T.Category = tcReadOnly) then
+      IsRO := True;
+    if IsRO then
+    begin
+      SetLength(Cur, Length(Cur) + 1);
+      Cur[High(Cur)] := i;
+    end
+    else
+    begin
+      { Flush the in-flight read-only batch (if any), then emit a
+        batch-of-one for the mutating call. }
+      FlushCur;
+      SetLength(Cur, 1);
+      Cur[0] := i;
+      FlushCur;
+    end;
+  end;
+  FlushCur;
+end;
+
 function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
 var
-  Iter, i: Integer;
+  Iter, i, bi, j: Integer;
   Tools: TToolDefinitionArray;
   Resp: TLLMResponse;
   Hist: TMessageArray;
-  ResultText, Err, RetryArgs, Patch, CanonicalPatch, N1, N2: string;
-  ArgsObj: TJsonObject;
-  HasUnsup: Boolean;
   LiveOptions: TChatOptions;
+  Dispatches: array of TToolCallDispatch;
+  Batches: TToolBatchArray;
+  Batch: TToolBatch;
+  Workers: array of TToolCallWorker;
 begin
   Loop.Content    := '';
   Loop.Iterations := 0;
@@ -257,71 +440,79 @@ begin
     SetLength(Hist, Length(Hist) + 1);
     Hist[High(Hist)] := MakeAssistantWithToolCalls(Resp.Content, Resp.ToolCalls);
 
+    { Allocate one dispatch slot per tool call upfront so workers can hold
+      a pointer to a slot without worrying about array reallocation. }
+    SetLength(Dispatches, Length(Resp.ToolCalls));
     for i := 0 to High(Resp.ToolCalls) do
     begin
-      if Assigned(Cfg.OnToolCall) then
-        Cfg.OnToolCall(Resp.ToolCalls[i].Func.Name, Resp.ToolCalls[i].Func.Arguments);
+      Dispatches[i].Call       := Resp.ToolCalls[i];
+      Dispatches[i].ResultText := '';
+      Dispatches[i].Err        := '';
+    end;
 
-      Err := '';
-      ResultText := '';
-      RetryArgs := Resp.ToolCalls[i].Func.Arguments;
-      if not PreflightToolCall(Resp.ToolCalls[i].Func.Name, RetryArgs, Err) then
-        ResultText := ''
-      else if Cfg.Registry <> nil then
-        ResultText := Cfg.Registry.RunTool(Resp.ToolCalls[i].Func.Name, RetryArgs, Err)
-      else
-        Err := 'no tool registry';
+    { Partition into batches: read-only calls fan out concurrently
+      within a batch when Cfg.Parallel is on; mutating calls each
+      get a batch of one and stay serial. Order across batches is
+      preserved, so tool_results land in Hist in the same order the
+      model emitted them. }
+    Batches := PartitionToolBatches(Resp.ToolCalls, Cfg.Registry);
 
-      if (Resp.ToolCalls[i].Func.Name = 'fs_edit_hashline') and IsPatchFormatError(Err) then
+    for bi := 0 to High(Batches) do
+    begin
+      Batch := Batches[bi];
+
+      { Fire OnToolCall for every call in the batch on the main thread,
+        in array order, before any worker starts. Embedders rely on
+        OnToolCall firing before its matching OnToolResult and on the
+        announcements appearing in the same order the model produced
+        the tool_use blocks. }
+      for j := 0 to High(Batch) do
+        if Assigned(Cfg.OnToolCall) then
+          Cfg.OnToolCall(Dispatches[Batch[j]].Call.Func.Name,
+                          Dispatches[Batch[j]].Call.Func.Arguments);
+
+      if Cfg.Parallel and (Length(Batch) > 1) then
       begin
-        LogWarn('tool-retry attempt=1 strategy=raw_hashline normalized_patch_len=%d has_unsupported_tokens=%s class=format_error',
-          [Length(NormalizePatchForCompare(RetryArgs)), BoolToStr(False, True)]);
-        ArgsObj := TJsonObject.Parse(RetryArgs);
-        Patch := '';
-        if ArgsObj <> nil then
+        { Parallel batch: spawn one TThread per call, suspended; Start
+          all in array order; WaitFor all in array order; Free each
+          worker after WaitFor. }
+        SetLength(Workers, Length(Batch));
+        for j := 0 to High(Batch) do
+          Workers[j] := TToolCallWorker.Create(Cfg, @Dispatches[Batch[j]]);
+        for j := 0 to High(Workers) do
+          Workers[j].Start;
+        for j := 0 to High(Workers) do
         begin
-          try
-            Patch := ArgsObj.GetStr('patch', '');
-          finally
-            ArgsObj.Free;
-          end;
+          Workers[j].WaitFor;
+          Workers[j].Free;
         end;
-        if (Patch <> '') and CanonicalizeHashlinePatch(Patch, CanonicalPatch, HasUnsup) then
-        begin
-          ArgsObj := TJsonObject.Create;
-          try
-            ArgsObj.PutStr('patch', CanonicalPatch);
-            RetryArgs := ArgsObj.ToJSON;
-          finally
-            ArgsObj.Free;
-          end;
-          N1 := NormalizePatchForCompare(Patch);
-          N2 := NormalizePatchForCompare(CanonicalPatch);
-          LogWarn('tool-retry attempt=2 strategy=strict_hashline_formatter normalized_patch_len=%d has_unsupported_tokens=%s class=format_error',
-            [Length(N2), BoolToStr(HasUnsup, True)]);
-          Err := '';
-          if not PreflightToolCall(Resp.ToolCalls[i].Func.Name, RetryArgs, Err) then
-            ResultText := ''
-          else if Cfg.Registry <> nil then
-            ResultText := Cfg.Registry.RunTool(Resp.ToolCalls[i].Func.Name, RetryArgs, Err)
-          else
-            Err := 'no tool registry';
-          if IsPatchFormatError(Err) and (N1 = N2) then
-            Err := 'format_error: deterministic fallback exhausted; two consecutive retries had equivalent normalized patch content. ' +
-                   'Regenerate patch intent or use safer apply-patch/unified-diff edit path.';
-        end
-        else
-          Err := 'format_error: unable to canonicalize patch for deterministic retry; regenerate patch intent or use safer apply-patch/unified-diff edit path. original=' + Err;
+        SetLength(Workers, 0);
+      end
+      else
+      begin
+        { Serial batch (or Parallel disabled): just run inline on the
+          main thread. Same DispatchOneToolCall the workers use, so
+          fs_edit_hashline retry semantics are identical. }
+        for j := 0 to High(Batch) do
+          DispatchOneToolCall(Cfg, Dispatches[Batch[j]]);
       end;
 
-      if Assigned(Cfg.OnToolResult) then
-        Cfg.OnToolResult(Resp.ToolCalls[i].Func.Name, ResultText, Err);
-
-      SetLength(Hist, Length(Hist) + 1);
-      if Err <> '' then
-        Hist[High(Hist)] := MakeToolResult(Resp.ToolCalls[i].Id, 'ERROR: ' + Err)
-      else
-        Hist[High(Hist)] := MakeToolResult(Resp.ToolCalls[i].Id, ResultText);
+      { Fire OnToolResult and append tool_result messages on the main
+        thread, in array order, AFTER the whole batch has joined. }
+      for j := 0 to High(Batch) do
+      begin
+        if Assigned(Cfg.OnToolResult) then
+          Cfg.OnToolResult(Dispatches[Batch[j]].Call.Func.Name,
+                           Dispatches[Batch[j]].ResultText,
+                           Dispatches[Batch[j]].Err);
+        SetLength(Hist, Length(Hist) + 1);
+        if Dispatches[Batch[j]].Err <> '' then
+          Hist[High(Hist)] := MakeToolResult(Dispatches[Batch[j]].Call.Id,
+                                              'ERROR: ' + Dispatches[Batch[j]].Err)
+        else
+          Hist[High(Hist)] := MakeToolResult(Dispatches[Batch[j]].Call.Id,
+                                              Dispatches[Batch[j]].ResultText);
+      end;
     end;
   end;
 

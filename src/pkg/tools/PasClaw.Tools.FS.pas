@@ -513,8 +513,9 @@ begin
     T.Description := 'Read the contents of a file from the local filesystem.';
     T.Schema      := '{"type":"object","properties":{"path":{"type":"string","description":"Absolute or relative path to the file."}},"required":["path"]}';
   end;
-  T.Handler := Tool_FSRead;
-  T.IsCore  := True;
+  T.Handler  := Tool_FSRead;
+  T.IsCore   := True;
+  T.Category := tcReadOnly;
   R.Register(T);
 
   T.Name := 'fs_write';
@@ -523,9 +524,10 @@ begin
                      'Strips hashline LINENO: prefixes from `content` when every non-empty line carries one.'
   else
     T.Description := 'Write a string to a file (overwrites). Creates parent dirs.';
-  T.Schema  := '{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}';
-  T.Handler := Tool_FSWrite;
-  T.IsCore  := True;
+  T.Schema   := '{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}';
+  T.Handler  := Tool_FSWrite;
+  T.IsCore   := True;
+  T.Category := tcMutating;
   R.Register(T);
 
   T.Name        := 'fs_list';
@@ -533,6 +535,7 @@ begin
   T.Schema      := '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}';
   T.Handler     := Tool_FSList;
   T.IsCore      := True;
+  T.Category    := tcReadOnly;
   R.Register(T);
 
   { Hashline-only tools: skip registration entirely when UseHashline is False
@@ -549,6 +552,7 @@ begin
     T.Schema      := '{"type":"object","properties":{"patch":{"type":"string","description":"Hashline-format patch text."}},"required":["patch"]}';
     T.Handler     := Tool_FSEditHashline;
     T.IsCore      := True;
+    T.Category    := tcMutating;
     R.Register(T);
 
     T.Name        := 'fs_grep';
@@ -558,6 +562,7 @@ begin
     T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"pattern":{"type":"string"},"ignore_case":{"type":"boolean"},"include":{"type":"string","description":"Comma-separated filename glob(s), e.g. *.pas,*.dpr"}},"required":["path","pattern"]}';
     T.Handler     := Tool_FSGrep;
     T.IsCore      := True;
+    T.Category    := tcReadOnly;
     R.Register(T);
   end;
 end;
