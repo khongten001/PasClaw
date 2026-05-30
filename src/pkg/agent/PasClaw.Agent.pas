@@ -90,6 +90,12 @@ type
     FUseTools:       Boolean;
     FUseMCP:         Boolean;
     FUseHashline:    Boolean;
+    FBuiltinsInstalled: Boolean;  { tracks built-in tool / skill / MCP
+                                    install separately from FRegistry's
+                                    existence — RegisterTool can create
+                                    the registry early without skipping
+                                    the lazy built-in install on first
+                                    Chat. }
     FOnText:         TPasClawTextEvent;
     FOnToolCall:     TPasClawToolEvent;
     FOnToolResult:   TPasClawToolResultEvent;
@@ -283,11 +289,18 @@ end;
 procedure TPasClawAgent.EnsureRegistry;
 var
   Skills: TSkillSpecArray;
+  i: Integer;
 begin
-  if FRegistry <> nil then Exit;
+  { Track the built-in install with its own flag, NOT with
+    `FRegistry <> nil` — RegisterTool can create FRegistry early
+    (before the first Chat) to hold user-supplied OOP tools, and
+    we still need to lazily layer the built-ins, skills, and MCP
+    servers on first Chat in that case. }
+  if FBuiltinsInstalled then Exit;
   if not FUseTools then Exit;
   EnsureConfig;
-  FRegistry := TToolRegistry.Create;
+  if FRegistry = nil then
+    FRegistry := TToolRegistry.Create;
   RegisterFSTools(FRegistry, FUseHashline);
   RegisterShellTool(FRegistry);
   RegisterMemoryTools(FRegistry);
@@ -297,19 +310,34 @@ begin
   RegisterSkills(FRegistry, Skills);
   if FUseMCP then
     FMCPClients := ConnectMCPServers(FConfig, FRegistry);
+  FBuiltinsInstalled := True;
+  { Re-install OOP tools that were registered before this point so
+    user names override the built-ins on conflict. TToolRegistry.
+    Register replaces same-named entries, so re-installing in
+    FOwnedTools order puts the user tools on top. Tools registered
+    AFTER this call go straight to FRegistry via RegisterTool below
+    and skip this re-pass. }
+  for i := 0 to FOwnedTools.Count - 1 do
+    TPasClawTool(FOwnedTools[i]).Install(FRegistry);
 end;
 
 procedure TPasClawAgent.RegisterTool(ATool: TPasClawTool);
 begin
   if ATool = nil then Exit;
-  { Make sure the registry exists before installing into it. We
-    deliberately don't run the built-in auto-registration block —
-    EnsureRegistry stays the lazy path for first Chat/Run. Callers
-    who want a registry with only their own tools and none of the
-    built-ins can set UseTools := False then RegisterTool: a bare
-    registry holding just the OOP tools gets created here, and
-    EnsureRegistry's `if not FUseTools then Exit` skips the
-    built-ins. }
+  { RegisterTool can run at any point in the lifecycle:
+
+    * Before the first Chat — FRegistry may not exist yet; create
+      a bare one and install into it. EnsureRegistry will layer
+      the built-ins on first Chat, then re-install every entry in
+      FOwnedTools so user overrides win.
+
+    * After the first Chat — built-ins are already in FRegistry;
+      install on top so the new tool is visible immediately.
+
+    * With FUseTools := False — EnsureRegistry will skip the
+      built-ins entirely; this RegisterTool call still creates
+      the registry, populated only with OOP tools the caller
+      hands us. }
   EnsureConfig;
   if FRegistry = nil then
     FRegistry := TToolRegistry.Create;
