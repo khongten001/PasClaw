@@ -305,6 +305,17 @@ begin
   Result.APIKey  := APIKey;
   Result.Model   := Model;
   if Result.Model = '' then Result.Model := Spec.DefaultModel;
+  { Providers like groq / ollama don't ship a catalog default
+    model — there isn't a sensible one-size-fits-all (Groq routes
+    by deployment, Ollama by local pull). Fail fast with a clear
+    pointer instead of silently letting TConfig.DefaultModel's
+    "claude-opus-4-7" seed survive past ApplyProviderOverride and
+    get sent to the wrong API. }
+  if Result.Model = '' then
+    raise EPasClawRun.CreateFmt(
+      'provider "%s" has no catalog default model — pass one explicitly: ' +
+      'SetProvider(''%s'', APIKey, ''<model-name>'')',
+      [Kind, Kind]);
 end;
 
 { Fold the override into Cfg: replace any existing Provider with the
@@ -492,13 +503,15 @@ begin
   { Drop any cached provider so EnsureProvider rebuilds with the
     new credentials on the next Chat. }
   FProvider := nil;
-  { If the caller didn't pick a model on TPasClawAgent, mirror the
-    catalog default into FModel so EnsureProvider's model lookup
-    sees it. ChatHistory falls back to FConfig.DefaultModel when
-    FModel is empty so this is technically redundant, but keeping
-    the two in sync matches what a user typing it manually expects. }
-  if (FModel = '') and (FProviderOverride.Model <> '') then
-    FModel := FProviderOverride.Model;
+  { Don't mirror the catalog default into FModel. ApplyProviderOverride
+    already sets FConfig.DefaultModel, and ChatHistory falls back to it
+    when FModel is empty — so a second SetProvider call for a different
+    provider switches the model correctly. The earlier "belt and
+    suspenders" assignment caused the OPPOSITE of what users expect:
+    SetProvider('anthropic',k1) then SetProvider('openai',k2) used to
+    keep claude-opus-4-7 as FModel, sending the Anthropic name to the
+    OpenAI endpoint. FModel is reserved for the user's explicit choice
+    via Create(model) or the Model property — SetProvider stays out. }
 end;
 
 procedure TPasClawAgent.ForwardText(const S: string);
@@ -889,14 +902,16 @@ procedure TPasClawServer.SetProvider(const Kind, APIKey, Model, APIBase: string)
 begin
   FProviderOverride    := BuildProviderOverride(Kind, APIKey, Model, APIBase);
   FHasProviderOverride := True;
-  { Mirror the catalog default into FModel so Start's
-    `if FModel <> '' then FConfig.DefaultModel := FModel` picks
-    it up. The Start path also calls ApplyProviderOverride which
-    re-applies the same DefaultModel, so the assignment here is
-    belt-and-suspenders for the case where the embedder later
-    sets FModel manually before Start. }
-  if (FModel = '') and (FProviderOverride.Model <> '') then
-    FModel := FProviderOverride.Model;
+  { Don't touch FModel. Start calls ApplyProviderOverride before its
+    own `if FModel <> '' then FConfig.DefaultModel := FModel` block,
+    so when FModel is empty the override's model is what FConfig
+    carries. The earlier belt-and-suspenders assignment broke
+    SetProvider('a',k1) then SetProvider('b',k2): FModel got the
+    first provider's catalog default on call 1, the second call's
+    `if FModel = ''` check then skipped the update, and the first
+    provider's model leaked into the second provider's API call.
+    FModel is reserved for the embedder's explicit choice via the
+    Model property — SetProvider stays out. }
 end;
 
 { ============================== Registration ============================== }
