@@ -4,16 +4,17 @@
 
   Resolution order:
     1. cfg.WebSearch.Provider explicitly set: use that adapter, fail
-       fast if a key is required but missing.
+       fast if a key (or base URL) is required but missing.
     2. Empty / unset: fall back to DuckDuckGo (no key needed).
 
   Env overrides win over cfg fields, matching how `pasclaw post` and
   the channel bots read $PASCLAW_* — keeps secrets out of
   config.json for users who'd rather not commit them.
 
-  Wave-1 providers: duckduckgo, brave, tavily.
+  Wave 1: duckduckgo, brave, tavily.
   Wave 2: searxng, perplexity.
-  Wave 3 (deferred): gemini, glm, baidu, sogou.
+  Wave 3 (deferred): gemini google_search; glm + baidu skipped
+                     (Chinese-ecosystem auth, narrower audience).
 *)
 unit PasClaw.Search.Factory;
 
@@ -35,7 +36,9 @@ uses
   PasClaw.Logger,
   PasClaw.Search.DuckDuckGo,
   PasClaw.Search.Brave,
-  PasClaw.Search.Tavily;
+  PasClaw.Search.Tavily,
+  PasClaw.Search.SearXNG,
+  PasClaw.Search.Perplexity;
 
 function PickKey(const FromCfg, EnvName: string): string;
 var
@@ -82,6 +85,34 @@ begin
       Exit;
     end;
     Result := NewTavilyProvider(Key);
+    Exit;
+  end;
+
+  if Kind = 'searxng' then
+  begin
+    if Cfg.WebSearch.BaseURL = '' then
+    begin
+      ErrMsg := 'searxng: base_url missing (set web_search.base_url in config.json, ' +
+                'e.g. https://searx.be)';
+      Result := nil;
+      Exit;
+    end;
+    { Optional API key — most public instances don't need one. }
+    Key := PickKey(Cfg.WebSearch.APIKey, 'PASCLAW_SEARXNG_API_KEY');
+    Result := NewSearXNGProvider(Cfg.WebSearch.BaseURL, Key);
+    Exit;
+  end;
+
+  if Kind = 'perplexity' then
+  begin
+    Key := PickKey(Cfg.WebSearch.APIKey, 'PASCLAW_PERPLEXITY_API_KEY');
+    if Key = '' then
+    begin
+      ErrMsg := 'perplexity: api key missing (set $PASCLAW_PERPLEXITY_API_KEY)';
+      Result := nil;
+      Exit;
+    end;
+    Result := NewPerplexityProvider(Key);
     Exit;
   end;
 

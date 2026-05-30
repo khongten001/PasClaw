@@ -115,13 +115,18 @@ type
   end;
 
   (* TWebSearchConfig - web_search tool provider selection.
-       Provider:   'duckduckgo' (default, no key) | 'brave' | 'tavily'
+       Provider:   'duckduckgo' (default, no key) | 'brave' | 'tavily' |
+                   'searxng'    | 'perplexity'
        APIKey:     fallback if no $PASCLAW_<KIND>_API_KEY env var.
+       BaseURL:    instance host for 'searxng' (no default — must be
+                   set since SearXNG is self-hosted). Ignored by the
+                   other providers.
        MaxResults: cap on hits per query; the tool caps further at 25
                    so a runaway model arg can't pull megabytes. *)
   TWebSearchConfig = record
     Provider:   string;
     APIKey:     string;
+    BaseURL:    string;
     MaxResults: Integer;
   end;
 
@@ -174,6 +179,7 @@ begin
   Sandbox.ShellDenyEnabled          := True;
   WebSearch.Provider   := '';   { empty = duckduckgo fallback }
   WebSearch.APIKey     := '';
+  WebSearch.BaseURL    := '';
   WebSearch.MaxResults := 5;
 end;
 
@@ -251,11 +257,12 @@ begin
     Root.PutObject('sandbox', Tmp);
 
     if (WebSearch.Provider <> '') or (WebSearch.APIKey <> '')
-       or (WebSearch.MaxResults <> 5) then
+       or (WebSearch.BaseURL <> '') or (WebSearch.MaxResults <> 5) then
     begin
       Tmp := TJsonObject.Create;
       Tmp.PutStr('provider',    WebSearch.Provider);
       Tmp.PutStr('api_key',     WebSearch.APIKey);
+      Tmp.PutStr('base_url',    WebSearch.BaseURL);
       Tmp.PutInt('max_results', WebSearch.MaxResults);
       Root.PutObject('web_search', Tmp);
     end;
@@ -361,6 +368,7 @@ begin
     try
       WebSearch.Provider   := Obj.GetStr('provider',    WebSearch.Provider);
       WebSearch.APIKey     := Obj.GetStr('api_key',     WebSearch.APIKey);
+      WebSearch.BaseURL    := Obj.GetStr('base_url',    WebSearch.BaseURL);
       WebSearch.MaxResults := Obj.GetInt('max_results', WebSearch.MaxResults);
     finally
       Obj.Free;
