@@ -40,7 +40,7 @@ implementation
 
 uses
   StrUtils,
-  IdHTTP,
+  IdHTTP, IdSSLOpenSSL,
   IdGlobal,
   PasClaw.Logger,
   PasClaw.Providers.HTTP;
@@ -187,6 +187,7 @@ const
 var
   HTML, Body, Block, RawTitle, RawSnippet, Href: string;
   HTTP: TIdHTTP;
+  SSLHandler: TIdSSLIOHandlerSocketOpenSSL;
   Cursor, HrefStart, HrefEnd, BlockStart, TitleClose: Integer;
   N: Integer;
 begin
@@ -195,12 +196,21 @@ begin
   Result := False;
 
   HTTP := TIdHTTP.Create(nil);
+  SSLHandler := nil;
   try
     HTTP.HandleRedirects := True;
     HTTP.Request.UserAgent := 'Mozilla/5.0 (PasClaw web_search)';
     HTTP.Request.Accept := 'text/html';
     HTTP.ConnectTimeout := 15000;
     HTTP.ReadTimeout    := 15000;
+    { html.duckduckgo.com is HTTPS-only; Indy needs an SSL IOHandler
+      attached before the POST or it raises
+      "Could not load SSL library" / "no IOHandler for SSL".
+      web_fetch already does this for arbitrary URLs; the
+      zero-config search fallback obviously needs it too. }
+    SSLHandler := TIdSSLIOHandlerSocketOpenSSL.Create(nil);
+    SSLHandler.SSLOptions.SSLVersions := [sslvTLSv1_2];
+    HTTP.IOHandler := SSLHandler;
     Body := 'q=' + UrlEncode(Query) + '&kl=us-en';
     try
       HTML := HTTP.Post('https://html.duckduckgo.com/html/', Body);
@@ -213,6 +223,7 @@ begin
     end;
   finally
     HTTP.Free;
+    if SSLHandler <> nil then SSLHandler.Free;
   end;
 
   if Trim(HTML) = '' then
