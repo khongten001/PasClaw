@@ -439,6 +439,7 @@ var
 begin
   Agent := TPasClawAgent.Create('claude-opus-4-7');
   try
+    Agent.SetProvider('anthropic', GetEnvironmentVariable('ANTHROPIC_API_KEY'));
     Agent.RegisterTool(TWebSearchTool.Create);
     Agent.RegisterTool(TWebFetchTool.Create);
     Agent.RegisterTool(TFileSystemTool.Create);
@@ -448,6 +449,8 @@ begin
   end;
 end;
 ```
+
+`SetProvider(Kind, APIKey)` builds a `TProviderConfig` in-memory from the catalog entry for `Kind` (`anthropic`, `openai`, `gemini`, `groq`, `ollama`, etc. — see `PasClaw.Providers.Catalog`) plus the API key the caller hands in. The catalog supplies the default base URL and default model; both can be overridden via the three-arg and four-arg `SetProvider` overloads. This lets an embedded binary run without ever touching `~/.pasclaw/config.json` — set the env var, ship the binary, done.
 
 `Run` raises `EPasClawRun` on failure; use `Chat(prompt, reply, err): Boolean` when you'd rather not unwind exceptions. `RegisterTool` takes ownership of the `TPasClawTool` instance and frees it with the agent.
 
@@ -473,6 +476,7 @@ var
 begin
   Server := TPasClawServer.Create('0.0.0.0', 8088);
   try
+    Server.SetProvider('anthropic', GetEnvironmentVariable('ANTHROPIC_API_KEY'));
     Server.RegisterTool(TWebSearchTool.Create);
     Server.Run;  { blocks until Stop is signalled from another thread }
   finally
@@ -480,6 +484,8 @@ begin
   end;
 end;
 ```
+
+`SetProvider` works the same way as on `TPasClawAgent` — call it before `Start` and the gateway boots with the in-memory provider config.
 
 `Run` does `Start + WaitForStop` in one call and raises `EPasClawRun` if startup fails. Use `Start` / `WaitForStop` / `Stop` separately when you need to do something between binding the socket and entering the wait. SIGINT handling is the embedder's problem — most hosting apps already have their own signal-handling strategy, so the component doesn't install one.
 
