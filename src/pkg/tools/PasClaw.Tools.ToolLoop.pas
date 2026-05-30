@@ -322,8 +322,16 @@ end;
   default — applies to skill / MCP tools and to any handler that
   forgot to set the Category field). Order is preserved across
   batches, so the agent loop appends tool_results in the same order
-  the model emitted tool_use blocks. }
-function PartitionToolBatches(const Calls: TToolCallArray;
+  the model emitted tool_use blocks.
+
+  Calls is declared as an open array rather than `TToolCallArray`
+  because the source is `TLLMResponse.ToolCalls`, which the providers
+  record as an inline `array of TToolCall` — Delphi 12 dcc64 enforces
+  strict named-type matching on dynamic-array parameters and rejects
+  the bare-array → TToolCallArray pass-through with E2010. FPC happens
+  to accept it either way, but the open-array form compiles cleanly
+  under both. }
+function PartitionToolBatches(const Calls: array of TToolCall;
                               Reg: TToolRegistry): TToolBatchArray;
 var
   i: Integer;
