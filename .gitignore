@@ -1,7 +1,13 @@
 build/
 vendor/
 !src/pkg/vendor/
-src/pkg/gateway/webui.res
+# webui.res is tracked — it's the binary output of fpcres webui.rc /
+# brcc32 webui.rc and embeds webui.html into the gateway binary via
+# the {$R webui.res} directive in PasClaw.Gateway.WebUI.pas.
+# Committing it lets Delphi users + fresh clones run the gateway
+# without first having fpcres / brcc32 on PATH. Editing webui.html
+# requires also regenerating webui.res (the Makefile rule does this
+# automatically on `make`; Delphi users run brcc32 webui.rc).
 *.o
 *.ppu
 *.compiled
