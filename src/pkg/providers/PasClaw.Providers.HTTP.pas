@@ -37,6 +37,9 @@ type
 function PostJSON(const URL, JSON: string;
                   const Headers: array of THeaderPair;
                   TimeoutSeconds: Integer): THTTPResult;
+function PutJSON(const URL, JSON: string;
+                 const Headers: array of THeaderPair;
+                 TimeoutSeconds: Integer): THTTPResult;
 function GetJSONURL(const URL: string;
                     const Headers: array of THeaderPair;
                     TimeoutSeconds: Integer): THTTPResult;
@@ -215,6 +218,58 @@ begin
     Result := DoRequest(Http, URL, Req, True);
   finally
     Req.Free;
+    Http.Free;
+  end;
+end;
+
+function PutJSON(const URL, JSON: string;
+                 const Headers: array of THeaderPair;
+                 TimeoutSeconds: Integer): THTTPResult;
+var
+  Http: TIdHTTP;
+  Req, Resp: TStringStream;
+  SSLErr: string;
+begin
+  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  if SSLErr <> '' then
+  begin
+    Result.StatusCode := -1;
+    Result.Body       := '';
+    Result.ErrorMsg   := SSLErr;
+    Http.Free;
+    Exit;
+  end;
+  Req  := TStringStream.Create(JSON, TEncoding.UTF8);
+  Resp := TStringStream.Create('', TEncoding.UTF8);
+  try
+    Http.Request.ContentType    := 'application/json';
+    Http.Request.ContentEncoding := 'utf-8';
+    Http.Request.Accept         := 'application/json';
+    ApplyHeaders(Http, Headers);
+    Result.StatusCode := 0;
+    Result.Body       := '';
+    Result.ErrorMsg   := '';
+    try
+      Http.Put(URL, Req, Resp);
+      Result.StatusCode := Http.ResponseCode;
+      Result.Body       := Resp.DataString;
+    except
+      on E: EIdHTTPProtocolException do
+      begin
+        Result.StatusCode := E.ErrorCode;
+        Result.Body       := E.ErrorMessage;
+        Result.ErrorMsg   := E.Message;
+      end;
+      on E: Exception do
+      begin
+        Result.StatusCode := Http.ResponseCode;
+        Result.Body       := Resp.DataString;
+        Result.ErrorMsg   := E.Message;
+      end;
+    end;
+  finally
+    Req.Free;
+    Resp.Free;
     Http.Free;
   end;
 end;

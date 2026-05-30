@@ -36,7 +36,9 @@ uses
   PasClaw.Gateway.Server,
   PasClaw.Channels.Telegram,
   PasClaw.Channels.LINE,
-  PasClaw.Channels.WhatsApp;
+  PasClaw.Channels.WhatsApp,
+  PasClaw.Channels.Matrix,
+  PasClaw.Channels.IRC;
 
 type
   TGwArgs = record
@@ -52,6 +54,15 @@ type
     WAPhoneId:   string;
     WAVerify:    string;
     WASecret:    string;
+    Matrix:      Boolean;
+    MatrixHome:  string;
+    MatrixToken: string;
+    IRC:         Boolean;
+    IRCServer:   string;
+    IRCPort:     Integer;
+    IRCNick:     string;
+    IRCChannel:  string;
+    IRCPassword: string;
     NoMCP:       Boolean;
     NoTools:     Boolean;
     NoHashline:  Boolean;
@@ -73,6 +84,15 @@ begin
   Result.WAPhoneId  := GetEnvironmentVariable('PASCLAW_WHATSAPP_PHONE_ID');
   Result.WAVerify   := GetEnvironmentVariable('PASCLAW_WHATSAPP_VERIFY_TOKEN');
   Result.WASecret   := GetEnvironmentVariable('PASCLAW_WHATSAPP_APP_SECRET');
+  Result.Matrix     := False;
+  Result.MatrixHome := GetEnvironmentVariable('PASCLAW_MATRIX_HOMESERVER');
+  Result.MatrixToken := GetEnvironmentVariable('PASCLAW_MATRIX_TOKEN');
+  Result.IRC        := False;
+  Result.IRCServer  := GetEnvironmentVariable('PASCLAW_IRC_SERVER');
+  Result.IRCPort    := StrToIntDef(GetEnvironmentVariable('PASCLAW_IRC_PORT'), 6667);
+  Result.IRCNick    := GetEnvironmentVariable('PASCLAW_IRC_NICK');
+  Result.IRCChannel := GetEnvironmentVariable('PASCLAW_IRC_CHANNEL');
+  Result.IRCPassword := GetEnvironmentVariable('PASCLAW_IRC_PASSWORD');
   Result.NoMCP      := False;
   Result.NoTools    := False;
   Result.NoHashline := False;
@@ -91,6 +111,15 @@ begin
     if Argv[i] = '--whatsapp-phone'   then begin if i < High(Argv) then Result.WAPhoneId := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--whatsapp-verify'  then begin if i < High(Argv) then Result.WAVerify  := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--whatsapp-secret'  then begin if i < High(Argv) then Result.WASecret  := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--matrix'          then begin Result.Matrix      := True; Inc(i); Continue; end;
+    if Argv[i] = '--matrix-homeserver' then begin if i < High(Argv) then Result.MatrixHome  := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--matrix-token'    then begin if i < High(Argv) then Result.MatrixToken := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--irc'             then begin Result.IRC         := True; Inc(i); Continue; end;
+    if Argv[i] = '--irc-server'      then begin if i < High(Argv) then Result.IRCServer   := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--irc-port'        then begin if i < High(Argv) then Result.IRCPort     := StrToIntDef(Argv[i + 1], Result.IRCPort); Inc(i, 2); Continue; end;
+    if Argv[i] = '--irc-nick'        then begin if i < High(Argv) then Result.IRCNick     := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--irc-channel'     then begin if i < High(Argv) then Result.IRCChannel  := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--irc-password'    then begin if i < High(Argv) then Result.IRCPassword := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--no-mcp'       then begin Result.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin Result.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin Result.NoHashline := True; Inc(i); Continue; end;
@@ -110,6 +139,8 @@ var
   Telegram: TTelegramChannel;
   Line: TLineBot;
   WhatsApp: TWhatsAppBot;
+  Matrix:   TMatrixBot;
+  IRC:      TIRCBot;
   Scheduler: TCronScheduler;
   Skills: TSkillSpecArray;
 begin
@@ -153,6 +184,8 @@ begin
     Telegram := nil;
     Line     := nil;
     WhatsApp := nil;
+    Matrix   := nil;
+    IRC      := nil;
     try
       if Args.Line then
       begin
@@ -185,6 +218,33 @@ begin
         Server.MountWebhook('/webhooks/whatsapp', WhatsApp.HandleWebhook);
       end;
 
+      if Args.Matrix then
+      begin
+        if (Args.MatrixHome = '') or (Args.MatrixToken = '') then
+        begin
+          LogError('matrix: need --matrix-homeserver / $PASCLAW_MATRIX_HOMESERVER ' +
+                   'and --matrix-token / $PASCLAW_MATRIX_TOKEN');
+          Exit(1);
+        end;
+        Matrix := TMatrixBot.Create(Args.MatrixHome, Args.MatrixToken,
+                                     Cfg, Provider, Reg);
+        Matrix.Start;
+      end;
+
+      if Args.IRC then
+      begin
+        if (Args.IRCServer = '') or (Args.IRCNick = '') then
+        begin
+          LogError('irc: need --irc-server / $PASCLAW_IRC_SERVER and ' +
+                   '--irc-nick / $PASCLAW_IRC_NICK');
+          Exit(1);
+        end;
+        IRC := TIRCBot.Create(Args.IRCServer, Args.IRCPort,
+                               Args.IRCNick, Args.IRCChannel, Args.IRCPassword,
+                               Cfg, Provider, Reg);
+        IRC.Start;
+      end;
+
       Server.Start(Args.Addr, Args.Port);
 
       WriteLn(Ansi.Bold, 'Gateway up.', Ansi.Reset);
@@ -195,6 +255,11 @@ begin
         WriteLn('  POST http://', Args.Addr, ':', Args.Port, '/webhooks/line   (LINE platform)');
       if Args.WhatsApp then
         WriteLn('  ANY http://', Args.Addr, ':', Args.Port, '/webhooks/whatsapp   (WhatsApp Cloud)');
+      if Args.Matrix then
+        WriteLn('  matrix sync ', Args.MatrixHome, '  (Matrix homeserver)');
+      if Args.IRC then
+        WriteLn('  irc ', Args.IRCServer, ':', Args.IRCPort, ' ', Args.IRCNick,
+                ' joining ', Args.IRCChannel);
       WriteLn(Ansi.Dim, 'Press Ctrl-C to stop.', Ansi.Reset);
 
       if Args.Telegram then
@@ -216,6 +281,8 @@ begin
       if Telegram <> nil then Telegram.Free;
       if Line     <> nil then Line.Free;
       if WhatsApp <> nil then WhatsApp.Free;
+      if Matrix   <> nil then begin Matrix.RequestStop; Matrix.WaitForStop; Matrix.Free; end;
+      if IRC      <> nil then IRC.Free;
       Server.Stop;
       Server.Free;
       if Scheduler <> nil then Scheduler.Free;
