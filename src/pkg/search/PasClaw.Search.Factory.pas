@@ -13,8 +13,10 @@
 
   Wave 1: duckduckgo, brave, tavily.
   Wave 2: searxng, perplexity.
-  Wave 3 (deferred): gemini google_search; glm + baidu skipped
-                     (Chinese-ecosystem auth, narrower audience).
+  Wave 3: gemini (Google Search grounding via the Gemini Generative
+          Language API). GLM (Zhipu) and Baidu (Qianfan) intentionally
+          skipped — narrower Delphi/FPC audience for those auth
+          ceremonies.
 *)
 unit PasClaw.Search.Factory;
 
@@ -38,7 +40,8 @@ uses
   PasClaw.Search.Brave,
   PasClaw.Search.Tavily,
   PasClaw.Search.SearXNG,
-  PasClaw.Search.Perplexity;
+  PasClaw.Search.Perplexity,
+  PasClaw.Search.Gemini;
 
 function PickKey(const FromCfg, EnvName: string): string;
 var
@@ -113,6 +116,25 @@ begin
       Exit;
     end;
     Result := NewPerplexityProvider(Key);
+    Exit;
+  end;
+
+  if (Kind = 'gemini') or (Kind = 'google_search') then
+  begin
+    Key := PickKey(Cfg.WebSearch.APIKey, 'PASCLAW_GEMINI_API_KEY');
+    if Key = '' then
+    begin
+      ErrMsg := 'gemini: api key missing (set $PASCLAW_GEMINI_API_KEY ' +
+                'or $PASCLAW_GOOGLE_API_KEY)';
+      Result := nil;
+      { Try the Google-branded env var too. Some users have it set
+        from gcloud / aistudio defaults rather than the explicit
+        Gemini key name. }
+      Key := GetEnvironmentVariable('PASCLAW_GOOGLE_API_KEY');
+      if Key = '' then Exit;
+      ErrMsg := '';
+    end;
+    Result := NewGeminiProvider(Key);
     Exit;
   end;
 

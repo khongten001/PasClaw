@@ -65,6 +65,7 @@ Environment variables:
 | `PASCLAW_TAVILY_API_KEY` | Tavily API key for the `web_search` tool when `web_search.provider = tavily`. |
 | `PASCLAW_SEARXNG_API_KEY` | Bearer token for protected SearXNG instances (most public ones don't need it). |
 | `PASCLAW_PERPLEXITY_API_KEY` | Perplexity API key for the `web_search` tool when `web_search.provider = perplexity`. |
+| `PASCLAW_GEMINI_API_KEY` | Google AI Studio key for the `web_search` tool when `web_search.provider = gemini`. `PASCLAW_GOOGLE_API_KEY` works too. |
 | `NO_COLOR` | Disables ANSI color output. |
 
 Useful config commands:
@@ -191,6 +192,7 @@ Provider is set under `web_search` in `~/.pasclaw/config.json`:
 | `tavily` | yes — `$PASCLAW_TAVILY_API_KEY` overrides `api_key` | `api.tavily.com/search` |
 | `searxng` | no (most public instances); optional `$PASCLAW_SEARXNG_API_KEY` for protected ones | `<web_search.base_url>/search?format=json` |
 | `perplexity` | yes — `$PASCLAW_PERPLEXITY_API_KEY` overrides `api_key` | `api.perplexity.ai/chat/completions` (Sonar model — returns one synthesised answer plus citation URLs) |
+| `gemini` | yes — `$PASCLAW_GEMINI_API_KEY` (or `$PASCLAW_GOOGLE_API_KEY`) overrides `api_key` | `generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent` with `google_search` grounding — returns one synthesised answer plus the ground-truth source URLs Gemini consulted |
 
 Env-var values win over the `api_key` field so secrets can stay out of `config.json`. SearXNG additionally needs `web_search.base_url` set since every instance is self-hosted (e.g. `"base_url": "https://searx.be"`).
 
@@ -553,7 +555,7 @@ src/
     memory/         Memory log storage
     platform/       Platform helpers
     providers/      Provider catalog and LLM HTTP clients
-    search/         Web-search providers (DuckDuckGo, Brave, Tavily, SearXNG, Perplexity) + HTML→text
+    search/         Web-search providers (DuckDuckGo, Brave, Tavily, SearXNG, Perplexity, Gemini) + HTML→text
     skills/         Skill manifest loading and tool registration
     tokenizer/      Token counting helpers
     tools/          Built-in tool registry, filesystem, shell, and tool loop
