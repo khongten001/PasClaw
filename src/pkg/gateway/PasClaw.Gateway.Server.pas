@@ -762,25 +762,38 @@ procedure TLogStreamWriter.WriteSSE(const Payload: string);
    write raw text it bypasses chunking and the client sees a
    Content-Length-bounded response that gets cut at the first byte
    chunk. Match the manual framing TSSEStreamer in this same file
-   does for /v1/chat/completions. *)
+   does for /v1/chat/completions.
+
+   Frame holds the bytes as TIdBytes (NOT TBytes) — Delphi's
+   dcc64 enforces the distinction at the Write() call site and
+   refuses TBytes there, while FPC accepts either. Build TIdBytes
+   from the start; the copy loop converts the TEncoding output
+   one byte at a time, the same idiom TSSEStreamer.WriteSocketBytes
+   already uses. Codex flagged the Delphi build error on PR #89. *)
 var
-  Bytes, Header, Frame: TBytes;
+  PayloadBytes, HeaderBytes: TBytes;
+  Frame: TIdBytes;
   HeaderStr: string;
   i, Offset: Integer;
 begin
   if (Conn = nil) or (not Conn.Connected) then Exit;
-  Bytes := TEncoding.UTF8.GetBytes(Payload);
-  if Length(Bytes) = 0 then Exit;
-  HeaderStr := IntToHex(Length(Bytes), 1) + #13#10;
-  Header := TEncoding.ASCII.GetBytes(HeaderStr);
-  SetLength(Frame, Length(Header) + Length(Bytes) + 2);
+  PayloadBytes := TEncoding.UTF8.GetBytes(Payload);
+  if Length(PayloadBytes) = 0 then Exit;
+  HeaderStr := IntToHex(Length(PayloadBytes), 1) + #13#10;
+  HeaderBytes := TEncoding.ASCII.GetBytes(HeaderStr);
+  SetLength(Frame, Length(HeaderBytes) + Length(PayloadBytes) + 2);
   Offset := 0;
-  for i := 0 to High(Header) do begin Frame[Offset] := Header[i]; Inc(Offset); end;
-  for i := 0 to High(Bytes)  do begin Frame[Offset] := Bytes[i];  Inc(Offset); end;
+  for i := 0 to High(HeaderBytes)  do begin Frame[Offset] := HeaderBytes[i];  Inc(Offset); end;
+  for i := 0 to High(PayloadBytes) do begin Frame[Offset] := PayloadBytes[i]; Inc(Offset); end;
   Frame[Offset]     := 13;
   Frame[Offset + 1] := 10;
   try
     Conn.IOHandler.Write(Frame);
+    { Drain Indy's nested WriteBuffer stack so the bytes leave the
+      socket now, not when Indy decides the buffer is full. Same
+      idiom TSSEStreamer.WriteSocketBytes uses. }
+    while Conn.IOHandler.WriteBufferingActive do
+      Conn.IOHandler.WriteBufferClose;
   except
     { Connection dropped — the unsubscribe in HandleLogs's finally
       will tear us down on its next iteration. }
@@ -801,25 +814,69 @@ var
   Snapshot: TStringList;
   i: Integer;
   TabPos: Integer;
-  Tag, Body, Line: string;
+  Tag, Body, Line, HeaderStr: string;
+  HeaderTmp: TBytes;
+  HeaderIdBytes: TIdBytes;
 begin
   { SSE stream — emit the recent buffer up front, then subscribe
     for live tail. The handler doesn't return until the client
     disconnects (or we throw); on either path the listener gets
-    unsubscribed. Pattern matches the existing
-    /v1/chat/completions stream path: explicit empty ContentText,
-    ContentLength := -1 to suppress Indy's auto Content-Length,
-    Transfer-Encoding via CustomHeaders (not via AResp.TransferEncoding
-    which on some Indy builds double-frames body writes). }
-  AResp.ResponseNo  := 200;
-  AResp.ContentText := '';
-  AResp.ContentType := 'text/event-stream; charset=utf-8';
-  AResp.CharSet     := 'utf-8';
-  AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
-  AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
-  AResp.CustomHeaders.AddValue('Transfer-Encoding', 'chunked');
-  AResp.ContentLength := -1;
-  AResp.WriteHeader;
+    unsubscribed.
+
+    Why bypass AResp.WriteHeader entirely and write the status +
+    headers raw via IOHandler:
+
+      Indy's TIdHTTPResponseInfo.WriteHeader rewrites ContentType
+      to "text/html; charset=utf-8" under conditions that are
+      hard to fully unset from outside the unit (around
+      Content-Length / Transfer-Encoding / ContentText interplay
+      — see IdCustomHTTPServer.pas line ~"if ContentType = ''"
+      block). The result: the response header line said
+      "Content-Type: text/html" even though we set
+      text/event-stream. Strict EventSource implementations
+      (recent Firefox) refuse the stream; lenient ones (Chrome,
+      Safari) tolerate it but the wire is technically wrong.
+
+      The cure is to build the response status line + every
+      header byte ourselves and write them through the underlying
+      IOHandler, then flip AResp.HeaderHasBeenWritten := True so
+      Indy knows to skip its own header emission. The same trick
+      lets us guarantee Content-Type, Transfer-Encoding: chunked,
+      and the SSE-required Cache-Control / X-Accel-Buffering all
+      land verbatim. Chunked body framing (TLogStreamWriter)
+      stays exactly as before. }
+  HeaderStr :=
+    'HTTP/1.1 200 OK'#13#10 +
+    'Content-Type: text/event-stream; charset=utf-8'#13#10 +
+    'Cache-Control: no-cache, no-transform'#13#10 +
+    'Connection: keep-alive'#13#10 +
+    'X-Accel-Buffering: no'#13#10 +
+    'Transfer-Encoding: chunked'#13#10 +
+    'Server: PasClaw/' + FormatVersion + #13#10 +
+    #13#10;
+  try
+    { Convert string -> TBytes (TEncoding) -> TIdBytes (Indy
+      Write expects this exact type — Delphi dcc64 enforces it;
+      FPC happens to accept TBytes here too. Same one-byte-at-a-
+      time copy idiom as TLogStreamWriter.WriteSSE.). }
+    SetLength(HeaderTmp, Length(HeaderStr));   { ASCII safe — header line is ascii-only }
+    HeaderTmp := TEncoding.ASCII.GetBytes(HeaderStr);
+    SetLength(HeaderIdBytes, Length(HeaderTmp));
+    for i := 0 to High(HeaderTmp) do HeaderIdBytes[i] := HeaderTmp[i];
+    AContext.Connection.IOHandler.Write(HeaderIdBytes);
+    while AContext.Connection.IOHandler.WriteBufferingActive do
+      AContext.Connection.IOHandler.WriteBufferClose;
+  except
+    on E: Exception do
+    begin
+      LogWarn('logs SSE: failed to emit headers: %s', [E.Message]);
+      Exit;
+    end;
+  end;
+  AResp.HeaderHasBeenWritten := True;
+  AResp.ContentText  := '';
+  AResp.ContentLength := 0;
+  AResp.ResponseNo   := 200;
 
   Writer := TLogStreamWriter.Create;
   Writer.Conn := AContext.Connection;
@@ -856,8 +913,16 @@ begin
     end;
   finally
     UnsubscribeLog(Token);
-    { Best-effort terminator chunk so the client sees a clean end. }
-    try AContext.Connection.IOHandler.Write(TEncoding.ASCII.GetBytes('0'#13#10#13#10)); except end;
+    { Best-effort terminator chunk so the client sees a clean
+      end-of-stream. Same TBytes→TIdBytes conversion as the header
+      write above — Delphi dcc64 enforces the type match. }
+    try
+      HeaderTmp := TEncoding.ASCII.GetBytes('0'#13#10#13#10);
+      SetLength(HeaderIdBytes, Length(HeaderTmp));
+      for i := 0 to High(HeaderTmp) do HeaderIdBytes[i] := HeaderTmp[i];
+      AContext.Connection.IOHandler.Write(HeaderIdBytes);
+    except
+    end;
     Writer.Free;
   end;
 end;
