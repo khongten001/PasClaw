@@ -245,11 +245,15 @@ const
       tokenizer splits on whitespace + shell metacharacters, so only
       stand-alone tokens trigger the match.
 
-      cd / chdir / pushd / popd are in here because the workspace
-      restriction below binds the shell's cwd to GWorkspace and runs
-      the abs-path scanner on the rest of the command; letting the
-      model chdir would defeat both. *)
-  ForbiddenTokens: array[0..27] of string = (
+      cd / chdir / pushd / popd are NOT in here — they live in
+      WorkspaceEscapeTokens below, which is checked only when the
+      workspace restriction is active. Banning the cd-family
+      unconditionally broke legitimate compile-and-build flows
+      ("cmd /c cd <proj> && dcc32 …") in unrestricted mode for no
+      additional safety — the workspace boundary is what they were
+      ever meant to protect, so they only matter when that boundary
+      exists. *)
+  ForbiddenTokens: array[0..23] of string = (
     'sudo',
     'su',
     'rm',          { all rm — too easy to escape -rf detection }
@@ -265,10 +269,6 @@ const
     'eval',
     'mkfs',
     'diskpart',
-    'cd',          { workspace-escape via cwd change }
-    'chdir',
-    'pushd',
-    'popd',
     { Windows additions } 'del',
     'erase',
     'rd',
@@ -278,6 +278,20 @@ const
     'takeown',
     'icacls',
     'runas'
+  );
+
+  (*  Tokens that would let the model escape the workspace cwd pin —
+      the workspace restriction binds the shell's cwd to GWorkspace
+      and runs the abs-path scanner on the rest of the command;
+      letting the model chdir would defeat both. Only enforced when
+      sandbox.restrict_to_workspace is True. In unrestricted mode
+      the model can change directories freely (regular CLI use, no
+      cwd pin to defeat). *)
+  WorkspaceEscapeTokens: array[0..3] of string = (
+    'cd',
+    'chdir',
+    'pushd',
+    'popd'
   );
 
   { Substrings that, when present anywhere in the lowercased command,
@@ -405,6 +419,31 @@ begin
         if T = ForbiddenTokens[j] then
         begin
           Hit := ForbiddenTokens[j];
+          Exit(True);
+        end;
+    end;
+  finally
+    Tokens.Free;
+  end;
+end;
+
+function MatchesAnyWorkspaceEscape(const Cmd: string; out Hit: string): Boolean;
+var
+  Tokens: TStringList;
+  i, j: Integer;
+  T: string;
+begin
+  Result := False;
+  Hit := '';
+  Tokens := TokenizeCommand(Cmd);
+  try
+    for i := 0 to Tokens.Count - 1 do
+    begin
+      T := LowerCase(Tokens[i]);
+      for j := 0 to High(WorkspaceEscapeTokens) do
+        if T = WorkspaceEscapeTokens[j] then
+        begin
+          Hit := WorkspaceEscapeTokens[j];
           Exit(True);
         end;
     end;
@@ -542,6 +581,21 @@ begin
 
   if GPolicy.RestrictToWorkspace then
   begin
+    { cd / chdir / pushd / popd only matter when restriction is on —
+      they'd let the model escape the workspace cwd pin. In
+      unrestricted mode the model can chdir freely (regular CLI use,
+      no cwd to pin). Gating these here, rather than in the
+      always-on ForbiddenTokens above, fixes the "cmd /c cd <proj> &&
+      dcc32 …" Delphi/Windows compile flow that worked before
+      sandbox landed. }
+    if GPolicy.ShellDenyEnabled and MatchesAnyWorkspaceEscape(Cmd, Hit) then
+    begin
+      Reason := 'refused: command contains workspace-escape token "' + Hit +
+                '" (sandbox.restrict_to_workspace=true pins shell cwd to "' +
+                GWorkspace + '"; cd would defeat that). Use absolute paths ' +
+                'inside the workspace instead.';
+      Exit(False);
+    end;
     if HasOutsideAbsolutePath(Cmd, Path) then
     begin
       Reason := 'refused: command references absolute path "' + Path +
