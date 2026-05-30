@@ -93,11 +93,25 @@ begin
   Result := Format('Free Pascal %s on %s/%s',
                    [{$I %FPCVERSION%}, {$I %FPCTARGETOS%}, {$I %FPCTARGETCPU%}]);
   {$ELSE}
-    {$IFDEF WIN64}     Result := 'Delphi on win/x86_64';
-    {$ELSEIF Defined(WIN32)} Result := 'Delphi on win/x86';
-    {$ELSEIF Defined(LINUX64)} Result := 'Delphi on linux/x86_64';
-    {$ELSEIF Defined(MACOS64)} Result := 'Delphi on darwin/x86_64';
-    {$ELSE}            Result := 'Delphi';
+    // Nested IFDEFs only — ELSEIF and "IF Defined(...)" both trip
+    // FPC 3.2.2's preprocessor even when this branch is inactive
+    // there, because FPC still scans the inner directives.
+    {$IFDEF WIN64}
+    Result := 'Delphi on win/x86_64';
+    {$ELSE}
+      {$IFDEF WIN32}
+      Result := 'Delphi on win/x86';
+      {$ELSE}
+        {$IFDEF LINUX64}
+        Result := 'Delphi on linux/x86_64';
+        {$ELSE}
+          {$IFDEF MACOS64}
+          Result := 'Delphi on darwin/x86_64';
+          {$ELSE}
+          Result := 'Delphi';
+          {$ENDIF}
+        {$ENDIF}
+      {$ENDIF}
     {$ENDIF}
   {$ENDIF}
 end;
