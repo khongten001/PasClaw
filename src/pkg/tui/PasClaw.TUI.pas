@@ -318,7 +318,17 @@ end;
 
 {$IFDEF UNIX}
 const
+  { TIOCGWINSZ encoding differs per OS. Linux picked a low number
+    in the legacy unencoded range; Darwin/BSD use the IOCTL macro
+    encoding _IOR('t', 104, struct winsize) = 0x40087468. Passing
+    the wrong magic to ioctl() returns -1 and we silently fall
+    back to the default 80-column width — which is what was
+    happening on macOS before this gate landed. }
+  {$IFDEF DARWIN}
+  TIOCGWINSZ = $40087468;
+  {$ELSE}
   TIOCGWINSZ = $5413;
+  {$ENDIF}
 type
   Twinsize = record
     ws_row, ws_col, ws_xpixel, ws_ypixel: Word;
