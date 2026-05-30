@@ -154,6 +154,8 @@ uses
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
   PasClaw.Tools.Memory,
+  PasClaw.Tools.WebSearch,
+  PasClaw.Tools.WebFetch,
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
@@ -236,6 +238,8 @@ begin
   RegisterFSTools(FRegistry, FUseHashline);
   RegisterShellTool(FRegistry);
   RegisterMemoryTools(FRegistry);
+  RegisterWebSearchTool(FRegistry);
+  RegisterWebFetchTool(FRegistry);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(FRegistry, Skills);
   if FUseMCP then
@@ -463,6 +467,8 @@ begin
     RegisterFSTools(FRegistry, FEnableHashline);
     RegisterShellTool(FRegistry);
     RegisterMemoryTools(FRegistry);
+  RegisterWebSearchTool(FRegistry);
+  RegisterWebFetchTool(FRegistry);
     Skills := LoadSkillManifests(GetHome);
     RegisterSkills(FRegistry, Skills);
   end;

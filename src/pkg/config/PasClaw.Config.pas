@@ -114,6 +114,17 @@ type
     Enabled: Boolean;
   end;
 
+  (* TWebSearchConfig - web_search tool provider selection.
+       Provider:   'duckduckgo' (default, no key) | 'brave' | 'tavily'
+       APIKey:     fallback if no $PASCLAW_<KIND>_API_KEY env var.
+       MaxResults: cap on hits per query; the tool caps further at 25
+                   so a runaway model arg can't pull megabytes. *)
+  TWebSearchConfig = record
+    Provider:   string;
+    APIKey:     string;
+    MaxResults: Integer;
+  end;
+
   TConfig = class
   public
     DefaultProvider: string;
@@ -124,6 +135,7 @@ type
     MCPServers: array of TMCPServer;
     Crons:      array of TCronEntry;
     Skills:     array of TSkillEntry;
+    WebSearch:  TWebSearchConfig;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -160,6 +172,9 @@ begin
   Sandbox.AllowReadOutsideWorkspace := False;
   Sandbox.Workspace                 := '';
   Sandbox.ShellDenyEnabled          := True;
+  WebSearch.Provider   := '';   { empty = duckduckgo fallback }
+  WebSearch.APIKey     := '';
+  WebSearch.MaxResults := 5;
 end;
 
 function ProviderToJSON(const P: TProviderConfig): TJsonObject;
@@ -234,6 +249,16 @@ begin
     for i := 0 to High(Sandbox.CustomShellDeny) do Arr.AddStr(Sandbox.CustomShellDeny[i]);
     Tmp.PutArray('custom_shell_deny', Arr);
     Root.PutObject('sandbox', Tmp);
+
+    if (WebSearch.Provider <> '') or (WebSearch.APIKey <> '')
+       or (WebSearch.MaxResults <> 5) then
+    begin
+      Tmp := TJsonObject.Create;
+      Tmp.PutStr('provider',    WebSearch.Provider);
+      Tmp.PutStr('api_key',     WebSearch.APIKey);
+      Tmp.PutInt('max_results', WebSearch.MaxResults);
+      Root.PutObject('web_search', Tmp);
+    end;
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Providers) do
@@ -327,6 +352,16 @@ begin
       finally
         Arr.Free;
       end;
+    finally
+      Obj.Free;
+    end;
+
+    Obj := Root.ChildObject('web_search');
+    if Obj <> nil then
+    try
+      WebSearch.Provider   := Obj.GetStr('provider',    WebSearch.Provider);
+      WebSearch.APIKey     := Obj.GetStr('api_key',     WebSearch.APIKey);
+      WebSearch.MaxResults := Obj.GetInt('max_results', WebSearch.MaxResults);
     finally
       Obj.Free;
     end;

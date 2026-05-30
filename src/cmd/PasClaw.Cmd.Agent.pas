@@ -28,6 +28,8 @@ uses
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
   PasClaw.Tools.Memory,
+  PasClaw.Tools.WebSearch,
+  PasClaw.Tools.WebFetch,
   PasClaw.Tools.ToolLoop,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
@@ -135,6 +137,8 @@ begin
   RegisterFSTools(Result, UseHashline);
   RegisterShellTool(Result);
   RegisterMemoryTools(Result);
+  RegisterWebSearchTool(Result);
+  RegisterWebFetchTool(Result);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(Result, Skills);
 end;

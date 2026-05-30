@@ -70,7 +70,7 @@
         <Manifest_File>None</Manifest_File>
         <DCC_UsePackage>$(DCC_UsePackage)</DCC_UsePackage>
         <!-- Every src/pkg/* directory + src/cmd, relative to src/pasclaw/ -->
-        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\cron;..\pkg\skills;..\pkg\agent;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\vendor\dmvcframework;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\agent;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\vendor\dmvcframework;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <!--
           DCC_Namespace lets dcc32/dcc64 resolve bare unit names ("SysUtils",
           "Classes", "Windows") back to their fully qualified modern names
@@ -170,6 +170,8 @@
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.FS.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Shell.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Memory.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebSearch.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebFetch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.ToolLoop.pas"/>
 
         <!-- pkg/mcp -->
@@ -196,6 +198,14 @@
 
         <!-- pkg/crypto -->
         <DCCReference Include="..\pkg\crypto\PasClaw.Crypto.HMAC.pas"/>
+
+        <!-- pkg/search -->
+        <DCCReference Include="..\pkg\search\PasClaw.Search.Types.pas"/>
+        <DCCReference Include="..\pkg\search\PasClaw.Search.HTMLText.pas"/>
+        <DCCReference Include="..\pkg\search\PasClaw.Search.DuckDuckGo.pas"/>
+        <DCCReference Include="..\pkg\search\PasClaw.Search.Brave.pas"/>
+        <DCCReference Include="..\pkg\search\PasClaw.Search.Tavily.pas"/>
+        <DCCReference Include="..\pkg\search\PasClaw.Search.Factory.pas"/>
 
         <!-- pkg/cron -->
         <DCCReference Include="..\pkg\cron\PasClaw.Cron.Expr.pas"/>
