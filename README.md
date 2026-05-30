@@ -425,6 +425,56 @@ pasclaw post discord <webhook-url> "hello"
 pasclaw post slack <webhook-url> "hello"
 ```
 
+### Embedding in your own app
+
+`TPasClawAgent` (unit `PasClaw.Agent`) is a `TComponent` you can drop on a form or instantiate from code to embed the full agent — provider auth, tools, MCP, skills — inside a standalone Delphi or FPC binary, without shelling out to the CLI.
+
+Code-driven (one-liner) form:
+
+```pascal
+uses PasClaw.Agent, PasClaw.Tools;
+
+var
+  Agent: TPasClawAgent;
+begin
+  Agent := TPasClawAgent.Create('claude-opus-4-7');
+  try
+    Agent.RegisterTool(TWebSearchTool.Create);
+    Agent.RegisterTool(TWebFetchTool.Create);
+    Agent.RegisterTool(TFileSystemTool.Create);
+    WriteLn(Agent.Run('Summarize the latest Delphi release notes.'));
+  finally
+    Agent.Free;
+  end;
+end;
+```
+
+`Run` raises `EPasClawRun` on failure; use `Chat(prompt, reply, err): Boolean` when you'd rather not unwind exceptions. `RegisterTool` takes ownership of the `TPasClawTool` instance and frees it with the agent.
+
+Form-designer / property-driven form (back-compat — `Create(nil)`, set published properties, wire events):
+
+```pascal
+PC := TPasClawAgent.Create(nil);
+PC.Model       := 'claude-opus-4-7';
+PC.SystemPrompt := 'You are a Pascal expert.';
+PC.OnText := MyTextHandler;
+if PC.Chat('hi', Reply, Err) then WriteLn(Reply);
+```
+
+Built-in tools available as classes: `TWebSearchTool`, `TWebFetchTool`, `TFileSystemTool` (bundle: fs_read/write/grep/list/edit), `TShellTool`, `TMemoryTool`. Custom tools subclass `TPasClawTool` (unit `PasClaw.Tools.Obj`) and override `Name` / `Description` / `Schema` / `Run`.
+
+`TPasClawServer` (same unit) hosts the full HTTP gateway inside the calling process — `Start` returns once it's listening, `Stop` joins the worker thread.
+
+`samples/component-console/` ships both sample binaries:
+
+```sh
+cd samples/component-console
+make get-indy   # only needed once, from repo root
+make            # builds SampleConsole (property form) and SampleSimple (code form)
+```
+
+`PasClaw.Component` is still available as the legacy unit name — it now re-exports everything from `PasClaw.Agent`, so existing code keeps compiling.
+
 ### Maintenance and diagnostics
 
 ```sh

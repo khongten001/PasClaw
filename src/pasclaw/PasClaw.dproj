@@ -173,6 +173,8 @@
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebSearch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebFetch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.ToolLoop.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.Obj.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.pas"/>
 
         <!-- pkg/mcp -->
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Types.pas"/>
@@ -251,7 +253,8 @@
         <!-- pkg/hashline -->
         <DCCReference Include="..\pkg\hashline\PasClaw.Hashline.pas"/>
 
-        <!-- pkg/component -->
+        <!-- pkg/agent (TPasClawAgent component lives here; PasClaw.Component is a back-compat shim) -->
+        <DCCReference Include="..\pkg\agent\PasClaw.Agent.pas"/>
         <DCCReference Include="..\pkg\component\PasClaw.Component.pas"/>
 
         <!-- pkg/vendor/dmvcframework (Apache-2.0, Delphi-only) -->

@@ -18,11 +18,18 @@ type
     string to signal a recoverable error to the model. }
   TToolHandler = function(const ArgsJSON: string; out ErrMsg: string): string;
 
+  { Method-pointer variant for class-based tools (TPasClawTool descendants).
+    The registry prefers HandlerObj over Handler when both are set, so a
+    class instance can dispatch through its own Self.Run without going via
+    a top-level function pointer. }
+  TToolHandlerObj = function(const ArgsJSON: string; out ErrMsg: string): string of object;
+
   TTool = record
     Name:        string;
     Description: string;
     Schema:      string;   { JSON schema (parameters) }
     Handler:     TToolHandler;
+    HandlerObj:  TToolHandlerObj;
     IsCore:      Boolean;
   end;
 

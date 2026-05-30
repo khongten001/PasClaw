@@ -47,15 +47,29 @@ end;
 procedure TToolRegistry.Register(const T: TTool);
 var
   i: Integer;
+  Stored: TTool;
 begin
+  Stored := T;
+  { Defensive zero: legacy callers build `T: TTool` on the stack and
+    set Handler without ever touching the new HandlerObj field, which
+    leaves it pointing at stack garbage. RunTool's
+    `if Assigned(T.HandlerObj)` then either misroutes the call or
+    crashes. If Handler is set, the caller intended function-pointer
+    dispatch — clear HandlerObj. TPasClawTool installs always set
+    Handler := nil first, so this branch doesn't fire for them. }
+  if Assigned(Stored.Handler) then
+  begin
+    TMethod(Stored.HandlerObj).Code := nil;
+    TMethod(Stored.HandlerObj).Data := nil;
+  end;
   for i := 0 to High(FTools) do
-    if FTools[i].Name = T.Name then
+    if FTools[i].Name = Stored.Name then
     begin
-      FTools[i] := T;
+      FTools[i] := Stored;
       Exit;
     end;
   SetLength(FTools, Length(FTools) + 1);
-  FTools[High(FTools)] := T;
+  FTools[High(FTools)] := Stored;
 end;
 
 function TToolRegistry.Find(const Name: string; out T: TTool): Boolean;
@@ -107,13 +121,16 @@ begin
     ErrMsg := 'unknown tool: ' + Name;
     Exit('');
   end;
-  if not Assigned(T.Handler) then
+  if (not Assigned(T.Handler)) and (not Assigned(T.HandlerObj)) then
   begin
     ErrMsg := 'tool "' + Name + '" has no handler';
     Exit('');
   end;
   try
-    Result := T.Handler(ArgsJSON, ErrMsg);
+    if Assigned(T.HandlerObj) then
+      Result := T.HandlerObj(ArgsJSON, ErrMsg)
+    else
+      Result := T.Handler(ArgsJSON, ErrMsg);
   except
     on E: Exception do
     begin

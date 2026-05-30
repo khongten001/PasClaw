@@ -1,11 +1,22 @@
-# Sample build: a standalone FPC binary that embeds TPasClawAgent.
+# Sample build: standalone FPC binaries that embed TPasClawAgent.
 #
-# This Makefile re-uses the same unit search paths as the top-level
-# PasClaw build (../../Makefile) so the sample stays in sync without
+# Two binaries from one Makefile:
+#
+#   SampleConsole — legacy property-driven API
+#                   (PC.Model := ...; PC.Chat(prompt, reply, err))
+#   SampleSimple  — code-driven one-liner API
+#                   (Agent := TPasClawAgent.Create('model');
+#                    Agent.RegisterTool(TWebSearchTool.Create);
+#                    WriteLn(Agent.Run('prompt')))
+#
+# Both pick up the same unit search paths as the top-level PasClaw
+# build (../../Makefile) so the samples stay in sync without
 # duplicating the list. Run:
 #
 #   cd samples/component-console
-#   make
+#   make            # builds both
+#   make simple     # just SampleSimple
+#   make console    # just SampleConsole
 #
 # The first build needs Indy vendored under ../../vendor/Indy; the
 # top-level Makefile's `make get-indy` target handles that. Run it
@@ -14,10 +25,39 @@
 ROOT     := ../..
 FPC      ?= fpc
 BUILDDIR ?= build
-BIN      ?= $(BUILDDIR)/SampleConsole
 
 INDY_DIR     ?= $(ROOT)/vendor/Indy
-ICONVENC_DIR ?= /usr/lib/x86_64-linux-gnu/fpc/3.2.2/units/x86_64-linux/iconvenc
+
+# OS / arch autodetect — same approach as the root Makefile so a
+# fresh Linux or Homebrew install picks up fcl-db, sqlite, iconvenc,
+# and lazutils from the right place without per-machine config.
+UNAME_S      := $(shell uname -s)
+UNAME_M      := $(shell uname -m)
+FPC_VERSION  ?= 3.2.2
+
+ifeq ($(UNAME_S),Darwin)
+  ifeq ($(UNAME_M),arm64)
+    HOMEBREW_PREFIX ?= /opt/homebrew
+    FPC_ARCH        ?= aarch64-darwin
+  else
+    HOMEBREW_PREFIX ?= /usr/local
+    FPC_ARCH        ?= x86_64-darwin
+  endif
+  FPC_UNITS_DIR ?= $(HOMEBREW_PREFIX)/lib/fpc/$(FPC_VERSION)/units/$(FPC_ARCH)
+  LAZUTILS_DIR  ?= $(HOMEBREW_PREFIX)/share/lazarus/components/lazutils
+else
+  ifeq ($(UNAME_M),aarch64)
+    FPC_ARCH ?= aarch64-linux
+  else
+    FPC_ARCH ?= x86_64-linux
+  endif
+  FPC_UNITS_DIR ?= /usr/lib/$(UNAME_M)-linux-gnu/fpc/$(FPC_VERSION)/units/$(FPC_ARCH)
+  LAZUTILS_DIR  ?= /usr/lib/lazarus/3.0/components/lazutils
+endif
+
+ICONVENC_DIR ?= $(FPC_UNITS_DIR)/iconvenc
+FCLDB_DIR    ?= $(FPC_UNITS_DIR)/fcl-db
+SQLITE_DIR   ?= $(FPC_UNITS_DIR)/sqlite
 
 # Every src/pkg/* the main binary uses, re-rooted at $(ROOT).
 UNIT_DIRS = \
@@ -32,6 +72,9 @@ UNIT_DIRS = \
 	$(ROOT)/src/pkg/mcp \
 	$(ROOT)/src/pkg/gateway \
 	$(ROOT)/src/pkg/channels \
+	$(ROOT)/src/pkg/crypto \
+	$(ROOT)/src/pkg/net \
+	$(ROOT)/src/pkg/search \
 	$(ROOT)/src/pkg/cron \
 	$(ROOT)/src/pkg/skills \
 	$(ROOT)/src/pkg/agent \
@@ -50,6 +93,8 @@ INDY_UNIT_DIRS = \
 	$(INDY_DIR)/Lib/System
 
 FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
+	-Fu$(FCLDB_DIR) -Fu$(SQLITE_DIR) \
+	$(if $(LAZUTILS_DIR),-Fu$(LAZUTILS_DIR)) \
 	$(foreach d,$(UNIT_DIRS),-Fu$(d)) \
 	$(foreach d,$(INDY_UNIT_DIRS),-Fu$(d)) \
 	$(foreach d,$(INDY_UNIT_DIRS),-Fi$(d)) \
@@ -57,12 +102,18 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 	-FE$(BUILDDIR) \
 	-FU$(BUILDDIR)/lib
 
-.PHONY: all clean
+.PHONY: all clean console simple
 
-all: $(BIN)
+all: console simple
 
-$(BIN): SampleConsole.dpr | $(BUILDDIR) $(BUILDDIR)/lib
+console: $(BUILDDIR)/SampleConsole
+simple:  $(BUILDDIR)/SampleSimple
+
+$(BUILDDIR)/SampleConsole: SampleConsole.dpr | $(BUILDDIR) $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) SampleConsole.dpr
+
+$(BUILDDIR)/SampleSimple: SampleSimple.dpr | $(BUILDDIR) $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) SampleSimple.dpr
 
 $(BUILDDIR):
 	mkdir -p $@
