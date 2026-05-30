@@ -159,6 +159,10 @@ type
     FOwnedTools:     TObjectList;     { TPasClawTool instances handed in via RegisterTool }
     FServer:         TGatewayServer;
     FThread:         TThread;
+    FStopSignal:     TEvent;          { lives as long as TPasClawServer itself; WaitForStop
+                                        waits on this, not on FServer's internal stop flag,
+                                        so Stop can safely free FServer while another
+                                        thread is unwinding from WaitForStop. }
     FBindAddr:       string;
     FPort:           Integer;
     FMaxIter:        Integer;
@@ -551,6 +555,7 @@ begin
   FEnableMCP      := True;
   FEnableHashline := True;
   FOwnedTools     := TObjectList.Create(True);  { owns + frees its items }
+  FStopSignal     := TEvent.Create(nil, True, False, '');  { manual reset, non-signalled }
   GServerInstance := Self;
 end;
 
@@ -564,6 +569,10 @@ end;
 destructor TPasClawServer.Destroy;
 begin
   Stop;
+  { Stop signals FStopSignal and tears down FServer/FThread. By the
+    time we get here, any thread that was inside WaitForStop has
+    already returned, so freeing FStopSignal is race-free. }
+  FreeAndNil(FStopSignal);
   FreeAndNil(FOwnedTools);  { frees every TPasClawTool we accepted }
   if GServerInstance = Self then GServerInstance := nil;
   inherited Destroy;
@@ -583,6 +592,11 @@ begin
     its own), Stop joins the dead thread and clears stale state. Cheap
     no-op when nothing is left over. }
   if (FThread <> nil) or (FServer <> nil) then Stop;
+
+  { Re-arm the stop signal for this run. Stop's last action is to
+    SetEvent; a fresh Start needs to clear it so WaitForStop blocks
+    again instead of returning immediately. }
+  if FStopSignal <> nil then FStopSignal.ResetEvent;
 
   FConfig := LoadConfig;
   ConfigureSandbox(FConfig.Sandbox, '');
@@ -661,6 +675,12 @@ end;
 
 procedure TPasClawServer.Stop;
 begin
+  { Wake WaitForStop callers FIRST so they can return all the way
+    out of their stack frames before we tear down FServer below.
+    The Run path's WaitForStop is parked on FStopSignal, which
+    lives on Self (not on FServer), so signalling here gives any
+    waiter a clean exit. }
+  if FStopSignal <> nil then FStopSignal.SetEvent;
   if FServer <> nil then FServer.Stop;
   if FThread <> nil then
   begin
@@ -687,12 +707,16 @@ end;
 
 procedure TPasClawServer.WaitForStop;
 begin
-  { Delegate to TGatewayServer.WaitForStop when the worker thread is
-    still alive. If Start hasn't been called, or Stop already ran,
-    return immediately so callers can blindly wrap Start + WaitForStop
-    without checking IsRunning. }
-  if (FServer <> nil) and IsRunning then
-    FServer.WaitForStop;
+  { Wait on the TPasClawServer-owned signal, NOT on FServer's
+    internal stop flag — FServer can be freed in Stop while we're
+    still mid-return from WaitFor, which Codex flagged as a P1 on
+    the original draft. FStopSignal's lifetime is tied to Self, so
+    the only way Stop can free it is via Destroy (which is the
+    caller's responsibility to gate on Run/WaitForStop returning
+    first). FStopSignal is created in the constructor and is nil
+    only after Destroy, so guard for that. }
+  if FStopSignal = nil then Exit;
+  FStopSignal.WaitFor(INFINITE);
 end;
 
 procedure TPasClawServer.Run;
