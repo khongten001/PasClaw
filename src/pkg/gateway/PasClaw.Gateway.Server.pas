@@ -801,25 +801,57 @@ var
   Snapshot: TStringList;
   i: Integer;
   TabPos: Integer;
-  Tag, Body, Line: string;
+  Tag, Body, Line, HeaderStr: string;
 begin
   { SSE stream — emit the recent buffer up front, then subscribe
     for live tail. The handler doesn't return until the client
     disconnects (or we throw); on either path the listener gets
-    unsubscribed. Pattern matches the existing
-    /v1/chat/completions stream path: explicit empty ContentText,
-    ContentLength := -1 to suppress Indy's auto Content-Length,
-    Transfer-Encoding via CustomHeaders (not via AResp.TransferEncoding
-    which on some Indy builds double-frames body writes). }
-  AResp.ResponseNo  := 200;
-  AResp.ContentText := '';
-  AResp.ContentType := 'text/event-stream; charset=utf-8';
-  AResp.CharSet     := 'utf-8';
-  AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
-  AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
-  AResp.CustomHeaders.AddValue('Transfer-Encoding', 'chunked');
-  AResp.ContentLength := -1;
-  AResp.WriteHeader;
+    unsubscribed.
+
+    Why bypass AResp.WriteHeader entirely and write the status +
+    headers raw via IOHandler:
+
+      Indy's TIdHTTPResponseInfo.WriteHeader rewrites ContentType
+      to "text/html; charset=utf-8" under conditions that are
+      hard to fully unset from outside the unit (around
+      Content-Length / Transfer-Encoding / ContentText interplay
+      — see IdCustomHTTPServer.pas line ~"if ContentType = ''"
+      block). The result: the response header line said
+      "Content-Type: text/html" even though we set
+      text/event-stream. Strict EventSource implementations
+      (recent Firefox) refuse the stream; lenient ones (Chrome,
+      Safari) tolerate it but the wire is technically wrong.
+
+      The cure is to build the response status line + every
+      header byte ourselves and write them through the underlying
+      IOHandler, then flip AResp.HeaderHasBeenWritten := True so
+      Indy knows to skip its own header emission. The same trick
+      lets us guarantee Content-Type, Transfer-Encoding: chunked,
+      and the SSE-required Cache-Control / X-Accel-Buffering all
+      land verbatim. Chunked body framing (TLogStreamWriter)
+      stays exactly as before. }
+  HeaderStr :=
+    'HTTP/1.1 200 OK'#13#10 +
+    'Content-Type: text/event-stream; charset=utf-8'#13#10 +
+    'Cache-Control: no-cache, no-transform'#13#10 +
+    'Connection: keep-alive'#13#10 +
+    'X-Accel-Buffering: no'#13#10 +
+    'Transfer-Encoding: chunked'#13#10 +
+    'Server: PasClaw/' + FormatVersion + #13#10 +
+    #13#10;
+  try
+    AContext.Connection.IOHandler.Write(TEncoding.ASCII.GetBytes(HeaderStr));
+  except
+    on E: Exception do
+    begin
+      LogWarn('logs SSE: failed to emit headers: %s', [E.Message]);
+      Exit;
+    end;
+  end;
+  AResp.HeaderHasBeenWritten := True;
+  AResp.ContentText  := '';
+  AResp.ContentLength := 0;
+  AResp.ResponseNo   := 200;
 
   Writer := TLogStreamWriter.Create;
   Writer.Conn := AContext.Connection;
