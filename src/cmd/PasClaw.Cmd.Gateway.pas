@@ -191,6 +191,7 @@ begin
     WhatsApp := nil;
     Matrix   := nil;
     IRC      := nil;
+    Email    := nil;
     try
       if Args.Line then
       begin
@@ -294,6 +295,7 @@ begin
       if WhatsApp <> nil then WhatsApp.Free;
       if Matrix   <> nil then begin Matrix.RequestStop; Matrix.WaitForStop; Matrix.Free; end;
       if IRC      <> nil then IRC.Free;
+      if Email    <> nil then begin Email.Stop; Email.Free; end;
       Server.Stop;
       Server.Free;
       if Scheduler <> nil then Scheduler.Free;

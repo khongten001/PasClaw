@@ -66,11 +66,13 @@ type
     FAllow:     array of string;
     FPollSec:   Integer;
     FStop:      Boolean;
+    FWorker:    TThread;
     function MatchesAllow(const FromAddr: string): Boolean;
     procedure ProcessInbox;
     procedure RunOnePoll;
   public
     constructor Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
+    destructor  Destroy; override;
     { Send a single text message. Returns False on transport error; the
       ErrMsg holds a one-line description. Doesn't require IMAP. }
     function Push(const Recipient, Subject, Body: string;
@@ -79,11 +81,13 @@ type
       message routes to the agent loop and the reply is sent via SMTP. }
     procedure Run;
     { Spawn Run on a dedicated TThread and return immediately. The
-      worker stays alive for the channel's lifetime; RequestStop signals
-      it to wind down on the next poll boundary. Used by the gateway
-      so the email worker can coexist with the HTTP listener and
-      other channels. }
+      worker stays alive until Stop is called; the gateway is
+      responsible for calling Stop before tearing down FProvider /
+      FRegistry / FCfg so the worker can't dereference freed state. }
     procedure Spawn;
+    { Signal the worker to wind down on the next poll boundary
+      (≤500ms), then join it. Safe to call repeatedly. }
+    procedure Stop;
     procedure RequestStop;
   end;
 
@@ -268,11 +272,15 @@ var
   IMAP: TIdIMAP4;
   SSL:  TIdSSLIOHandlerSocketOpenSSL;
   Msg:  TIdMessage;
-  i, MsgCount: Integer;
+  Unseen: array of UInt32;
+  Search: array of TIdIMAP4SearchRec;
+  SeqNum: UInt32;
+  k: Integer;
   FromAddr, Subj, BodyText, Reply, PushErr: string;
   RToolMsgs: array of TMessage;
   LoopCfg: TToolLoopConfig;
   Loop: TToolLoopResult;
+  ReplySent, ReplyAttempted: Boolean;
 begin
   if (FIMAP.Host = '') or (FIMAP.User = '') then
   begin
@@ -296,27 +304,42 @@ begin
       try
         IMAP.Login;
         IMAP.SelectMailBox('INBOX');
-        MsgCount := IMAP.MailBox.TotalMsgs;
-        if MsgCount = 0 then Exit;
-        for i := 1 to MsgCount do
+        { Server-side filter for unread messages — iterating
+          1..TotalMsgs and checking flags client-side would still
+          re-Retrieve already-seen messages every poll, growing
+          linearly with mailbox size. SEARCH UNSEEN returns only
+          the sequence numbers we actually need to process. }
+        SetLength(Search, 1);
+        Search[0].SearchKey := skUnseen;
+        if not IMAP.SearchMailBox(Search) then
+        begin
+          LogWarn('email IMAP SEARCH UNSEEN failed');
+          Exit;
+        end;
+        Unseen := Copy(IMAP.MailBox.SearchResult);
+        if Length(Unseen) = 0 then Exit;
+        LogDebug('email: %d unseen message(s) to process', [Length(Unseen)]);
+
+        for k := 0 to High(Unseen) do
         begin
           if FStop then Break;
+          SeqNum := Unseen[k];
           Msg := TIdMessage.Create(nil);
           try
-            if not IMAP.Retrieve(i, Msg) then Continue;
-            { Skip already-seen — flagged-as-Seen is the IMAP semantic
-              for "already processed". The fetch above doesn't mark it
-              Seen; we do that explicitly at the end of the loop so a
-              crash mid-reply means we'll retry on the next poll. }
+            if not IMAP.Retrieve(Integer(SeqNum), Msg) then Continue;
             FromAddr := Msg.From.Address;
             Subj := Msg.Subject;
             BodyText := Msg.Body.Text;
             if not MatchesAllow(FromAddr) then
             begin
-              LogDebug('email %d: skipping %s (not in allowlist)', [i, FromAddr]);
+              LogDebug('email %d: skipping %s (not in allowlist)', [SeqNum, FromAddr]);
+              { Mark non-allowed messages Seen so we never re-process
+                them — otherwise the allowlist would force a per-poll
+                Retrieve of every junk message in the inbox. }
+              IMAP.StoreFlags([SeqNum], sdAdd, [mfSeen]);
               Continue;
             end;
-            LogInfo('email %d: from=%s subj=%s', [i, FromAddr, Subj]);
+            LogInfo('email %d: from=%s subj=%s', [SeqNum, FromAddr, Subj]);
 
             { Run through the agent loop. }
             SetLength(RToolMsgs, 1);
@@ -331,14 +354,30 @@ begin
             LoopCfg.OnText        := nil;
             LoopCfg.OnToolCall    := nil;
             LoopCfg.OnToolResult  := nil;
+
+            ReplySent       := False;
+            ReplyAttempted  := False;
             if RunToolLoop(LoopCfg, RToolMsgs, Loop) and (Loop.Content <> '') then
             begin
               Reply := Loop.Content;
-              if not Push(FromAddr, 'Re: ' + Subj, Reply, PushErr) then
+              ReplyAttempted := True;
+              ReplySent := Push(FromAddr, 'Re: ' + Subj, Reply, PushErr);
+              if not ReplySent then
                 LogWarn('email reply send failed to %s: %s', [FromAddr, PushErr]);
             end;
-            { Mark Seen so we don't reprocess. }
-            IMAP.StoreFlags([UInt32(i)], sdAdd, [mfSeen]);
+
+            { Mark Seen only when the reply landed, OR when the agent
+              loop produced no reply at all (failed or empty content
+              — a poison message we don't want to loop on forever).
+              Failed SMTP transport leaves the message Unseen so the
+              next poll retries.
+
+                ReplyAttempted   ReplySent   StoreFlags?
+                False (no reply)  -          Yes — don't loop on poison
+                True              True       Yes — delivered
+                True              False      No  — transient SMTP, retry }
+            if (not ReplyAttempted) or ReplySent then
+              IMAP.StoreFlags([SeqNum], sdAdd, [mfSeen]);
           finally
             Msg.Free;
           end;
@@ -363,7 +402,9 @@ end;
 
 procedure TEmailChannel.Run;
 var
-  WaitedSec: Integer;
+  WaitedMS: Integer;
+const
+  PollTickMS = 500;
 begin
   if FIMAP.Host = '' then
   begin
@@ -374,13 +415,16 @@ begin
   while not FStop do
   begin
     RunOnePoll;
-    WaitedSec := 0;
-    while (WaitedSec < FPollSec) and (not FStop) do
+    { Sleep in 500ms ticks so RequestStop can break the loop within
+      half a second; count milliseconds (NOT ticks) so the user's
+      PASCLAW_EMAIL_POLL value matches the actual interval. The
+      previous loop incremented WaitedSec by 1 each 500ms tick and
+      stopped at FPollSec, halving every configured poll. }
+    WaitedMS := 0;
+    while (WaitedMS < FPollSec * 1000) and (not FStop) do
     begin
-      Sleep(500);
-      Inc(WaitedSec);  { coarse — 500ms ticks; close enough for an email poller }
-      if WaitedSec mod 2 = 0 then
-        WaitedSec := WaitedSec;  { no-op; keeps the loop responsive to FStop }
+      Sleep(PollTickMS);
+      Inc(WaitedMS, PollTickMS);
     end;
   end;
 end;
@@ -398,7 +442,7 @@ type
 constructor TEmailWorker.Create(AChan: TEmailChannel);
 begin
   inherited Create(True);
-  FreeOnTerminate := True;
+  FreeOnTerminate := False;  { Stop / Destroy joins us — see TEmailChannel.Stop }
   FChan := AChan;
 end;
 
@@ -414,12 +458,29 @@ end;
 
 procedure TEmailChannel.Spawn;
 begin
-  TEmailWorker.Create(Self).Start;
+  if FWorker <> nil then Exit;  { idempotent — already spawned }
+  FWorker := TEmailWorker.Create(Self);
+  FWorker.Start;
+end;
+
+procedure TEmailChannel.Stop;
+begin
+  if FWorker = nil then Exit;
+  FStop := True;
+  FWorker.WaitFor;
+  FreeAndNil(FWorker);
 end;
 
 procedure TEmailChannel.RequestStop;
 begin
   FStop := True;
+end;
+
+destructor TEmailChannel.Destroy;
+begin
+  Stop;  { idempotent; tears down a still-running worker before
+          the channel's FProvider / FCfg references go away }
+  inherited Destroy;
 end;
 
 end.
