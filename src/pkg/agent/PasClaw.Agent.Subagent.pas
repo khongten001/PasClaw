@@ -1,0 +1,352 @@
+(*
+  PasClaw.Agent.Subagent — `spawn` tool for fan-out to specialist
+  subagents.
+
+  When the model calls `spawn(agent="researcher", prompt="...")`,
+  TSpawnTool runs a focused RunToolLoop against:
+
+    * the parent's provider + fallback chain (no new HTTPS handshake
+      to a different API)
+    * a filtered registry holding only the tools the named subagent
+      is allowed to use (per TSubagentSpec.Tools — and never the
+      `spawn` tool itself, so nested sub-subagents aren't a thing
+      in v1)
+    * the subagent's specialisation system prompt instead of the
+      parent's
+    * the subagent's model override or, when empty, the parent's
+      default
+
+  This is intentionally NOT a child TPasClawAgent instance — the
+  parent's "single live instance per process" constraint (rooted in
+  PasClaw.MCP.Bridge / PasClaw.Skills.Loader holding their state
+  in module-level arrays) would otherwise have to be lifted. By
+  running a bare RunToolLoop call instead, the subagent pays no
+  startup cost (no MCP reconnect, no skills reload) and shares the
+  parent's already-built provider + registry foundations.
+
+  Mirrors picoclaw's SubTurn coordination, nanobot's subagent
+  module, and openclaw's multi-agent routing — same "planner agent
+  fans out to specialists" pattern, smaller surface.
+
+  Configuration: TConfig.Subagents (config.json "subagents": [...]).
+*)
+unit PasClaw.Agent.Subagent;
+
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
+{$H+}
+
+interface
+
+uses
+  SysUtils,
+  PasClaw.Config,
+  PasClaw.Providers.Intf,
+  PasClaw.Providers.Types,
+  PasClaw.Tools.Types,
+  PasClaw.Tools.Registry,
+  PasClaw.Tools.Obj;
+
+type
+  TSubagentSpecArray = array of TSubagentSpec;
+
+  { Everything the spawn tool needs from its parent — captured at
+    registration time so the tool handler can run a child loop
+    without reaching back into the parent's TPasClawAgent state. }
+  TSubagentContext = record
+    Provider:       ILLMProvider;
+    Fallbacks:      TLLMProviderArray;
+    ParentRegistry: TToolRegistry;
+    DefaultModel:   string;
+  end;
+
+  { The spawn tool itself. Subclasses TPasClawTool so the OOP
+    Install path (set up in PR #93) handles registration; the model
+    sees one tool named `spawn` whose schema enumerates the
+    available subagent names. }
+  TSpawnTool = class(TPasClawTool)
+  private
+    FCtx:   TSubagentContext;
+    FSpecs: TSubagentSpecArray;
+    function BuildSchema: string;
+    function BuildDescription: string;
+    function FindSpec(const N: string; out S: TSubagentSpec): Boolean;
+    function JoinSpecNames: string;
+  public
+    constructor Create(const ACtx: TSubagentContext;
+                       const ASpecs: TSubagentSpecArray);
+    function Name:        string; override;
+    function Description: string; override;
+    function Schema:      string; override;
+    function Category:    TToolCategory; override;
+    function Run(const ArgsJSON: string; out ErrMsg: string): string; override;
+  end;
+
+(* Build a TToolRegistry holding a subset of the source registry,
+   keyed by name. Tools not present in the source are silently
+   skipped (logged as a warning so the operator notices a typo).
+   The 'spawn' tool is always excluded so the subagent can't recurse
+   into another spawn. Caller owns the returned registry and must
+   free it. *)
+function BuildFilteredRegistry(Source: TToolRegistry;
+                               const Names: array of string): TToolRegistry;
+
+(* Convenience for the standard registration flow: when Specs is
+   non-empty, create a TSpawnTool against the given context+specs
+   and Install it into Reg. The tool's lifetime is tied to Reg
+   (the spawn tool holds a method-pointer handler into itself; the
+   registry's RunTool dispatches through it). For callers that
+   already manage their own OOP-tool ownership via FOwnedTools,
+   pass the result up to register ownership; otherwise the leaked
+   tool is reaped at process exit, which is fine for the CLI / one-
+   shot path. Returns the created tool (or nil when Specs is empty)
+   so the caller can take ownership. *)
+function RegisterSpawnTool(Reg: TToolRegistry;
+                            const Ctx: TSubagentContext;
+                            const Specs: TSubagentSpecArray): TSpawnTool;
+
+implementation
+
+uses
+  PasClaw.JSON,
+  PasClaw.Logger,
+  PasClaw.Tools.ToolLoop;
+
+function RegisterSpawnTool(Reg: TToolRegistry;
+                            const Ctx: TSubagentContext;
+                            const Specs: TSubagentSpecArray): TSpawnTool;
+begin
+  Result := nil;
+  if (Reg = nil) or (Length(Specs) = 0) then Exit;
+  Result := TSpawnTool.Create(Ctx, Specs);
+  Result.Install(Reg);
+end;
+
+function BuildFilteredRegistry(Source: TToolRegistry;
+                               const Names: array of string): TToolRegistry;
+var
+  i: Integer;
+  T: TTool;
+begin
+  Result := TToolRegistry.Create;
+  if Source = nil then Exit;
+  for i := 0 to High(Names) do
+  begin
+    if Names[i] = 'spawn' then Continue;  { no nested sub-subagents }
+    if not Source.Find(Names[i], T) then
+    begin
+      LogWarn('subagent: source registry has no tool named "%s" — skipping', [Names[i]]);
+      Continue;
+    end;
+    Result.Register(T);
+  end;
+end;
+
+constructor TSpawnTool.Create(const ACtx: TSubagentContext;
+                              const ASpecs: TSubagentSpecArray);
+var
+  i: Integer;
+begin
+  inherited Create;
+  FCtx := ACtx;
+  SetLength(FSpecs, Length(ASpecs));
+  for i := 0 to High(ASpecs) do FSpecs[i] := ASpecs[i];
+end;
+
+function TSpawnTool.Name: string;
+begin
+  Result := 'spawn';
+end;
+
+function TSpawnTool.Description: string;
+begin
+  Result := BuildDescription;
+end;
+
+function TSpawnTool.Schema: string;
+begin
+  Result := BuildSchema;
+end;
+
+function TSpawnTool.Category: TToolCategory;
+begin
+  { Mutating in the parallel-batching sense — a spawn call drives
+    another LLM round trip + tool dispatch, has its own side
+    effects, and shouldn't run in parallel with the parent's other
+    tool calls. The agent loop treats it as a batch of one. }
+  Result := tcMutating;
+end;
+
+function TSpawnTool.BuildDescription: string;
+var
+  i: Integer;
+begin
+  Result := 'Fan out to a focused specialist subagent. Pass the agent name '
+          + 'and the prompt; the subagent runs its own short tool loop and '
+          + 'returns its reply as the tool_result.';
+  if Length(FSpecs) > 0 then
+  begin
+    Result := Result + ' Available subagents:';
+    for i := 0 to High(FSpecs) do
+    begin
+      Result := Result + ' "' + FSpecs[i].Name + '"';
+      if FSpecs[i].Description <> '' then
+        Result := Result + ' (' + FSpecs[i].Description + ')';
+      if i < High(FSpecs) then Result := Result + ',';
+    end;
+    Result := Result + '.';
+  end;
+end;
+
+function TSpawnTool.BuildSchema: string;
+var
+  Obj, Props, Agent, Prompt: TJsonObject;
+  Enum: TJsonArray;
+  Req: TJsonArray;
+  i: Integer;
+begin
+  Obj := TJsonObject.Create;
+  try
+    Obj.PutStr('type', 'object');
+
+    Props := TJsonObject.Create;
+    try
+      Agent := TJsonObject.Create;
+      try
+        Agent.PutStr('type', 'string');
+        Agent.PutStr('description', 'Name of the subagent to spawn.');
+        if Length(FSpecs) > 0 then
+        begin
+          Enum := TJsonArray.Create;
+          for i := 0 to High(FSpecs) do
+            Enum.AddStr(FSpecs[i].Name);
+          Agent.PutArray('enum', Enum);
+        end;
+      finally
+        Props.PutObject('agent', Agent);
+      end;
+
+      Prompt := TJsonObject.Create;
+      try
+        Prompt.PutStr('type', 'string');
+        Prompt.PutStr('description', 'The prompt to hand the subagent.');
+      finally
+        Props.PutObject('prompt', Prompt);
+      end;
+    finally
+      Obj.PutObject('properties', Props);
+    end;
+
+    Req := TJsonArray.Create;
+    Req.AddStr('agent');
+    Req.AddStr('prompt');
+    Obj.PutArray('required', Req);
+
+    Result := Obj.ToJSON;
+  finally
+    Obj.Free;
+  end;
+end;
+
+function TSpawnTool.FindSpec(const N: string; out S: TSubagentSpec): Boolean;
+var
+  i: Integer;
+begin
+  for i := 0 to High(FSpecs) do
+    if SameText(FSpecs[i].Name, N) then
+    begin
+      S := FSpecs[i];
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+function TSpawnTool.Run(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  Args: TJsonObject;
+  AgentName, Prompt: string;
+  Spec: TSubagentSpec;
+  ChildCfg: TToolLoopConfig;
+  ChildReg: TToolRegistry;
+  ChildHist: TMessageArray;
+  Loop: TToolLoopResult;
+  Model: string;
+  MaxIter: Integer;
+begin
+  Result := '';
+  ErrMsg := '';
+  Args := TJsonObject.Parse(ArgsJSON);
+  if Args = nil then
+  begin
+    ErrMsg := 'spawn: invalid arguments JSON';
+    Exit;
+  end;
+  try
+    AgentName := Args.GetStr('agent', '');
+    Prompt    := Args.GetStr('prompt', '');
+  finally
+    Args.Free;
+  end;
+  if AgentName = '' then
+  begin
+    ErrMsg := 'spawn: agent name required';
+    Exit;
+  end;
+  if Prompt = '' then
+  begin
+    ErrMsg := 'spawn: prompt required';
+    Exit;
+  end;
+  if not FindSpec(AgentName, Spec) then
+  begin
+    ErrMsg := Format('spawn: no subagent named "%s" — available: %s',
+                     [AgentName, JoinSpecNames]);
+    Exit;
+  end;
+
+  Model := Spec.Model;
+  if Model = '' then Model := FCtx.DefaultModel;
+  MaxIter := Spec.MaxIter;
+  if MaxIter <= 0 then MaxIter := 4;
+
+  ChildReg := BuildFilteredRegistry(FCtx.ParentRegistry, Spec.Tools);
+  try
+    ChildCfg.Provider      := FCtx.Provider;
+    ChildCfg.Registry      := ChildReg;
+    ChildCfg.Model         := Model;
+    ChildCfg.MaxIterations := MaxIter;
+    ChildCfg.Parallel      := True;
+    ChildCfg.Fallbacks     := FCtx.Fallbacks;
+    ChildCfg.Options       := DefaultChatOptions;
+    ChildCfg.Options.SystemPrompt := Spec.SystemPrompt;
+    ChildCfg.OnText        := nil;
+    ChildCfg.OnToolCall    := nil;
+    ChildCfg.OnToolResult  := nil;
+
+    SetLength(ChildHist, 1);
+    ChildHist[0] := MakeMessage(mrUser, Prompt);
+
+    LogInfo('subagent spawn: name=%s model=%s tools=%d',
+            [AgentName, Model, ChildReg.Count]);
+    if RunToolLoop(ChildCfg, ChildHist, Loop) then
+      Result := Loop.Content
+    else
+      ErrMsg := Format('spawn: subagent "%s" failed', [AgentName]);
+  finally
+    ChildReg.Free;
+  end;
+end;
+
+function TSpawnTool.JoinSpecNames: string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 0 to High(FSpecs) do
+  begin
+    if Result <> '' then Result := Result + ', ';
+    Result := Result + FSpecs[i].Name;
+  end;
+  if Result = '' then Result := '(none configured)';
+end;
+
+end.

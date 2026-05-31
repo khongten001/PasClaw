@@ -127,6 +127,41 @@ type
     Enabled: Boolean;
   end;
 
+  (* TSubagentSpec - declaration of a named subagent the parent agent
+     can fan out to via the `spawn` tool. Each spec is a focused
+     "specialist" — its own system prompt, an allowlist of tools
+     inherited from the parent's registry, an optional model
+     override, and an iteration cap. The spawned subagent runs as a
+     standalone RunToolLoop call (not a separate TPasClawAgent) so it
+     piggybacks on the parent's provider + fallback chain without
+     paying the MCP / skill / registry-rebuild cost.
+
+       Name         caller-facing name (lowercase, kebab-case)
+       Description  one-line summary surfaced to the parent model
+                    in the `spawn` tool's description so it can pick
+                    the right specialist
+       SystemPrompt the subagent's specialisation prompt — replaces
+                    the parent's prompt for this child turn
+       Tools        names of parent-registry tools the subagent is
+                    allowed to call. Empty means "no tools" (a
+                    prompt-driven specialist). 'spawn' is always
+                    excluded — no nested sub-subagents in v1.
+       Model        empty = inherit parent's model. Cross-provider
+                    model names go through the fallback chain (same
+                    as the parent's loop).
+       MaxIter      iteration cap for the subagent's tool loop. 0
+                    means default (4). Keep this tight — the
+                    subagent should produce a focused answer, not
+                    nest into a long conversation. *)
+  TSubagentSpec = record
+    Name:          string;
+    Description:   string;
+    SystemPrompt:  string;
+    Tools:         array of string;
+    Model:         string;
+    MaxIter:       Integer;
+  end;
+
   (* TWebSearchConfig - web_search tool provider selection.
        Provider:   'duckduckgo' (default, no key) | 'brave' | 'tavily' |
                    'searxng'    | 'perplexity'
@@ -160,6 +195,7 @@ type
     MCPServers: array of TMCPServer;
     Crons:      array of TCronEntry;
     Skills:     array of TSkillEntry;
+    Subagents:  array of TSubagentSpec;
     WebSearch:  TWebSearchConfig;
     constructor Create;
     function  ToJSON: string;
@@ -242,6 +278,26 @@ begin
   Result.PutStr ('name',    S.Name);
   Result.PutStr ('source',  S.Source);
   Result.PutBool('enabled', S.Enabled);
+end;
+
+function SubagentToJSON(const S: TSubagentSpec): TJsonObject;
+var
+  ToolsArr: TJsonArray;
+  i: Integer;
+begin
+  Result := TJsonObject.Create;
+  Result.PutStr('name',          S.Name);
+  Result.PutStr('description',   S.Description);
+  Result.PutStr('system_prompt', S.SystemPrompt);
+  if Length(S.Tools) > 0 then
+  begin
+    ToolsArr := TJsonArray.Create;
+    for i := 0 to High(S.Tools) do
+      ToolsArr.AddStr(S.Tools[i]);
+    Result.PutArray('tools', ToolsArr);
+  end;
+  if S.Model <> '' then Result.PutStr('model', S.Model);
+  if S.MaxIter > 0 then Result.PutInt('max_iterations', S.MaxIter);
 end;
 
 function TConfig.ToJSON: string;
@@ -328,6 +384,17 @@ begin
     end;
     Root.PutArray('skills', Arr);
 
+    if Length(Subagents) > 0 then
+    begin
+      Arr := TJsonArray.Create;
+      for i := 0 to High(Subagents) do
+      begin
+        Tmp := SubagentToJSON(Subagents[i]);
+        Arr.AddObject(Tmp);
+      end;
+      Root.PutArray('subagents', Arr);
+    end;
+
     Result := Root.ToJSON;
   finally
     Root.Free;
@@ -337,8 +404,8 @@ end;
 procedure TConfig.FromJSON(const S: string);
 var
   Root, Obj, Item: TJsonObject;
-  Arr: TJsonArray;
-  i: Integer;
+  Arr, ToolsArr: TJsonArray;
+  i, j: Integer;
 begin
   if Trim(S) = '' then Exit;
   Root := TJsonObject.Parse(S);
@@ -496,6 +563,37 @@ begin
           Skills[i].Name    := Item.GetStr ('name',    '');
           Skills[i].Source  := Item.GetStr ('source',  '');
           Skills[i].Enabled := Item.GetBool('enabled', True);
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+
+    Arr := Root.ChildArray('subagents');
+    if Arr <> nil then
+    try
+      SetLength(Subagents, Arr.Count);
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          Subagents[i].Name         := Item.GetStr('name',          '');
+          Subagents[i].Description  := Item.GetStr('description',   '');
+          Subagents[i].SystemPrompt := Item.GetStr('system_prompt', '');
+          Subagents[i].Model        := Item.GetStr('model',         '');
+          Subagents[i].MaxIter      := Item.GetInt('max_iterations', 0);
+          ToolsArr := Item.ChildArray('tools');
+          if ToolsArr <> nil then
+          try
+            SetLength(Subagents[i].Tools, ToolsArr.Count);
+            for j := 0 to ToolsArr.Count - 1 do
+              Subagents[i].Tools[j] := ToolsArr.ItemStr(j);
+          finally
+            ToolsArr.Free;
+          end;
         finally
           Item.Free;
         end;

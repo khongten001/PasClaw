@@ -96,6 +96,12 @@ type
                                     the registry early without skipping
                                     the lazy built-in install on first
                                     Chat. }
+    FSubagentCtx: TSubagentContext;  { populated in EnsureRegistry when
+                                       FConfig.Subagents is non-empty;
+                                       captured by value into the TSpawnTool
+                                       instance so the tool can run a child
+                                       loop against the parent's provider
+                                       + fallbacks + registry. }
     FProviderOverride:    TProviderConfig;  { populated by SetProvider, then
                                               folded into FConfig.Providers
                                               when EnsureConfig runs (if before
@@ -282,6 +288,7 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
+  PasClaw.Agent.Subagent,
   PasClaw.Tools.ToolLoop;
 
 { ------------------------------ helpers ------------------------------ }
@@ -446,6 +453,22 @@ begin
   RegisterSkills(FRegistry, Skills);
   if FUseMCP then
     FMCPClients := ConnectMCPServers(FConfig, FRegistry);
+  { Subagent spawn tool — installs only when the operator declared
+    subagents in config.json. Needs FProvider already resolved so
+    the spawn tool's context captures the live ILLMProvider; in
+    the ChatHistory path EnsureProvider runs before EnsureRegistry,
+    so by here FProvider is non-nil. }
+  if (Length(FConfig.Subagents) > 0) and (FProvider <> nil) then
+  begin
+    FSubagentCtx.Provider       := FProvider;
+    FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig);
+    FSubagentCtx.ParentRegistry := FRegistry;
+    if FModel <> '' then
+      FSubagentCtx.DefaultModel := FModel
+    else
+      FSubagentCtx.DefaultModel := FConfig.DefaultModel;
+    FOwnedTools.Add(RegisterSpawnTool(FRegistry, FSubagentCtx, FConfig.Subagents));
+  end;
   FBuiltinsInstalled := True;
   { Re-install OOP tools that were registered before this point so
     user names override the built-ins on conflict. TToolRegistry.
