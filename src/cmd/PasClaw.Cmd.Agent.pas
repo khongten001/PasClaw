@@ -162,6 +162,7 @@ begin
   Result.Model         := Model;
   Result.MaxIterations := A.MaxIterations;
   Result.Parallel := True;
+  Result.Fallbacks     := ResolveFallbacks(Cfg);
   Result.Options       := DefaultChatOptions;
   { ToolsEnabled tracks the registry we are about to hand RunToolLoop
     so the system prompt stays in sync with what the model can
@@ -248,12 +249,15 @@ var
   Names: TStringArray;
   MCPClients: TMCPClientList;
   SystemPromptOverride: string;   { tracks the compacted system prompt across turns }
+  ThinkingOn: Boolean;             { toggled by /think; cleared each turn after sending }
+  CompactOptsLocal: TCompactOptions;
+  CompactedLiveOpts: TChatOptions;
 begin
   SystemPromptOverride := '';
   Offline := not PickProvider(Cfg, A, Provider, Err);
   if Offline then
     WriteLn(Ansi.Yellow, '(offline preview — ', Err, ')', Ansi.Reset);
-  WriteLn(Ansi.Dim, 'PasClaw interactive chat. /quit to exit, /reset to clear history, /tools to list.', Ansi.Reset);
+  WriteLn(Ansi.Dim, 'PasClaw interactive chat. /help for commands, /quit to exit.', Ansi.Reset);
 
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
   Reg := nil;
@@ -262,6 +266,7 @@ begin
   Handlers := TLoopHandlers.Create;
   try
     SetLength(Msgs, 0);
+    ThinkingOn := False;
     while True do
     begin
       Write(Ansi.Bold, '> ', Ansi.Reset);
@@ -269,7 +274,7 @@ begin
       ReadLn(Line);
       Line := Trim(Line);
       if (Line = '/quit') or (Line = '/exit') then Break;
-      if Line = '/reset' then
+      if (Line = '/reset') or (Line = '/new') then
       begin
         SetLength(Msgs, 0);
         SystemPromptOverride := '';   { drop the compacted summary too }
@@ -285,6 +290,78 @@ begin
           Names := Reg.Names;
           for i := 0 to High(Names) do WriteLn('  ', Names[i]);
         end;
+        Continue;
+      end;
+      if (Line = '/help') or (Line = '/?') then
+      begin
+        WriteLn('  /help     show this list');
+        WriteLn('  /status   model + provider + message count + thinking state');
+        WriteLn('  /new      clear conversation history (alias: /reset)');
+        WriteLn('  /reset    clear conversation history');
+        WriteLn('  /compact  force a one-shot summariser pass on the history now');
+        WriteLn('  /think    toggle extended thinking on the next turn (if the provider supports it)');
+        WriteLn('  /tools    list registered tools');
+        WriteLn('  /quit     exit (alias: /exit)');
+        Continue;
+      end;
+      if Line = '/status' then
+      begin
+        if Provider <> nil then
+          WriteLn('  provider:  ', Provider.GetName)
+        else
+          WriteLn('  provider:  (offline)');
+        WriteLn('  model:     ', Model);
+        WriteLn('  messages:  ', Length(Msgs));
+        if Reg <> nil then
+          WriteLn('  tools:     ', Reg.Count)
+        else
+          WriteLn('  tools:     (disabled)');
+        if ThinkingOn then
+          WriteLn('  thinking:  on (next turn)')
+        else
+          WriteLn('  thinking:  off');
+        if SystemPromptOverride <> '' then
+          WriteLn('  compacted: yes (summary in system prompt)')
+        else
+          WriteLn('  compacted: no');
+        Continue;
+      end;
+      if Line = '/think' then
+      begin
+        if (Provider <> nil) and (not Provider.SupportsThinking) then
+        begin
+          WriteLn(Ansi.Yellow, 'provider ', Provider.GetName,
+                  ' does not support extended thinking — flag ignored.', Ansi.Reset);
+          Continue;
+        end;
+        ThinkingOn := not ThinkingOn;
+        if ThinkingOn then
+          WriteLn(Ansi.Dim, '(thinking on for next turn)', Ansi.Reset)
+        else
+          WriteLn(Ansi.Dim, '(thinking off)', Ansi.Reset);
+        Continue;
+      end;
+      if Line = '/compact' then
+      begin
+        if Length(Msgs) = 0 then
+        begin
+          WriteLn(Ansi.Dim, '(no history to compact)', Ansi.Reset);
+          Continue;
+        end;
+        if Offline then
+        begin
+          WriteLn(Ansi.Yellow, '/compact needs a configured provider to summarise.', Ansi.Reset);
+          Continue;
+        end;
+        CompactOptsLocal := DefaultCompactOptions;
+        CompactOptsLocal.ThresholdTokens := 1;  { force the slice }
+        CompactedLiveOpts := DefaultChatOptions;
+        if SystemPromptOverride <> '' then
+          CompactedLiveOpts.SystemPrompt := SystemPromptOverride;
+        Msgs := CompactMessages(Provider, Model, Msgs,
+                                 CompactedLiveOpts, CompactOptsLocal);
+        SystemPromptOverride := CompactedLiveOpts.SystemPrompt;
+        WriteLn(Ansi.Dim, '(history compacted; summary folded into system prompt)', Ansi.Reset);
         Continue;
       end;
       if Line = '' then Continue;
@@ -309,6 +386,15 @@ begin
         compacted summary leaks out of the conversation. }
       if SystemPromptOverride <> '' then
         LoopCfg.Options.SystemPrompt := SystemPromptOverride;
+      { /think: apply ThinkingLevel for this turn, then clear so
+        subsequent turns reset (matches the OpenClaw /think model —
+        single-turn extended thinking). The user can /think again
+        to keep it on. }
+      if ThinkingOn then
+      begin
+        LoopCfg.Options.ThinkingLevel := 'medium';
+        ThinkingOn := False;
+      end;
 
       if RunToolLoop(LoopCfg, Msgs, Loop) then
       begin

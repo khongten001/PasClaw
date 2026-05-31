@@ -46,6 +46,14 @@ type
        Default False on the record (zero-init); the CLI and the
        built-in components flip it on explicitly. *)
     Parallel:       Boolean;
+    (* Provider fallback chain. When the primary Provider returns a
+       retryable error (StatusCode = 0 / -1 / 408 / 429 / 5xx),
+       RunToolLoop walks Fallbacks in order, calling Chat on each
+       until one succeeds (StatusCode 2xx) or all fail. Empty
+       array — same as the old behaviour, primary failure surfaces
+       directly. Callers populate from TConfig.Fallbacks by
+       resolving each name through NewProviderFromConfig. *)
+    Fallbacks:      array of ILLMProvider;
   end;
 
   TToolLoopResult = record
@@ -104,6 +112,17 @@ type
 
   TToolBatch      = array of Integer;        { indices into Resp.ToolCalls }
   TToolBatchArray = array of TToolBatch;
+
+{ Provider error classes worth retrying on a fallback: network/TLS
+  errors (StatusCode <= 0 — provider couldn't talk to the upstream),
+  request-timeout (408), rate-limit (429), and any 5xx. Anything
+  else (4xx auth / invalid request) is a configuration bug the
+  fallback wouldn't fix. }
+function IsRetryableStatus(Status: Integer): Boolean;
+begin
+  Result := (Status <= 0) or (Status = 408) or (Status = 429) or
+            ((Status >= 500) and (Status < 600));
+end;
 
 function IsPatchFormatError(const Err: string): Boolean;
 var
@@ -379,7 +398,7 @@ function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
 var
-  Iter, i, bi, j: Integer;
+  Iter, i, bi, j, fbi: Integer;
   Tools: TToolDefinitionArray;
   Resp: TLLMResponse;
   Hist: TMessageArray;
@@ -429,6 +448,35 @@ begin
                                LiveOptions, Cfg.CompactOpts);
 
     Resp := Cfg.Provider.Chat(Hist, Tools, Cfg.Model, LiveOptions);
+    { Provider fallback. Retryable conditions: HTTP 408 / 429 / 5xx,
+      and StatusCode <= 0 (network / TLS / pre-HTTP failure that the
+      provider couldn't classify). Walk Cfg.Fallbacks in order until
+      one returns a 2xx. The fallback's chosen model is whatever the
+      provider's GetDefaultModel returns when our Cfg.Model isn't one
+      of its known names — most provider implementations pass the
+      string through verbatim, so a cross-provider model name (e.g.
+      claude-opus-4-7 against an OpenAI fallback) will fail at the
+      remote API and trigger the next fallback. The chain is
+      intentionally model-agnostic — picking a per-provider model is
+      a follow-up. }
+    if IsRetryableStatus(Resp.StatusCode) and (Length(Cfg.Fallbacks) > 0) then
+    begin
+      LogWarn('provider primary returned status=%d, walking %d fallback(s)',
+              [Resp.StatusCode, Length(Cfg.Fallbacks)]);
+      for fbi := 0 to High(Cfg.Fallbacks) do
+      begin
+        if Cfg.Fallbacks[fbi] = nil then Continue;
+        LogDebug('fallback %d: trying %s',
+                 [fbi, Cfg.Fallbacks[fbi].GetName]);
+        Resp := Cfg.Fallbacks[fbi].Chat(Hist, Tools, Cfg.Model, LiveOptions);
+        if not IsRetryableStatus(Resp.StatusCode) then
+        begin
+          LogWarn('fallback hit: %s status=%d',
+                  [Cfg.Fallbacks[fbi].GetName, Resp.StatusCode]);
+          Break;
+        end;
+      end;
+    end;
     Loop.LastResp := Resp;
 
     { Stream the text part to the caller now so they can show progress. }

@@ -6,7 +6,7 @@ The main program lives at `src/pasclaw/PasClaw.dpr`. It initializes terminal col
 
 ## Features
 
-**LLM providers** — 20-entry catalog covering Anthropic Messages, OpenAI Chat Completions, Google Gemini `generateContent`, plus every OpenAI-protocol-compatible provider (Groq, Together, DeepSeek, Mistral, Cerebras, OpenRouter, Ollama, …). Streaming SSE on all three protocol families; native search grounding on Gemini; citation collation on Perplexity. Code-driven `SetProvider('anthropic', $ANTHROPIC_API_KEY)` for embedders so no `~/.pasclaw/config.json` is required.
+**LLM providers** — 20-entry catalog covering Anthropic Messages, OpenAI Chat Completions, Google Gemini `generateContent`, plus every OpenAI-protocol-compatible provider (Groq, Together, DeepSeek, Mistral, Cerebras, OpenRouter, Ollama, …). Streaming SSE on all three protocol families; native search grounding on Gemini; citation collation on Perplexity. **Fallback chain** — `Cfg.Fallbacks = ["openai", "gemini"]` walks the list when the primary returns 429 / 5xx / network error. Code-driven `SetProvider('anthropic', $ANTHROPIC_API_KEY)` for embedders so no `~/.pasclaw/config.json` is required.
 
 **Built-in tools** — exposed to the model on every turn:
 
@@ -30,7 +30,7 @@ The main program lives at `src/pasclaw/PasClaw.dpr`. It initializes terminal col
 
 **HTTP gateway** — `pasclaw gateway` and `pasclaw serve`. OpenAI-compatible `/v1/chat/completions` (streaming + non-streaming) and `/v1/responses` (tool-passthrough so Codex CLI can drive its own tools). Embedded web UI (vanilla ES2020, single HTML file, no JS toolchain) with 8 tabs: **Chat** (SSE-streamed, tool activity surfaced inline), **Memory**, **Files**, **MCP**, **Cron**, **Skills**, **Logs** (live tail via SSE from the in-process ring buffer), **Settings**. Read-only inspection endpoints (`/v1/mcp`, `/v1/cron`, `/v1/skills`, `/v1/memory`, `/v1/fs`, `/v1/config`, `/v1/logs`) backed by the gateway's sandbox + secret-masking.
 
-**Chat channels** — bidirectional (inbound message → agent loop → outbound reply): Telegram (long-poll bot), Discord (bot polling), LINE (webhook), WhatsApp (Cloud API webhook), Slack (Events API webhook + Incoming Webhook reply), Matrix (REST `/sync` long-poll, federated, self-hostable), IRC (`TIdIRC`). Outbound-only: Microsoft Teams (Incoming Webhook), generic Webhook sink.
+**Chat channels** — bidirectional (inbound message → agent loop → outbound reply): Telegram (long-poll bot), Discord (bot polling), LINE (webhook), WhatsApp (Cloud API webhook), Slack (Events API webhook + Incoming Webhook reply), Matrix (REST `/sync` long-poll, federated, self-hostable), IRC (`TIdIRC`), Email (SMTP send + IMAP poll, `--email` flag, env-var configured). Outbound-only: Microsoft Teams (Incoming Webhook), generic Webhook sink.
 
 **Cron** — `pasclaw cron add daily-summary "0 9 * * *" summarize "workspace/memory"`. Last-fired timestamp persisted to `workspace/cron/state.json` so a missed slot (gateway down, laptop closed) fires exactly once on the next tick — never silently skipped, never double-fired. Per-entry channel sink (`--channel <kind>:<target>`) posts skill output; output also appended to `workspace/memory/<today>.md` for the model to recall later.
 
@@ -52,6 +52,8 @@ Agent.Free;
 ```
 
 Form-designable with published properties for the VCL/FMX path; code-driven OOP API for everything else. Custom tools subclass `TPasClawTool` and override `Name` / `Description` / `Schema` / `Run` / `Category`. Single-process server: `TPasClawServer.Create('0.0.0.0', 8088); Server.Run;` blocks until `Stop` is signalled from another thread.
+
+**Interactive chat** — `pasclaw agent` and `pasclaw tui` ship slash commands: `/help` lists them; `/status` shows model + provider + message count + thinking state; `/new` and `/reset` clear history; `/compact` forces a summariser pass; `/think` toggles extended-thinking mode for the next turn (Anthropic Claude); `/tools` lists registered tools; `/quit` exits.
 
 **Cross-platform** — Linux x86_64 + aarch64 under FPC 3.2+; macOS x86_64 + arm64 under FPC (Homebrew unit paths autodetected); Windows + Linux + macOS under Delphi 12 / RAD Studio. The Makefile probes `uname` and picks the right `fcl-db` / `sqlite` / `iconvenc` / `lazutils` paths automatically. Three sample binaries under `samples/component-console/` plus matching `.dproj` files for RAD Studio and `dcc32.cfg` / `dcc64.cfg` for cmdline Delphi builds.
 

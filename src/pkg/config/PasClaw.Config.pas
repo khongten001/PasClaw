@@ -147,6 +147,13 @@ type
   public
     DefaultProvider: string;
     DefaultModel:    string;
+    { Provider names (matching TProviderConfig.Name) to try after
+      DefaultProvider when the primary returns a retryable error
+      (HTTP 429 / 5xx, network/TLS failure). Walked in order. Empty
+      array (default) means no fallback — primary failure surfaces
+      directly. Configured via `pasclaw auth fallback openai gemini`
+      or by editing config.json's "fallbacks": ["openai","gemini"]. }
+    Fallbacks:  array of string;
     Gateway:    TGatewayConfig;
     Sandbox:    TSandboxPolicy;
     Providers:  array of TProviderConfig;
@@ -240,13 +247,20 @@ end;
 function TConfig.ToJSON: string;
 var
   Root, Gw, Tmp: TJsonObject;
-  Arr: TJsonArray;
+  Arr, FallbacksArr: TJsonArray;
   i: Integer;
 begin
   Root := TJsonObject.Create;
   try
     Root.PutStr('default_provider', DefaultProvider);
     Root.PutStr('default_model',    DefaultModel);
+    if Length(Fallbacks) > 0 then
+    begin
+      FallbacksArr := TJsonArray.Create;
+      for i := 0 to High(Fallbacks) do
+        FallbacksArr.AddStr(Fallbacks[i]);
+      Root.PutArray('fallbacks', FallbacksArr);  { takes ownership; sets FallbacksArr := nil }
+    end;
 
     Gw := TJsonObject.Create;
     Gw.PutStr ('log_level', Gateway.LogLevel);
@@ -332,6 +346,18 @@ begin
   try
     DefaultProvider := Root.GetStr('default_provider', DefaultProvider);
     DefaultModel    := Root.GetStr('default_model',    DefaultModel);
+    if Root.Has('fallbacks') then
+    begin
+      Arr := Root.ChildArray('fallbacks');
+      if Arr <> nil then
+      try
+        SetLength(Fallbacks, Arr.Count);
+        for i := 0 to Arr.Count - 1 do
+          Fallbacks[i] := Arr.ItemStr(i);
+      finally
+        Arr.Free;
+      end;
+    end;
 
     Obj := Root.ChildObject('gateway');
     if Obj <> nil then
