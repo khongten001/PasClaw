@@ -400,6 +400,7 @@ function RunToolLoop(const Cfg: TToolLoopConfig;
 var
   Iter, i, bi, j, fbi: Integer;
   Tools: TToolDefinitionArray;
+  FallbackModel: string;
   Resp: TLLMResponse;
   Hist: TMessageArray;
   LiveOptions: TChatOptions;
@@ -451,14 +452,17 @@ begin
     { Provider fallback. Retryable conditions: HTTP 408 / 429 / 5xx,
       and StatusCode <= 0 (network / TLS / pre-HTTP failure that the
       provider couldn't classify). Walk Cfg.Fallbacks in order until
-      one returns a 2xx. The fallback's chosen model is whatever the
-      provider's GetDefaultModel returns when our Cfg.Model isn't one
-      of its known names — most provider implementations pass the
-      string through verbatim, so a cross-provider model name (e.g.
-      claude-opus-4-7 against an OpenAI fallback) will fail at the
-      remote API and trigger the next fallback. The chain is
-      intentionally model-agnostic — picking a per-provider model is
-      a follow-up. }
+      one returns a 2xx.
+
+      Model selection per fallback: ask the fallback's own
+      GetDefaultModel — anthropic-only model names ("claude-opus-4-7")
+      passed verbatim to an OpenAI fallback would fail at the remote
+      API and trigger the next fallback even when the chain was
+      otherwise healthy. We only fall back to Cfg.Model when the
+      fallback explicitly returns '' for its default. A per-fallback
+      override (Cfg.FallbackModels: array of string) is a clean
+      follow-up but the GetDefaultModel path gets the right behaviour
+      out of the box for the catalog providers we ship. }
     if IsRetryableStatus(Resp.StatusCode) and (Length(Cfg.Fallbacks) > 0) then
     begin
       LogWarn('provider primary returned status=%d, walking %d fallback(s)',
@@ -466,9 +470,11 @@ begin
       for fbi := 0 to High(Cfg.Fallbacks) do
       begin
         if Cfg.Fallbacks[fbi] = nil then Continue;
-        LogDebug('fallback %d: trying %s',
-                 [fbi, Cfg.Fallbacks[fbi].GetName]);
-        Resp := Cfg.Fallbacks[fbi].Chat(Hist, Tools, Cfg.Model, LiveOptions);
+        FallbackModel := Cfg.Fallbacks[fbi].GetDefaultModel;
+        if FallbackModel = '' then FallbackModel := Cfg.Model;
+        LogDebug('fallback %d: trying %s with model=%s',
+                 [fbi, Cfg.Fallbacks[fbi].GetName, FallbackModel]);
+        Resp := Cfg.Fallbacks[fbi].Chat(Hist, Tools, FallbackModel, LiveOptions);
         if not IsRetryableStatus(Resp.StatusCode) then
         begin
           LogWarn('fallback hit: %s status=%d',
