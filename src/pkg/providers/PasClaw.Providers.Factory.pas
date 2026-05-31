@@ -15,8 +15,10 @@ uses
   PasClaw.Config,
   PasClaw.Providers.Intf;
 
-type
-  TLLMProviderArray = array of ILLMProvider;
+{ TLLMProviderArray moved to PasClaw.Providers.Intf so both this unit
+  and PasClaw.Tools.ToolLoop reference the same named type — dcc64
+  rejects cross-unit assignments between inline `array of ILLMProvider`
+  declarations even when structurally identical. }
 
 function NewProviderFromConfig(Cfg: TConfig; const ProviderName: string;
                                out Provider: ILLMProvider; out ErrMsg: string): Boolean;

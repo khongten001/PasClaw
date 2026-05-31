@@ -238,7 +238,7 @@ var
   Line: string;
   Provider: ILLMProvider;
   Err: string;
-  Msgs: array of TMessage;
+  Msgs: TMessageArray;
   Reg: TToolRegistry;
   Handlers: TLoopHandlers;
   Loop: TToolLoopResult;

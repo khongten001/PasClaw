@@ -52,8 +52,12 @@ type
        until one succeeds (StatusCode 2xx) or all fail. Empty
        array — same as the old behaviour, primary failure surfaces
        directly. Callers populate from TConfig.Fallbacks by
-       resolving each name through NewProviderFromConfig. *)
-    Fallbacks:      array of ILLMProvider;
+       resolving each name through NewProviderFromConfig (see
+       PasClaw.Providers.Factory.ResolveFallbacks). The named
+       TLLMProviderArray type — not an inline `array of ILLMProvider`
+       — is required because dcc64 enforces strict named-type matching
+       on dynamic-array assignments. *)
+    Fallbacks:      TLLMProviderArray;
   end;
 
   TToolLoopResult = record
