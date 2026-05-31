@@ -63,7 +63,10 @@ type
     FSMTP:      TEmailAuth;
     FIMAP:      TEmailAuth;
     FFrom:      string;
-    FAllow:     array of string;
+    FAllow:     TStringArray;   { named type, not `array of string`, so Delphi 12
+                                  dcc64 accepts the SplitCSV(...) assignment
+                                  result without an E2010 — same pattern as
+                                  PR #104 fixed for TLLMProviderArray. }
     FPollSec:   Integer;
     FStop:      Boolean;
     FWorker:    TThread;
@@ -97,6 +100,10 @@ uses
   DateUtils,
   IdSMTP, IdIMAP4, IdMessage, IdSSLOpenSSL, IdExplicitTLSClientServerBase,
   IdMessageBuilder, IdMessageParts, IdAttachmentFile,
+  IdMailBox,  { TUInt32Array — needed for the Unseen local in ProcessInbox
+                because IMAP.MailBox.SearchResult is declared as
+                TUInt32Array; dcc64 won't assign it into an inline
+                `array of UInt32` (PR #104 same pattern). }
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Providers.Factory,
@@ -302,7 +309,7 @@ var
   IMAP: TIdIMAP4;
   SSL:  TIdSSLIOHandlerSocketOpenSSL;
   Msg:  TIdMessage;
-  Unseen: array of UInt32;
+  Unseen: TUInt32Array;
   Search: array of TIdIMAP4SearchRec;
   SeqNum: UInt32;
   k: Integer;
