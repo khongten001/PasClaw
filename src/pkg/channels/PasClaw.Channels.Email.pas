@@ -102,6 +102,34 @@ uses
   PasClaw.Providers.Factory,
   PasClaw.Tools.ToolLoop;
 
+const
+  { Per-operation IMAP / SMTP timeout. Bounds how long a single
+    Connect / Login / Retrieve / Send can block before raising; in
+    turn bounds Email.Stop's shutdown wait. 30s is generous for
+    healthy mail servers (typical SMTP STARTTLS roundtrip is well
+    under a second) and tight enough that a wedged server doesn't
+    keep the gateway alive for minutes. Tune via constant edit if
+    your environment legitimately needs more. }
+  EmailIOTimeoutMS = 30000;
+
+{ TThread.WaitFor blocks indefinitely — Indy doesn't ship a
+  timeout-aware variant. Poll Finished at 50ms granularity for up
+  to TimeoutMS, return True if the thread exited in time. }
+function WaitForWorkerWithTimeout(W: TThread; TimeoutMS: Cardinal): Boolean;
+var
+  Elapsed: Cardinal;
+const
+  PollMS = 50;
+begin
+  Elapsed := 0;
+  while (not W.Finished) and (Elapsed < TimeoutMS) do
+  begin
+    Sleep(PollMS);
+    Inc(Elapsed, PollMS);
+  end;
+  Result := W.Finished;
+end;
+
 function ParseSMTPMode(const S: string): TEmailSMTPMode;
 var
   L: string;
@@ -232,11 +260,13 @@ begin
       else
         SMTP.UseTLS := utUseExplicitTLS;
     end;
-    SMTP.Host     := FSMTP.Host;
-    SMTP.Port     := FSMTP.Port;
-    SMTP.Username := FSMTP.User;
-    SMTP.Password := FSMTP.Pass;
-    SMTP.AuthType := satDefault;
+    SMTP.Host           := FSMTP.Host;
+    SMTP.Port           := FSMTP.Port;
+    SMTP.Username       := FSMTP.User;
+    SMTP.Password       := FSMTP.Pass;
+    SMTP.AuthType       := satDefault;
+    SMTP.ConnectTimeout := EmailIOTimeoutMS;
+    SMTP.ReadTimeout    := EmailIOTimeoutMS;
 
     Msg.From.Address := FFrom;
     Msg.Recipients.EMailAddresses := Recipient;
@@ -298,6 +328,12 @@ begin
     IMAP.Port := FIMAP.Port;
     IMAP.Username := FIMAP.User;
     IMAP.Password := FIMAP.Pass;
+    { Bounded I/O: if the IMAP server stalls, individual ops fail
+      after 30s instead of blocking the worker forever. Caps the
+      shutdown latency Email.Stop sees at roughly one ReadTimeout
+      cycle. }
+    IMAP.ConnectTimeout := EmailIOTimeoutMS;
+    IMAP.ReadTimeout    := EmailIOTimeoutMS;
 
     try
       IMAP.Connect;
@@ -326,7 +362,13 @@ begin
           SeqNum := Unseen[k];
           Msg := TIdMessage.Create(nil);
           try
-            if not IMAP.Retrieve(Integer(SeqNum), Msg) then Continue;
+            { Peek (BODY.PEEK[]) doesn't set \Seen as a side effect
+              the way Retrieve does — so when SMTP delivery fails
+              below and we skip StoreFlags, the next SEARCH UNSEEN
+              still returns this message and we retry. Retrieve would
+              silently mark Seen on fetch, draining the message from
+              the unseen set even though the reply never went out. }
+            if not IMAP.RetrievePeek(SeqNum, Msg) then Continue;
             FromAddr := Msg.From.Address;
             Subj := Msg.Subject;
             BodyText := Msg.Body.Text;
@@ -464,10 +506,36 @@ begin
 end;
 
 procedure TEmailChannel.Stop;
+const
+  { Worst-case shutdown latency the gateway is willing to absorb.
+    The worker may currently be blocked in IMAP.Retrieve or
+    SMTP.Send, both of which now carry EmailIOTimeoutMS read
+    timeouts — so the actual wait is bounded by one ReadTimeout
+    plus the post-op return path. EmailStopWatchdogMS gives that
+    a generous ceiling; the WaitFor fallback below catches the
+    pathological "server stops responding mid-TLS handshake"
+    case so gateway shutdown doesn't hang forever. }
+  EmailStopWatchdogMS = EmailIOTimeoutMS + 5000;
 begin
   if FWorker = nil then Exit;
   FStop := True;
-  FWorker.WaitFor;
+  { Indy's TThread.WaitFor doesn't take a timeout argument, so we
+    poll. Cheap — Sleep(50ms) until Finished or timeout. The
+    worker sets Finished := True the moment Execute returns. }
+  if not WaitForWorkerWithTimeout(FWorker, EmailStopWatchdogMS) then
+  begin
+    LogWarn('email worker did not exit within %d ms — leaking thread (IMAP/SMTP socket likely wedged)',
+            [EmailStopWatchdogMS]);
+    { Detach: set FreeOnTerminate so the thread cleans itself up
+      whenever it does eventually exit. Better than blocking the
+      gateway shutdown forever. NB: if FProvider / FRegistry /
+      FCfg get torn down before the thread exits the worker may
+      hit a UAF on its next access — that's the lesser evil vs.
+      a wedged gateway. }
+    FWorker.FreeOnTerminate := True;
+    FWorker := nil;
+    Exit;
+  end;
   FreeAndNil(FWorker);
 end;
 
