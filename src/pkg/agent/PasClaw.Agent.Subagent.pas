@@ -79,6 +79,14 @@ type
     function Schema:      string; override;
     function Category:    TToolCategory; override;
     function Run(const ArgsJSON: string; out ErrMsg: string): string; override;
+    { Refresh the captured TSubagentContext. Embedders that swap
+      providers mid-session (TPasClawAgent.SetProvider after the
+      first Chat) call this so the next spawn() dispatch picks up
+      the new ILLMProvider / Fallbacks / DefaultModel — without it
+      the spawn tool would keep using the stale provider that was
+      live when the registry was first installed. (Codex P2 on
+      PR #107.) }
+    procedure SetContext(const ACtx: TSubagentContext);
   end;
 
 (* Build a TToolRegistry holding a subset of the source registry,
@@ -150,6 +158,11 @@ begin
   FCtx := ACtx;
   SetLength(FSpecs, Length(ASpecs));
   for i := 0 to High(ASpecs) do FSpecs[i] := ASpecs[i];
+end;
+
+procedure TSpawnTool.SetContext(const ACtx: TSubagentContext);
+begin
+  FCtx := ACtx;
 end;
 
 function TSpawnTool.Name: string;

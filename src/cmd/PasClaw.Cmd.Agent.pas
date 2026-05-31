@@ -227,6 +227,14 @@ begin
     Exit;
   end;
 
+  { Resolve the effective model BEFORE registering the spawn tool.
+    MaybeRegisterSpawnTool captures Model into the TSubagentContext
+    by value; if we hand it an empty string the child subagent loop
+    will fall back to the provider's GetDefaultModel instead of the
+    user's --model selection. RunInteractive already does this in the
+    right order — fixing the asymmetry here. (Codex P2 on PR #107.) }
+  if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
+
   Reg := nil;
   if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
@@ -236,7 +244,6 @@ begin
     SetLength(Msgs, 1);
     Msgs[0] := MakeMessage(mrUser, Prompt);
 
-    if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
     LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
 
     WriteLn(Ansi.Cyan, 'assistant', Ansi.Reset, ' (', Provider.GetName, '/', Model, '):');
