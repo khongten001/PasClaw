@@ -64,6 +64,13 @@ type
     FinishReason: string;
     Usage:      TUsageInfo;
     Model:      string;
+    { HTTP status code from the upstream provider. 0 means "not set"
+      (older providers that haven't been updated to populate it).
+      Used by the tool loop's provider-fallback logic to detect
+      retryable errors (429 / 5xx) and walk the configured fallback
+      chain. Successful responses set StatusCode := 200; non-HTTP
+      errors (DNS, TLS, socket) set StatusCode := -1. }
+    StatusCode: Integer;
   end;
 
   TStreamChunk = record

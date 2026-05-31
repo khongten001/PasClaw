@@ -200,6 +200,7 @@
         <DCCReference Include="..\pkg\channels\PasClaw.Channels.WhatsApp.pas"/>
         <DCCReference Include="..\pkg\channels\PasClaw.Channels.Matrix.pas"/>
         <DCCReference Include="..\pkg\channels\PasClaw.Channels.IRC.pas"/>
+        <DCCReference Include="..\pkg\channels\PasClaw.Channels.Email.pas"/>
 
         <!-- pkg/crypto -->
         <DCCReference Include="..\pkg\crypto\PasClaw.Crypto.HMAC.pas"/>

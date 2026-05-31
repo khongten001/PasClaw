@@ -131,6 +131,7 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Tools.Sandbox,
   PasClaw.Providers.Types,
+  PasClaw.Providers.Factory,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
@@ -986,6 +987,7 @@ begin
   LoopCfg.Model         := FCfg.DefaultModel;
   LoopCfg.MaxIterations := 8;
   LoopCfg.Parallel := True;
+  LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
   LoopCfg.Options       := DefaultChatOptions;
   LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
   LoopCfg.OnText        := nil;
@@ -1514,6 +1516,7 @@ begin
     LoopCfg.Model         := ReqModel;
     LoopCfg.MaxIterations := FMaxIter;
     LoopCfg.Parallel := True;
+    LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
     LoopCfg.Options       := DefaultChatOptions;
     { Inject the composed PasClaw system prompt — but only if the client
       didn't already supply one of their own. Third-party tooling calling
@@ -3003,6 +3006,7 @@ begin
       LoopCfg.Model         := ReqModel;
       LoopCfg.MaxIterations := FMaxIter;
       LoopCfg.Parallel := True;
+      LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
       LoopCfg.Options       := DefaultChatOptions;
       if not HasSystemMessage(Msgs) then
         LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);

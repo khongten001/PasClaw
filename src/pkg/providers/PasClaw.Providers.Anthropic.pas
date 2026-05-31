@@ -330,6 +330,7 @@ begin
   Resp := PostJSON(URL, Body, Headers, 120);
 
   Result.Content := '';
+  Result.StatusCode := Resp.StatusCode;
   SetLength(Result.ToolCalls, 0);
   if (Resp.StatusCode >= 200) and (Resp.StatusCode < 300) then
   begin

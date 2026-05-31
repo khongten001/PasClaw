@@ -15,13 +15,25 @@ uses
   PasClaw.Config,
   PasClaw.Providers.Intf;
 
+type
+  TLLMProviderArray = array of ILLMProvider;
+
 function NewProviderFromConfig(Cfg: TConfig; const ProviderName: string;
                                out Provider: ILLMProvider; out ErrMsg: string): Boolean;
 function NewDefaultProvider(Cfg: TConfig; out Provider: ILLMProvider; out ErrMsg: string): Boolean;
 
+(* Resolve TConfig.Fallbacks into a runtime array of ILLMProvider, ready
+   to drop into TToolLoopConfig.Fallbacks. Each Name in Cfg.Fallbacks
+   is looked up via NewProviderFromConfig; unresolvable names are
+   silently skipped (a logged warning is the only feedback) so a typo
+   in config.json doesn't break the loop. Returns an empty array when
+   Cfg.Fallbacks is empty. *)
+function ResolveFallbacks(Cfg: TConfig): TLLMProviderArray;
+
 implementation
 
 uses
+  PasClaw.Logger,
   PasClaw.Providers.Anthropic,
   PasClaw.Providers.OpenAI,
   PasClaw.Providers.Gemini,
@@ -122,6 +134,32 @@ begin
     Exit(False);
   end;
   Result := NewProviderFromConfig(Cfg, Cfg.DefaultProvider, Provider, ErrMsg);
+end;
+
+function ResolveFallbacks(Cfg: TConfig): TLLMProviderArray;
+var
+  i, Out_: Integer;
+  P: ILLMProvider;
+  Err: string;
+begin
+  SetLength(Result, Length(Cfg.Fallbacks));
+  Out_ := 0;
+  for i := 0 to High(Cfg.Fallbacks) do
+  begin
+    if Cfg.Fallbacks[i] = '' then Continue;
+    if not NewProviderFromConfig(Cfg, Cfg.Fallbacks[i], P, Err) then
+    begin
+      { Don't propagate — let the caller still build the loop with
+        the providers that did resolve. The fallback chain is
+        defensive; missing an entry only weakens it, never breaks
+        the primary path. }
+      LogWarn('fallback provider %s unresolvable: %s', [Cfg.Fallbacks[i], Err]);
+      Continue;
+    end;
+    Result[Out_] := P;
+    Inc(Out_);
+  end;
+  SetLength(Result, Out_);
 end;
 
 end.

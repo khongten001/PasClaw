@@ -38,7 +38,8 @@ uses
   PasClaw.Channels.LINE,
   PasClaw.Channels.WhatsApp,
   PasClaw.Channels.Matrix,
-  PasClaw.Channels.IRC;
+  PasClaw.Channels.IRC,
+  PasClaw.Channels.Email;
 
 type
   TGwArgs = record
@@ -63,6 +64,7 @@ type
     IRCNick:     string;
     IRCChannel:  string;
     IRCPassword: string;
+    Email:       Boolean;
     NoMCP:       Boolean;
     NoTools:     Boolean;
     NoHashline:  Boolean;
@@ -88,6 +90,7 @@ begin
   Result.MatrixHome := GetEnvironmentVariable('PASCLAW_MATRIX_HOMESERVER');
   Result.MatrixToken := GetEnvironmentVariable('PASCLAW_MATRIX_TOKEN');
   Result.IRC        := False;
+  Result.Email      := False;
   Result.IRCServer  := GetEnvironmentVariable('PASCLAW_IRC_SERVER');
   Result.IRCPort    := StrToIntDef(GetEnvironmentVariable('PASCLAW_IRC_PORT'), 6667);
   Result.IRCNick    := GetEnvironmentVariable('PASCLAW_IRC_NICK');
@@ -120,6 +123,7 @@ begin
     if Argv[i] = '--irc-nick'        then begin if i < High(Argv) then Result.IRCNick     := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--irc-channel'     then begin if i < High(Argv) then Result.IRCChannel  := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--irc-password'    then begin if i < High(Argv) then Result.IRCPassword := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--email'        then begin Result.Email      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-mcp'       then begin Result.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin Result.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin Result.NoHashline := True; Inc(i); Continue; end;
@@ -141,6 +145,7 @@ var
   WhatsApp: TWhatsAppBot;
   Matrix:   TMatrixBot;
   IRC:      TIRCBot;
+  Email:    TEmailChannel;
   Scheduler: TCronScheduler;
   Skills: TSkillSpecArray;
 begin
@@ -243,6 +248,12 @@ begin
                                Args.IRCNick, Args.IRCChannel, Args.IRCPassword,
                                Cfg, Provider, Reg);
         IRC.Start;
+      end;
+
+      if Args.Email then
+      begin
+        Email := TEmailChannel.Create(Cfg, Provider, Reg);
+        Email.Spawn;  { runs Email.Run on a dedicated TThread }
       end;
 
       Server.Start(Args.Addr, Args.Port);
