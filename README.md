@@ -4,6 +4,57 @@ PasClaw is an ultra-lightweight personal AI agent written in Delphi Object Pasca
 
 The main program lives at `src/pasclaw/PasClaw.dpr`. It initializes terminal color handling, prints the banner, applies timezone configuration, and dispatches into the command tree implemented under `src/cmd/`.
 
+## Features
+
+**LLM providers** — 20-entry catalog covering Anthropic Messages, OpenAI Chat Completions, Google Gemini `generateContent`, plus every OpenAI-protocol-compatible provider (Groq, Together, DeepSeek, Mistral, Cerebras, OpenRouter, Ollama, …). Streaming SSE on all three protocol families; native search grounding on Gemini; citation collation on Perplexity. Code-driven `SetProvider('anthropic', $ANTHROPIC_API_KEY)` for embedders so no `~/.pasclaw/config.json` is required.
+
+**Built-in tools** — exposed to the model on every turn:
+
+| Tool | What it does |
+|---|---|
+| `fs_read` / `fs_write` / `fs_list` | sandboxed filesystem access |
+| `fs_grep` | recursive substring search, returns hashline-formatted matches |
+| `fs_edit_hashline` | patch by line-anchor + file-hash header, race-safe |
+| `shell_exec` | `/bin/sh -c` (or `cmd.exe`), output capped at 1 MiB, denylist-gated |
+| `web_search` | DuckDuckGo / Brave / Tavily / SearXNG / Perplexity / Gemini-grounding — 6 providers |
+| `web_fetch` | HTTP GET → readable plain text (HTML stripped, entities decoded), SSRF-guarded |
+| `memory_search` | SQLite FTS5 BM25 over `workspace/memory/*.md` and `MEMORY.md` |
+| `skill_<name>` | Pascal-side tools registered from `kind: shell` / `kind: prompt` skills |
+| MCP-bridged | every tool a configured MCP server exports — see below |
+
+**Parallel dispatch** — when the model returns multiple `tool_use` blocks in one turn, read-only tools (`web_search`, `web_fetch`, `fs_read`/`grep`/`list`, `memory_search`) fan out on worker threads; mutating tools (`fs_write`, `fs_edit_hashline`, `shell_exec`) stay serial. ~50% wall-clock win on multi-network-tool turns.
+
+**MCP** — both transports. Stdio MCP via spawned subprocess + JSON-RPC over pipes, and Streamable HTTP MCP (handles SSE-framed responses, Bearer-token auth). Catalog of public servers — `pasclaw mcp install replicate` / `digitalocean-apps` / `digitalocean-databases` / `runpod-docs` / `huggingface` — reads the right env var, writes the right Authorization header, never preloaded.
+
+**Skills** — markdown manifests under `$PASCLAW_HOME/workspace/skills/` advertised in the system prompt; the model loads the body via `fs_read` on demand. Install from GitHub (`pasclaw skills install owner/repo[/path][@ref]` — codeload zip, FPC's `Zipper.TUnZipper` or Delphi's `System.Zip.TZipFile`) or from ClawHub (`pasclaw skills install clawhub:<slug>[@<version>]`). Malware-flagged skills refused; suspicious-flagged install with a warning.
+
+**HTTP gateway** — `pasclaw gateway` and `pasclaw serve`. OpenAI-compatible `/v1/chat/completions` (streaming + non-streaming) and `/v1/responses` (tool-passthrough so Codex CLI can drive its own tools). Embedded web UI (vanilla ES2020, single HTML file, no JS toolchain) with 8 tabs: **Chat** (SSE-streamed, tool activity surfaced inline), **Memory**, **Files**, **MCP**, **Cron**, **Skills**, **Logs** (live tail via SSE from the in-process ring buffer), **Settings**. Read-only inspection endpoints (`/v1/mcp`, `/v1/cron`, `/v1/skills`, `/v1/memory`, `/v1/fs`, `/v1/config`, `/v1/logs`) backed by the gateway's sandbox + secret-masking.
+
+**Chat channels** — bidirectional (inbound message → agent loop → outbound reply): Telegram (long-poll bot), Discord (bot polling), LINE (webhook), WhatsApp (Cloud API webhook), Slack (Events API webhook + Incoming Webhook reply), Matrix (REST `/sync` long-poll, federated, self-hostable), IRC (`TIdIRC`). Outbound-only: Microsoft Teams (Incoming Webhook), generic Webhook sink.
+
+**Cron** — `pasclaw cron add daily-summary "0 9 * * *" summarize "workspace/memory"`. Last-fired timestamp persisted to `workspace/cron/state.json` so a missed slot (gateway down, laptop closed) fires exactly once on the next tick — never silently skipped, never double-fired. Per-entry channel sink (`--channel <kind>:<target>`) posts skill output; output also appended to `workspace/memory/<today>.md` for the model to recall later.
+
+**Memory** — SQLite FTS5 BM25 index over `workspace/memory/*.md` and `MEMORY.md`. `pasclaw migrate` (re-)indexes; `pasclaw membench --records N` benchmarks. Conversation history compaction (`pasclaw compaction.threshold_tokens`) kicks in mid-loop, summarises the older portion via the same provider, folds the summary into the system prompt, falls back to verbatim on summariser failure (no silent context loss).
+
+**Sandbox + safety** — read/write path allowlists, shell-command denylist (separate `restrict_to_workspace` denylist + `shell_deny_enabled` global), SSRF guard on `web_fetch` (IPv4 blocklist incl. `169.254.169.254`, redirect re-check), hashline patches require matching file-hash header (stale patches abort without writing). TLS required for HTTPS provider/MCP calls via Indy's OpenSSL IO handler.
+
+**Embedding** — `TPasClawAgent` and `TPasClawServer` as `TComponent`s in `PasClaw.Agent`:
+
+```pascal
+uses PasClaw.Agent, PasClaw.Tools;
+
+Agent := TPasClawAgent.Create('claude-opus-4-7');
+Agent.SetProvider('anthropic', GetEnvironmentVariable('ANTHROPIC_API_KEY'));
+Agent.RegisterTool(TWebSearchTool.Create);
+Agent.RegisterTool(TFileSystemTool.Create);
+WriteLn(Agent.Run('Summarize the latest Delphi release notes.'));
+Agent.Free;
+```
+
+Form-designable with published properties for the VCL/FMX path; code-driven OOP API for everything else. Custom tools subclass `TPasClawTool` and override `Name` / `Description` / `Schema` / `Run` / `Category`. Single-process server: `TPasClawServer.Create('0.0.0.0', 8088); Server.Run;` blocks until `Stop` is signalled from another thread.
+
+**Cross-platform** — Linux x86_64 + aarch64 under FPC 3.2+; macOS x86_64 + arm64 under FPC (Homebrew unit paths autodetected); Windows + Linux + macOS under Delphi 12 / RAD Studio. The Makefile probes `uname` and picks the right `fcl-db` / `sqlite` / `iconvenc` / `lazutils` paths automatically. Three sample binaries under `samples/component-console/` plus matching `.dproj` files for RAD Studio and `dcc32.cfg` / `dcc64.cfg` for cmdline Delphi builds.
+
 ## Requirements
 
 - Free Pascal 3.2+ in Delphi mode, or Delphi/RAD Studio.
