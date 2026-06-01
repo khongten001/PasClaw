@@ -204,6 +204,14 @@ begin
   Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt, Reg <> nil);
   Result.Options.ThinkingLevel := A.Thinking;
   if A.MaxTokens > 0 then Result.Options.MaxTokens := A.MaxTokens;
+  { Prompt caching threads through TChatOptions so each provider
+    builder can decide what to emit (Anthropic: cache_control on
+    system + last tool; OpenAI: prompt_cache_key). CacheKey is set
+    per-turn in RunInteractive (it's the persistent session id);
+    RunSingleTurn leaves it empty since one-shots aren't worth
+    keying. }
+  Result.Options.CacheEnabled := Cfg.PromptCache.Enabled;
+  Result.Options.CacheTTL     := Cfg.PromptCache.TTL;
   Result.OnText        := nil;
   Result.OnToolCall    := Handlers.OnToolCall;
   Result.OnToolResult  := Handlers.OnToolResult;
@@ -215,6 +223,19 @@ begin
     config can opt in the same way. }
   Result.CompactEnabled := True;
   Result.CompactOpts    := DefaultCompactOptions;
+end;
+
+{ One-line per-turn token summary. Cache fields only appear when
+  non-zero so a non-Anthropic / cache-disabled run stays clean.
+  cache_w = cache_creation (a one-time write cost — 25% premium on
+  Anthropic but only on the first turn); cache_r = cache_read
+  (the win — 90% discount on Anthropic, 50% on OpenAI). }
+function FormatTokenLine(const U: TUsageInfo; Iterations: Integer): string;
+begin
+  Result := Format('  [tokens in=%d out=%d', [U.InputTokens, U.OutputTokens]);
+  if U.CacheReadTokens    > 0 then Result := Result + Format(' cache_r=%d', [U.CacheReadTokens]);
+  if U.CacheCreatedTokens > 0 then Result := Result + Format(' cache_w=%d', [U.CacheCreatedTokens]);
+  Result := Result + Format(', iters=%d]', [Iterations]);
 end;
 
 procedure RunSingleTurn(const Cfg: TConfig; const A: TAgentArgs; const Prompt: string);
@@ -263,9 +284,7 @@ begin
     else
       WriteLn('(loop failed)');
     if Loop.LastResp.Usage.InputTokens + Loop.LastResp.Usage.OutputTokens > 0 then
-      WriteLn(Ansi.Dim, Format('  [tokens in=%d out=%d, iters=%d]',
-        [Loop.LastResp.Usage.InputTokens, Loop.LastResp.Usage.OutputTokens, Loop.Iterations]),
-        Ansi.Reset);
+      WriteLn(Ansi.Dim, FormatTokenLine(Loop.LastResp.Usage, Loop.Iterations), Ansi.Reset);
   finally
     Handlers.Free;
     FreeMCPClients(MCPClients);
@@ -295,6 +314,7 @@ var
   CompactOptsLocal: TCompactOptions;
   CompactedLiveOpts: TChatOptions;
   Session: TSession;               { always non-nil in interactive mode }
+  TotalCacheRead, TotalCacheWrite, TotalIn: Int64;   { cumulative across turns for /status }
 
   procedure PersistSession;
   var j: Integer;
@@ -313,6 +333,9 @@ var
 begin
   SystemPromptOverride := '';
   Session := nil;
+  TotalCacheRead  := 0;
+  TotalCacheWrite := 0;
+  TotalIn         := 0;
   Offline := not PickProvider(Cfg, A, Provider, Err);
   if Offline then
     WriteLn(Ansi.Yellow, '(offline preview — ', Err, ')', Ansi.Reset);
@@ -418,6 +441,17 @@ begin
           WriteLn('  compacted: yes (summary in system prompt)')
         else
           WriteLn('  compacted: no');
+        if Cfg.PromptCache.Enabled then
+        begin
+          if TotalIn > 0 then
+            WriteLn(Format('  cache:     on, %d read / %d written (%d%% hit on input so far)',
+                           [TotalCacheRead, TotalCacheWrite,
+                            (TotalCacheRead * 100) div TotalIn]))
+          else
+            WriteLn('  cache:     on, no turns yet');
+        end
+        else
+          WriteLn('  cache:     off (prompt_cache.enabled=false in config)');
         Continue;
       end;
       if Line = '/think' then
@@ -485,6 +519,13 @@ begin
         compacted summary leaks out of the conversation. }
       if SystemPromptOverride <> '' then
         LoopCfg.Options.SystemPrompt := SystemPromptOverride;
+      { Anchor OpenAI's prompt_cache_key to the persistent session
+        id so the cache bucket lines up across turns of THIS chat
+        (not someone else's parallel session that happens to share a
+        prefix). Anthropic ignores the field; OpenAI uses it to pin
+        prefix routing on the back-end. }
+      if Session <> nil then
+        LoopCfg.Options.CacheKey := Session.Meta.Id;
       { /think: apply ThinkingLevel for this turn, then clear so
         subsequent turns reset (matches the OpenClaw /think model —
         single-turn extended thinking). The user can /think again
@@ -499,6 +540,13 @@ begin
       begin
         WriteLn(Ansi.Cyan, 'assistant', Ansi.Reset, ' (', Provider.GetName, '/', Model, '):');
         WriteLn(Loop.Content);
+        if Loop.LastResp.Usage.InputTokens + Loop.LastResp.Usage.OutputTokens > 0 then
+        begin
+          WriteLn(Ansi.Dim, FormatTokenLine(Loop.LastResp.Usage, Loop.Iterations), Ansi.Reset);
+          Inc(TotalIn,         Loop.LastResp.Usage.InputTokens);
+          Inc(TotalCacheRead,  Loop.LastResp.Usage.CacheReadTokens);
+          Inc(TotalCacheWrite, Loop.LastResp.Usage.CacheCreatedTokens);
+        end;
 
         { Pick up the compacted history from RunToolLoop so the next
           interactive turn starts from the summarised state, not the

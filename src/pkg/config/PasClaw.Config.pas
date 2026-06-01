@@ -187,6 +187,20 @@ type
     MaxResults: Integer;
   end;
 
+  (* TPromptCacheConfig — provider-side prompt caching.
+       Enabled: gate; when False, no cache_control breakpoints are
+                emitted and no prompt_cache_key is sent. Default True.
+       TTL:     "" (default 5m) | "1h" (extended; Anthropic only).
+                Other strings pass through verbatim on Anthropic; OpenAI
+                ignores this field (auto-managed cache TTL).
+     Cache keying for OpenAI's prompt_cache_key is automatic — Cmd.Agent
+     hands the persistent session id down through TChatOptions.CacheKey
+     so each conversation gets its own cache bucket. *)
+  TPromptCacheConfig = record
+    Enabled: Boolean;
+    TTL:     string;
+  end;
+
   TConfig = class
   public
     DefaultProvider: string;
@@ -206,6 +220,7 @@ type
     Skills:     array of TSkillEntry;
     Subagents:  TSubagentSpecArray;  { see comment on the type alias }
     WebSearch:  TWebSearchConfig;
+    PromptCache: TPromptCacheConfig;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -247,6 +262,8 @@ begin
   WebSearch.APIKey     := '';
   WebSearch.BaseURL    := '';
   WebSearch.MaxResults := 5;
+  PromptCache.Enabled  := True;  { default-on; see TPromptCacheConfig comment }
+  PromptCache.TTL      := '';    { default 5m via empty }
 end;
 
 function ProviderToJSON(const P: TProviderConfig): TJsonObject;
@@ -359,6 +376,16 @@ begin
       Tmp.PutStr('base_url',    WebSearch.BaseURL);
       Tmp.PutInt('max_results', WebSearch.MaxResults);
       Root.PutObject('web_search', Tmp);
+    end;
+
+    { Only emit prompt_cache when non-default — keeps stock configs
+      tidy. Reading back: missing object => defaults (enabled, 5m). }
+    if (not PromptCache.Enabled) or (PromptCache.TTL <> '') then
+    begin
+      Tmp := TJsonObject.Create;
+      Tmp.PutBool('enabled', PromptCache.Enabled);
+      Tmp.PutStr ('ttl',     PromptCache.TTL);
+      Root.PutObject('prompt_cache', Tmp);
     end;
 
     Arr := TJsonArray.Create;
@@ -488,6 +515,15 @@ begin
       WebSearch.APIKey     := Obj.GetStr('api_key',     WebSearch.APIKey);
       WebSearch.BaseURL    := Obj.GetStr('base_url',    WebSearch.BaseURL);
       WebSearch.MaxResults := Obj.GetInt('max_results', WebSearch.MaxResults);
+    finally
+      Obj.Free;
+    end;
+
+    Obj := Root.ChildObject('prompt_cache');
+    if Obj <> nil then
+    try
+      PromptCache.Enabled := Obj.GetBool('enabled', PromptCache.Enabled);
+      PromptCache.TTL     := Obj.GetStr ('ttl',     PromptCache.TTL);
     finally
       Obj.Free;
     end;

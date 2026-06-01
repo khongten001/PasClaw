@@ -41,6 +41,14 @@ type
     function SupportsStreaming: Boolean;
   end;
 
+{ Exposed so tests + embedders can render the wire body without
+  hitting the network. Pure function; doesn't depend on the provider
+  instance. Same code path Chat / ChatStream execute. }
+function BuildRequest(const Messages: array of TMessage;
+                      const Tools:    array of TToolDefinition;
+                      const Model:    string;
+                      const Options:  TChatOptions): string;
+
 implementation
 
 uses
@@ -91,13 +99,26 @@ begin
   end;
 end;
 
+(* Build a fresh ephemeral cache_control object (with optional
+   ttl="1h") for attaching to a content block / tool entry. Caller
+   takes ownership via PutObject. The TTL field is optional —
+   Anthropic's default cache TTL is 5 minutes and we pass that
+   through implicitly by omitting the field; only "1h" (extended
+   TTL beta) is recognised and emitted. *)
+function MakeCacheControl(const TTL: string): TJsonObject;
+begin
+  Result := TJsonObject.Create;
+  Result.PutStr('type', 'ephemeral');
+  if TTL = '1h' then Result.PutStr('ttl', '1h');
+end;
+
 function BuildRequest(const Messages: array of TMessage;
                       const Tools:    array of TToolDefinition;
                       const Model:    string;
                       const Options:  TChatOptions): string;
 var
-  Root, Block, ToolObj, Thinking, Msg, EmptyInput: TJsonObject;
-  MsgArr, ToolArr, ContentArr: TJsonArray;
+  Root, Block, ToolObj, Thinking, Msg, EmptyInput, SysBlock, CC: TJsonObject;
+  MsgArr, ToolArr, ContentArr, SysArr: TJsonArray;
   i, j: Integer;
   Sys: string;
 begin
@@ -112,7 +133,28 @@ begin
     for i := 0 to High(Messages) do
       if (Messages[i].Role = mrSystem) and (Sys = '') then
         Sys := Messages[i].Content;
-    if Sys <> '' then Root.PutStr('system', Sys);
+    if Sys <> '' then
+    begin
+      if Options.CacheEnabled then
+      begin
+        (* Block form is required to attach cache_control. Anthropic
+           accepts system as either a plain string or an array of
+           text blocks (each with optional cache_control). Tagging
+           the system prompt caches everything up to the tools array
+           on the next turn — biggest single-breakpoint win for
+           multi-turn chats. *)
+        SysArr   := TJsonArray.Create;
+        SysBlock := TJsonObject.Create;
+        SysBlock.PutStr('type', 'text');
+        SysBlock.PutStr('text', Sys);
+        CC := MakeCacheControl(Options.CacheTTL);
+        SysBlock.PutObject('cache_control', CC);
+        SysArr.AddObject(SysBlock);
+        Root.PutArray('system', SysArr);
+      end
+      else
+        Root.PutStr('system', Sys);
+    end;
 
     if Options.ThinkingLevel <> '' then
     begin
@@ -190,6 +232,18 @@ begin
         begin
           EmptyInput := TJsonObject.Create;
           ToolObj.PutObject('input_schema', EmptyInput);
+        end;
+        { Tag the LAST tool entry with cache_control — Anthropic
+          caches up to and including the tagged block, so a single
+          breakpoint on the trailing tool covers the entire tools
+          array as a stable prefix. Combined with the system-prompt
+          breakpoint above we use 2 of Anthropic's 4-breakpoint
+          budget; the remaining two are reserved for compaction
+          summaries or higher-layer hints later. }
+        if Options.CacheEnabled and (i = High(Tools)) then
+        begin
+          CC := MakeCacheControl(Options.CacheTTL);
+          ToolObj.PutObject('cache_control', CC);
         end;
         ToolArr.AddObject(ToolObj);
       end;
