@@ -100,6 +100,8 @@ begin
 
     if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
     TUIInst := TTUI.Create(Provider, Reg, Model);
+    TUIInst.PromptCacheEnabled := Cfg.PromptCache.Enabled;
+    TUIInst.PromptCacheTTL     := Cfg.PromptCache.TTL;
     try
       TUIInst.Run;
     finally

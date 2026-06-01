@@ -989,6 +989,7 @@ begin
   LoopCfg.Parallel := True;
   LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
   LoopCfg.Options       := DefaultChatOptions;
+  ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
   LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
   LoopCfg.OnText        := nil;
   LoopCfg.OnToolCall    := nil;
@@ -1518,6 +1519,7 @@ begin
     LoopCfg.Parallel := True;
     LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
     LoopCfg.Options       := DefaultChatOptions;
+    ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
     { Inject the composed PasClaw system prompt — but only if the client
       didn't already supply one of their own. Third-party tooling calling
       /v1/chat/completions with its own persona/system message should win;
@@ -2920,6 +2922,7 @@ begin
         instead of reaching the client. One Chat() round-trip, hand
         back text and any tool_calls verbatim. }
       PassthroughOpts := DefaultChatOptions;
+      ApplyPromptCacheConfig(PassthroughOpts, FCfg.PromptCache);
       { Skip BuildSystemPrompt — Codex sends its own developer
         message + AGENTS.md; injecting a PasClaw identity preamble
         on top of that confuses the model. }
@@ -3008,6 +3011,7 @@ begin
       LoopCfg.Parallel := True;
       LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
       LoopCfg.Options       := DefaultChatOptions;
+      ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
       if not HasSystemMessage(Msgs) then
         LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
       RawTemp := Req.GetFloat('temperature', 0);

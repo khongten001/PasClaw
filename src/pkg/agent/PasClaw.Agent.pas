@@ -493,6 +493,7 @@ begin
     FSubagentCtx.Provider       := FProvider;
     FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig);
     FSubagentCtx.ParentRegistry := FRegistry;
+    FSubagentCtx.PromptCache    := FConfig.PromptCache;
     if FModel <> '' then
       FSubagentCtx.DefaultModel := FModel
     else
@@ -524,6 +525,7 @@ begin
   FSubagentCtx.Provider       := FProvider;
   FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig);
   FSubagentCtx.ParentRegistry := FRegistry;
+  FSubagentCtx.PromptCache    := FConfig.PromptCache;
   if FModel <> '' then
     FSubagentCtx.DefaultModel := FModel
   else
@@ -681,6 +683,7 @@ begin
   Cfg.Fallbacks     := ResolveFallbacks(FConfig);
   Cfg.Hooks         := BuildHookArray;
   Cfg.Options       := DefaultChatOptions;
+  ApplyPromptCacheConfig(Cfg.Options, FConfig.PromptCache);
   { Derive ToolsEnabled from the registry we are about to hand to
     RunToolLoop, NOT from FUseTools. EnsureRegistry caches FRegistry
     across calls and only checks FUseTools when the registry is

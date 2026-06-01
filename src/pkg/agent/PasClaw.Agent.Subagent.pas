@@ -59,6 +59,10 @@ type
     Fallbacks:      TLLMProviderArray;
     ParentRegistry: TToolRegistry;
     DefaultModel:   string;
+    (* Operator's prompt-cache config propagated from the parent so
+       `prompt_cache.enabled: false` reaches subagents too. Codex P2
+       on PR #118 — see PasClaw.Config.ApplyPromptCacheConfig. *)
+    PromptCache:    TPromptCacheConfig;
   end;
 
   { The spawn tool itself. Subclasses TPasClawTool so the OOP
@@ -332,6 +336,7 @@ begin
     ChildCfg.Parallel      := True;
     ChildCfg.Fallbacks     := FCtx.Fallbacks;
     ChildCfg.Options       := DefaultChatOptions;
+    ApplyPromptCacheConfig(ChildCfg.Options, FCtx.PromptCache);
     ChildCfg.Options.SystemPrompt := Spec.SystemPrompt;
     ChildCfg.OnText        := nil;
     ChildCfg.OnToolCall    := nil;

@@ -172,6 +172,7 @@ begin
   Ctx.Fallbacks      := ResolveFallbacks(Cfg);
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := Model;
+  Ctx.PromptCache    := Cfg.PromptCache;
   Result := RegisterSpawnTool(Reg, Ctx, Cfg.Subagents);
 end;
 
@@ -210,8 +211,7 @@ begin
     per-turn in RunInteractive (it's the persistent session id);
     RunSingleTurn leaves it empty since one-shots aren't worth
     keying. }
-  Result.Options.CacheEnabled := Cfg.PromptCache.Enabled;
-  Result.Options.CacheTTL     := Cfg.PromptCache.TTL;
+  ApplyPromptCacheConfig(Result.Options, Cfg.PromptCache);
   Result.OnText        := nil;
   Result.OnToolCall    := Handlers.OnToolCall;
   Result.OnToolResult  := Handlers.OnToolResult;
@@ -236,6 +236,23 @@ begin
   if U.CacheReadTokens    > 0 then Result := Result + Format(' cache_r=%d', [U.CacheReadTokens]);
   if U.CacheCreatedTokens > 0 then Result := Result + Format(' cache_w=%d', [U.CacheCreatedTokens]);
   Result := Result + Format(', iters=%d]', [Iterations]);
+end;
+
+(* Total prompt tokens the model actually saw, summed across cached
+   and uncached portions. Anthropic reports input_tokens EXCLUDING
+   cached/written tokens (those are separate fields), so a Reads +
+   InputTokens denominator is needed for a correct hit-rate. OpenAI
+   reports cached_tokens as a SUBSET of prompt_tokens — InputTokens
+   alone is the right denominator. We distinguish by provider name
+   because cache_creation_tokens can be zero on a pure-read turn,
+   so "presence of CacheCreatedTokens" isn't a reliable Anthropic
+   marker. Codex P2 on PR #118. *)
+function TotalPromptTokens(const U: TUsageInfo; const ProviderName: string): Int64;
+begin
+  if ProviderName = 'anthropic' then
+    Result := Int64(U.InputTokens) + U.CacheReadTokens + U.CacheCreatedTokens
+  else
+    Result := U.InputTokens;
 end;
 
 procedure RunSingleTurn(const Cfg: TConfig; const A: TAgentArgs; const Prompt: string);
@@ -283,8 +300,8 @@ begin
       WriteLn(Loop.Content)
     else
       WriteLn('(loop failed)');
-    if Loop.LastResp.Usage.InputTokens + Loop.LastResp.Usage.OutputTokens > 0 then
-      WriteLn(Ansi.Dim, FormatTokenLine(Loop.LastResp.Usage, Loop.Iterations), Ansi.Reset);
+    if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
+      WriteLn(Ansi.Dim, FormatTokenLine(Loop.TotalUsage, Loop.Iterations), Ansi.Reset);
   finally
     Handlers.Free;
     FreeMCPClients(MCPClients);
@@ -314,7 +331,7 @@ var
   CompactOptsLocal: TCompactOptions;
   CompactedLiveOpts: TChatOptions;
   Session: TSession;               { always non-nil in interactive mode }
-  TotalCacheRead, TotalCacheWrite, TotalIn: Int64;   { cumulative across turns for /status }
+  TotalCacheRead, TotalCacheWrite, TotalPrompt: Int64;   { cumulative across turns for /status }
 
   procedure PersistSession;
   var j: Integer;
@@ -335,7 +352,7 @@ begin
   Session := nil;
   TotalCacheRead  := 0;
   TotalCacheWrite := 0;
-  TotalIn         := 0;
+  TotalPrompt     := 0;
   Offline := not PickProvider(Cfg, A, Provider, Err);
   if Offline then
     WriteLn(Ansi.Yellow, '(offline preview — ', Err, ')', Ansi.Reset);
@@ -443,10 +460,10 @@ begin
           WriteLn('  compacted: no');
         if Cfg.PromptCache.Enabled then
         begin
-          if TotalIn > 0 then
-            WriteLn(Format('  cache:     on, %d read / %d written (%d%% hit on input so far)',
+          if TotalPrompt > 0 then
+            WriteLn(Format('  cache:     on, %d read / %d written (%d%% hit on prompt so far)',
                            [TotalCacheRead, TotalCacheWrite,
-                            (TotalCacheRead * 100) div TotalIn]))
+                            (TotalCacheRead * 100) div TotalPrompt]))
           else
             WriteLn('  cache:     on, no turns yet');
         end
@@ -484,6 +501,7 @@ begin
         CompactOptsLocal := DefaultCompactOptions;
         CompactOptsLocal.ThresholdTokens := 1;  { force the slice }
         CompactedLiveOpts := DefaultChatOptions;
+        ApplyPromptCacheConfig(CompactedLiveOpts, Cfg.PromptCache);
         if SystemPromptOverride <> '' then
           CompactedLiveOpts.SystemPrompt := SystemPromptOverride;
         Msgs := CompactMessages(Provider, Model, Msgs,
@@ -540,12 +558,15 @@ begin
       begin
         WriteLn(Ansi.Cyan, 'assistant', Ansi.Reset, ' (', Provider.GetName, '/', Model, '):');
         WriteLn(Loop.Content);
-        if Loop.LastResp.Usage.InputTokens + Loop.LastResp.Usage.OutputTokens > 0 then
+        if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
         begin
-          WriteLn(Ansi.Dim, FormatTokenLine(Loop.LastResp.Usage, Loop.Iterations), Ansi.Reset);
-          Inc(TotalIn,         Loop.LastResp.Usage.InputTokens);
-          Inc(TotalCacheRead,  Loop.LastResp.Usage.CacheReadTokens);
-          Inc(TotalCacheWrite, Loop.LastResp.Usage.CacheCreatedTokens);
+          { Surface aggregate usage across every provider call in the
+            turn (incl. tool-using rounds), not just the final reply.
+            Codex P2 on PR #118. }
+          WriteLn(Ansi.Dim, FormatTokenLine(Loop.TotalUsage, Loop.Iterations), Ansi.Reset);
+          Inc(TotalPrompt,     TotalPromptTokens(Loop.TotalUsage, Provider.GetName));
+          Inc(TotalCacheRead,  Loop.TotalUsage.CacheReadTokens);
+          Inc(TotalCacheWrite, Loop.TotalUsage.CacheCreatedTokens);
         end;
 
         { Pick up the compacted history from RunToolLoop so the next

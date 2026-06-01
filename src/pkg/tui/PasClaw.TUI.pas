@@ -41,6 +41,13 @@ type
     procedure HandleSlashCommand(const Cmd: string);
     procedure HandleUserInput(const Text: string);
   public
+    (* Operator's prompt-cache settings. Defaults to default-on (matches
+       DefaultChatOptions). Cmd_TUI_Run copies Cfg.PromptCache into this
+       after construction so `prompt_cache.enabled: false` in config.json
+       turns caching off here too — see PasClaw.Config.ApplyPromptCacheConfig
+       and Codex P2 on PR #118. *)
+    PromptCacheEnabled: Boolean;
+    PromptCacheTTL:     string;
     constructor Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
     procedure Run;
   end;
@@ -131,6 +138,8 @@ begin
   FProvider := Provider;
   FRegistry := Registry;
   FModel    := Model;
+  PromptCacheEnabled := True;
+  PromptCacheTTL     := '';
 end;
 
 function StatusLine(Provider: ILLMProvider; const Model: string;
@@ -239,6 +248,8 @@ begin
   Cfg.MaxIterations := 6;
   Cfg.Parallel := True;
   Cfg.Options       := DefaultChatOptions;
+  Cfg.Options.CacheEnabled := PromptCacheEnabled;
+  Cfg.Options.CacheTTL     := PromptCacheTTL;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
   Cfg.OnToolResult  := nil;
@@ -425,6 +436,8 @@ begin
   Cfg.MaxIterations := 6;
   Cfg.Parallel := True;
   Cfg.Options       := DefaultChatOptions;
+  Cfg.Options.CacheEnabled := PromptCacheEnabled;
+  Cfg.Options.CacheTTL     := PromptCacheTTL;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
   Cfg.OnToolResult  := nil;

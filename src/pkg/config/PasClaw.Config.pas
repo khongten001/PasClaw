@@ -11,7 +11,8 @@ unit PasClaw.Config;
 interface
 
 uses
-  SysUtils, Classes;
+  SysUtils, Classes,
+  PasClaw.Providers.Types;
 
 const
   (* Single source of truth for the product version is VersionFallback below;
@@ -233,11 +234,29 @@ procedure SaveConfig(C: TConfig);
 function FormatVersion: string;
 function FormatBuildInfo: string;
 
+(* Fold the operator's prompt_cache config into a TChatOptions that
+   was just initialised from DefaultChatOptions. Call this at every
+   config-backed site that builds chat options (CLI, channels, gateway,
+   TUI, embedder TPasClawAgent) so `prompt_cache.enabled: false` in
+   config.json reliably turns caching off on every code path — not
+   just `pasclaw agent`. (Codex P2 on PR #118: opt-out was only wired
+   through Cmd.Agent.BuildLoopConfig.) Library-level DefaultChatOptions
+   stays default-on so embedders who never build a TConfig still get
+   the feature; passing a TPromptCacheConfig from a loaded TConfig is
+   what makes operator-disable stick. *)
+procedure ApplyPromptCacheConfig(var Opts: TChatOptions; const PC: TPromptCacheConfig);
+
 implementation
 
 uses
   PasClaw.Utils,
   PasClaw.JSON;
+
+procedure ApplyPromptCacheConfig(var Opts: TChatOptions; const PC: TPromptCacheConfig);
+begin
+  Opts.CacheEnabled := PC.Enabled;
+  Opts.CacheTTL     := PC.TTL;
+end;
 
 constructor TConfig.Create;
 begin

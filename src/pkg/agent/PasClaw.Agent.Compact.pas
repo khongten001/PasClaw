@@ -347,6 +347,12 @@ begin
                             BuildSummaryPrompt(CappedPrefix, Opts.SummaryBudget));
 
   CallOptions := DefaultChatOptions;
+  { Inherit cache policy from the caller's Options — caller already
+    applied Cfg.PromptCache; the summariser call should follow the
+    same policy. (Codex P2 on PR #118: don't unconditionally cache
+    just because DefaultChatOptions does.) }
+  CallOptions.CacheEnabled := Options.CacheEnabled;
+  CallOptions.CacheTTL     := Options.CacheTTL;
   CallOptions.MaxTokens := Opts.SummaryBudget * 2;   { allow some slack }
   if CallOptions.MaxTokens < 1024 then CallOptions.MaxTokens := 1024;
 
