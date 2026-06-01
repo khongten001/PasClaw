@@ -523,15 +523,15 @@ begin
     Loop.LastResp := Resp;
 
     { Provider failure surfaces to hooks. After the fallback walk
-      above, if the final status code is still non-2xx — every
-      configured fallback also returned a retryable status, or we
-      hit an outright non-retryable 4xx — fire OnError(hsProviderCall)
-      so audit / metrics / alerting hooks can record it. Loop
-      continues so a downstream hook or the existing OnText path
-      gets a chance to surface the error to the embedder. (Codex P2
-      on PR #110 — these helpers existed but nothing called them.) }
+      above, fire OnError(hsProviderCall) whenever the final status
+      isn't a 2xx — including non-positive codes (StatusCode <= 0)
+      which the HTTP helper uses to flag pre-HTTP failures: DNS
+      lookup miss, TLS handshake refusal, socket reset, no
+      OpenSSL IO handler. Earlier this guard required StatusCode > 0
+      and silently skipped exactly those cases — the ones an audit
+      / alerting hook most wants to see. (Codex P2 on PR #111.) }
     if (Length(Cfg.Hooks) > 0) and
-       ((Resp.StatusCode > 0) and ((Resp.StatusCode < 200) or (Resp.StatusCode >= 300))) then
+       ((Resp.StatusCode < 200) or (Resp.StatusCode >= 300)) then
       HooksOnError(Cfg.Hooks, hsProviderCall,
                     Format('provider returned status=%d', [Resp.StatusCode]));
 
