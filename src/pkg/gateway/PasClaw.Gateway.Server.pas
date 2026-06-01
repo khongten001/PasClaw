@@ -991,6 +991,7 @@ begin
   LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
   LoopCfg.Options       := DefaultChatOptions;
   ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
+  LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
   { No HTTP-header-derived identity yet — the gateway terminates an
     unauthenticated TCP socket, so any header value would be
     client-asserted and unsafe to gate on. Stamp 'gateway:anon' so
@@ -3019,6 +3020,7 @@ begin
       LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
       LoopCfg.Options       := DefaultChatOptions;
       ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
+      LoopCfg.Identity      := MakeIdentity('gateway', 'anon');
       if not HasSystemMessage(Msgs) then
         LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
       RawTemp := Req.GetFloat('temperature', 0);

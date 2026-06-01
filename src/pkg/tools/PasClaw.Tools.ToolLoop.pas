@@ -71,13 +71,15 @@ type
     Hooks:          TPasClawHookArray;
     (* Canonical sender identity for the turn. Channels populate this
        from the inbound payload (Slack user id, Matrix MXID, Telegram
-       chat id, email From, etc.); the CLI sets cli:<$USER>. Default
-       zero record means "unknown / not propagated" — same as
-       picoclaw's empty CanonicalID, surfaces as '(unknown)' in logs.
-       Hooks read Cfg.Identity to gate behaviour by sender. The
-       allowlist check (PasClaw.Identity.IsAllowedSender) is run by
-       the channel BEFORE RunToolLoop — by the time the loop is
-       called, the operator has already approved this sender. *)
+       message.from.id, email From, etc.); the CLI sets cli:<$USER>.
+       Default zero record means "unknown / not propagated" —
+       surfaces as '(unknown)' in logs. The allowlist gate
+       (PasClaw.Identity.IsAllowedSender) runs at the CHANNEL
+       boundary BEFORE RunToolLoop; by the time the loop is called,
+       the operator has already approved this sender. RunToolLoop
+       copies Identity onto every registered TPasClawHook before
+       dispatching so hook subclasses can read `Self.Identity` to
+       gate per-tool / per-turn behaviour. *)
     Identity:       TIdentity;
   end;
 
@@ -517,6 +519,16 @@ begin
     SetLength(Tools, 0);
 
   Iter := 0;
+  { Stamp the per-turn identity onto every registered hook so
+    override implementations can read `Self.Identity` from any of
+    the BeforeTurn / BeforeToolCall / AfterToolResult / OnError
+    virtuals — the alternative (threading TIdentity through every
+    hook signature) would break every existing TPasClawHook
+    subclass. Codex P2 on PR #119. Identity is per-loop, not
+    per-iteration, so set once before the loop. }
+  for i := 0 to High(Cfg.Hooks) do
+    if Cfg.Hooks[i] <> nil then
+      Cfg.Hooks[i].Identity := Cfg.Identity;
   while Iter < Cfg.MaxIterations do
   begin
     Inc(Iter);

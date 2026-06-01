@@ -129,8 +129,12 @@ begin
   if Pattern = Canon then Exit(True);
   StarPos := Pos('*', Pattern);
   if StarPos = 0 then Exit(False);
-  { Only suffix wildcards supported — '<platform>:*' or '<platform>:<x>*'.
-    Match by prefix (everything up to but not including the star). }
+  { Suffix wildcards only — the star MUST be the last character of
+    the pattern. A malformed entry like "telegram:*admin" would
+    otherwise extract prefix "telegram:" and silently broaden to
+    every Telegram user. Fail closed: any star not at the end is a
+    typo and the pattern matches nothing. Codex P2 on PR #119. }
+  if StarPos <> Length(Pattern) then Exit(False);
   Prefix := Copy(Pattern, 1, StarPos - 1);
   Result := (Prefix <> '')
         and (Length(Canon) >= Length(Prefix))

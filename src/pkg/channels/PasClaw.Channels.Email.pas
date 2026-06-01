@@ -398,6 +398,11 @@ begin
             begin
               LogInfo('email: sender %s rejected by allow_senders',
                       [FormatIdentity(LoopCfg.Identity)]);
+              { Mark seen so this rejected message doesn't get re-fetched
+                via RetrievePeek on every poll forever — same pattern the
+                channel-specific MatchesAllow rejection above uses.
+                Codex P2 on PR #119. }
+              IMAP.StoreFlags([SeqNum], sdAdd, [mfSeen]);
               Continue;
             end;
 
