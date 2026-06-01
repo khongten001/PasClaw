@@ -522,6 +522,19 @@ begin
     end;
     Loop.LastResp := Resp;
 
+    { Provider failure surfaces to hooks. After the fallback walk
+      above, if the final status code is still non-2xx — every
+      configured fallback also returned a retryable status, or we
+      hit an outright non-retryable 4xx — fire OnError(hsProviderCall)
+      so audit / metrics / alerting hooks can record it. Loop
+      continues so a downstream hook or the existing OnText path
+      gets a chance to surface the error to the embedder. (Codex P2
+      on PR #110 — these helpers existed but nothing called them.) }
+    if (Length(Cfg.Hooks) > 0) and
+       ((Resp.StatusCode > 0) and ((Resp.StatusCode < 200) or (Resp.StatusCode >= 300))) then
+      HooksOnError(Cfg.Hooks, hsProviderCall,
+                    Format('provider returned status=%d', [Resp.StatusCode]));
+
     { Stream the text part to the caller now so they can show progress. }
     if Assigned(Cfg.OnText) and (Resp.Content <> '') then
       Cfg.OnText(Resp.Content);
@@ -634,6 +647,15 @@ begin
           Cfg.OnToolResult(Dispatches[Batch[j]].Call.Func.Name,
                            Dispatches[Batch[j]].ResultText,
                            Dispatches[Batch[j]].Err);
+        { Tool failure surfaces to hooks. Fires whether the handler
+          raised (worker caught it into Err) or PreflightToolCall
+          rejected the args. Hooks see Stage = hsDuringToolCall.
+          (Codex P2 on PR #110.) }
+        if (Length(Cfg.Hooks) > 0) and (Dispatches[Batch[j]].Err <> '') then
+          HooksOnError(Cfg.Hooks, hsDuringToolCall,
+                        Format('tool "%s": %s',
+                               [Dispatches[Batch[j]].Call.Func.Name,
+                                Dispatches[Batch[j]].Err]));
         SetLength(Hist, Length(Hist) + 1);
         if Dispatches[Batch[j]].Err <> '' then
           Hist[High(Hist)] := MakeToolResult(Dispatches[Batch[j]].Call.Id,
@@ -643,15 +665,35 @@ begin
                                               Dispatches[Batch[j]].ResultText);
       end;
 
-      { Phase 3: if any hook contributed a steering note, append one
-        consolidated system-role message so the next iteration's LLM
-        round-trip sees it. Picoclaw's steering pattern — lets the
-        embedder inject "based on the file you just read, also check X"
-        without restructuring the loop. }
+      { Phase 3: if any hook contributed a steering note, fold it
+        into LiveOptions.SystemPrompt so the next iteration's LLM
+        round-trip sees it.
+
+        WHY THE SYSTEM PROMPT, NOT mrSystem IN HISTORY:
+          The PasClaw.Providers.OpenAI / Anthropic / Gemini builders
+          explicitly DROP in-history mrSystem entries whenever the
+          ChatOptions.SystemPrompt slot is non-empty — they ship one
+          consolidated system prompt via that slot, not via the
+          messages array, so an mrSystem appended to Hist gets
+          silently dropped on the next provider call. TPasClawAgent.
+          ChatHistory always populates Cfg.Options.SystemPrompt via
+          BuildSystemPrompt, so the default component path always
+          hits this case. Routing steering through SystemPrompt
+          keeps it visible on every provider. (Codex P1 on PR #110.)
+
+          Side effect: steering accumulates across iterations, which
+          is the picoclaw semantic — each new tool result can add
+          context that the model carries through to the end of the
+          loop. If an embedder wants ephemeral per-batch steering
+          they can reset SystemPrompt in BeforeTurn. }
       if BatchSteering <> '' then
       begin
-        SetLength(Hist, Length(Hist) + 1);
-        Hist[High(Hist)] := MakeMessage(mrSystem, BatchSteering);
+        if LiveOptions.SystemPrompt <> '' then
+          LiveOptions.SystemPrompt := LiveOptions.SystemPrompt
+                                      + sLineBreak + sLineBreak
+                                      + BatchSteering
+        else
+          LiveOptions.SystemPrompt := BatchSteering;
       end;
     end;
   end;
