@@ -92,7 +92,8 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Providers.Types,
-  PasClaw.Tools.ToolLoop;
+  PasClaw.Tools.ToolLoop,
+  PasClaw.Identity;
 
 type
   (* PR #86 Codex P2: RunToolLoop inside OnPrivateMessage blocks
@@ -209,6 +210,14 @@ begin
     if FClient <> nil then
       FClient.Say(ReplyTarget,
                    SenderNick + ': (no provider configured — run `pasclaw onboard`)');
+    Exit;
+  end;
+
+  LoopCfg.Identity := MakeIdentity('irc', SenderNick, SenderNick, ReplyTarget);
+  if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
+  begin
+    LogInfo('irc: sender %s rejected by allow_senders',
+            [FormatIdentity(LoopCfg.Identity)]);
     Exit;
   end;
 

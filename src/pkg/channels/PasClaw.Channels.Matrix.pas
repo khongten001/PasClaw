@@ -94,7 +94,8 @@ uses
   PasClaw.Logger,
   PasClaw.Providers.HTTP,
   PasClaw.Providers.Types,
-  PasClaw.Tools.ToolLoop;
+  PasClaw.Tools.ToolLoop,
+  PasClaw.Identity;
 
 const
   SYNC_TIMEOUT_MS = 30000;
@@ -377,6 +378,14 @@ begin
   if FProvider = nil then
   begin
     PostSend(RoomId, '(no provider configured — run `pasclaw onboard`)');
+    Exit;
+  end;
+
+  LoopCfg.Identity := MakeIdentity('matrix', Sender, '', RoomId);
+  if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
+  begin
+    LogInfo('matrix: sender %s rejected by allow_senders',
+            [FormatIdentity(LoopCfg.Identity)]);
     Exit;
   end;
 

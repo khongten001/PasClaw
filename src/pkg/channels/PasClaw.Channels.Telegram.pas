@@ -48,7 +48,8 @@ uses
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Providers.HTTP,
-  PasClaw.Tools.ToolLoop;
+  PasClaw.Tools.ToolLoop,
+  PasClaw.Identity;
 
 constructor TTelegramChannel.Create(const Token: string; Cfg: TConfig;
                                     Provider: ILLMProvider; Registry: TToolRegistry);
@@ -112,8 +113,8 @@ end;
 
 procedure TTelegramChannel.ProcessUpdate(const UpdateJSON: string);
 var
-  Obj, Msg, Chat: TJsonObject;
-  Text: string;
+  Obj, Msg, Chat, From: TJsonObject;
+  Text, FromId, FromName: string;
   ChatId, UpdateId: Int64;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
@@ -134,6 +135,24 @@ begin
       finally
         Chat.Free;
       end;
+      { Sender identity for allow_senders gating. In group chats
+        message.chat.id is the GROUP, not the user — using it as the
+        canonical id would let every group member through a single
+        allowlist entry. message.from.id is the actual sender;
+        chat.id rides along as RoomId so a hook can still filter
+        by room when it wants to. Codex P1 on PR #119. }
+      FromId   := '';
+      FromName := '';
+      From := Msg.ChildObject('from');
+      if From <> nil then
+      try
+        FromId   := IntToStr(From.GetInt('id', 0));
+        if FromId = '0' then FromId := '';
+        FromName := From.GetStr('username', '');
+        if FromName = '' then FromName := From.GetStr('first_name', '');
+      finally
+        From.Free;
+      end;
       Text := Msg.GetStr('text', '');
       if Text = '' then Exit;
     finally
@@ -143,11 +162,19 @@ begin
     Obj.Free;
   end;
 
-  LogInfo('telegram: chat=%d msg=%s', [ChatId, Copy(Text, 1, 80)]);
+  LogInfo('telegram: chat=%d from=%s msg=%s', [ChatId, FromId, Copy(Text, 1, 80)]);
 
   if FProvider = nil then
   begin
     SendMessage(ChatId, '(no provider configured — run `pasclaw onboard`)');
+    Exit;
+  end;
+
+  LoopCfg.Identity := MakeIdentity('telegram', FromId, FromName, IntToStr(ChatId));
+  if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
+  begin
+    LogInfo('telegram: sender %s rejected by allow_senders',
+            [FormatIdentity(LoopCfg.Identity)]);
     Exit;
   end;
 

@@ -17,7 +17,8 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
   PasClaw.Agent.Compact,
-  PasClaw.Agent.Hooks;
+  PasClaw.Agent.Hooks,
+  PasClaw.Identity;
 
 type
   TToolLoopConfig = record
@@ -68,6 +69,18 @@ type
        events have. RunToolLoop doesn't own the hooks; caller
        lifetime applies. *)
     Hooks:          TPasClawHookArray;
+    (* Canonical sender identity for the turn. Channels populate this
+       from the inbound payload (Slack user id, Matrix MXID, Telegram
+       message.from.id, email From, etc.); the CLI sets cli:<$USER>.
+       Default zero record means "unknown / not propagated" —
+       surfaces as '(unknown)' in logs. The allowlist gate
+       (PasClaw.Identity.IsAllowedSender) runs at the CHANNEL
+       boundary BEFORE RunToolLoop; by the time the loop is called,
+       the operator has already approved this sender. RunToolLoop
+       copies Identity onto every registered TPasClawHook before
+       dispatching so hook subclasses can read `Self.Identity` to
+       gate per-tool / per-turn behaviour. *)
+    Identity:       TIdentity;
   end;
 
   TToolLoopResult = record
@@ -482,6 +495,14 @@ begin
 
   if Cfg.Provider = nil then Exit(False);
 
+  { Annotate the log stream once per turn with the canonical sender
+    id (picoclaw parity — pkg/identity). Hooks and post-hoc audit
+    tooling can grep for `identity=` to attribute actions. Empty
+    canonical id means CLI / cron / embedder use without a
+    populated TIdentity — we skip the log line to keep noise low. }
+  if CanonicalOf(Cfg.Identity) <> '' then
+    LogDebug('toolloop start identity=%s', [FormatIdentity(Cfg.Identity)]);
+
   { Copy input messages to a growable history. }
   SetLength(Hist, Length(Messages));
   for i := 0 to High(Messages) do Hist[i] := Messages[i];
@@ -498,6 +519,16 @@ begin
     SetLength(Tools, 0);
 
   Iter := 0;
+  { Stamp the per-turn identity onto every registered hook so
+    override implementations can read `Self.Identity` from any of
+    the BeforeTurn / BeforeToolCall / AfterToolResult / OnError
+    virtuals — the alternative (threading TIdentity through every
+    hook signature) would break every existing TPasClawHook
+    subclass. Codex P2 on PR #119. Identity is per-loop, not
+    per-iteration, so set once before the loop. }
+  for i := 0 to High(Cfg.Hooks) do
+    if Cfg.Hooks[i] <> nil then
+      Cfg.Hooks[i].Identity := Cfg.Identity;
   while Iter < Cfg.MaxIterations do
   begin
     Inc(Iter);

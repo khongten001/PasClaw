@@ -135,6 +135,7 @@ uses
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
+  PasClaw.Identity,
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.WebUI;
 
@@ -991,6 +992,12 @@ begin
   LoopCfg.Options       := DefaultChatOptions;
   ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
   LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
+  { No HTTP-header-derived identity yet — the gateway terminates an
+    unauthenticated TCP socket, so any header value would be
+    client-asserted and unsafe to gate on. Stamp 'gateway:anon' so
+    downstream hooks/logs see SOMETHING; tightening this is a
+    follow-up alongside gateway auth. }
+  LoopCfg.Identity      := MakeIdentity('gateway', 'anon');
   LoopCfg.OnText        := nil;
   LoopCfg.OnToolCall    := nil;
   LoopCfg.OnToolResult  := nil;
@@ -1520,6 +1527,7 @@ begin
     LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
     LoopCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
+    LoopCfg.Identity      := MakeIdentity('gateway', 'anon');
     { Inject the composed PasClaw system prompt — but only if the client
       didn't already supply one of their own. Third-party tooling calling
       /v1/chat/completions with its own persona/system message should win;
@@ -3012,6 +3020,7 @@ begin
       LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
       LoopCfg.Options       := DefaultChatOptions;
       ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
+      LoopCfg.Identity      := MakeIdentity('gateway', 'anon');
       if not HasSystemMessage(Msgs) then
         LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
       RawTemp := Req.GetFloat('temperature', 0);

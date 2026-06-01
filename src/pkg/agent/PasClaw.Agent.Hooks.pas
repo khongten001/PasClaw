@@ -57,7 +57,8 @@ interface
 
 uses
   SysUtils,
-  PasClaw.Providers.Types;
+  PasClaw.Providers.Types,
+  PasClaw.Identity;
 
 type
   { Stage discriminator for the OnError hook. The agent loop reports
@@ -76,6 +77,15 @@ type
     on the main thread, in hook-registration order. }
   TPasClawHook = class
   public
+    (* Per-turn sender identity. RunToolLoop writes this on every
+       hook in the chain before dispatching any virtual, so override
+       implementations can read `Self.Identity` to gate by user
+       (an approval hook that lets `slack:U-admin` through but
+       prompts for confirmation on everyone else, an audit hook that
+       tags log lines with the canonical id, etc.). Empty record =
+       no identity propagated (CLI / cron / embedder paths that
+       didn't set TToolLoopConfig.Identity). Codex P2 on PR #119. *)
+    Identity: TIdentity;
     { Fired once per iteration of the agent loop, BEFORE the LLM
       Chat call. Implementers can inspect or mutate Messages in
       place (the loop hands a `var TMessageArray` so a hook can

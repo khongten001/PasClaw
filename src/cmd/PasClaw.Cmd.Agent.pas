@@ -37,7 +37,8 @@ uses
   PasClaw.Agent.Prompt,
   PasClaw.Agent.Subagent,
   PasClaw.Session.Store,
-  PasClaw.Tools.Sandbox;
+  PasClaw.Tools.Sandbox,
+  PasClaw.Identity;
 
 type
   TAgentArgs = record
@@ -212,6 +213,12 @@ begin
     RunSingleTurn leaves it empty since one-shots aren't worth
     keying. }
   ApplyPromptCacheConfig(Result.Options, Cfg.PromptCache);
+  { Identity for the CLI path. $USER on POSIX, %USERNAME% on Windows;
+    falls back to 'local' so the canonical id is never empty. Channels
+    + gateway override this with their platform-specific sender. }
+  Result.Identity := MakeIdentity('cli',
+    GetEnvironmentVariable({$IFDEF MSWINDOWS}'USERNAME'{$ELSE}'USER'{$ENDIF}));
+  if Result.Identity.UserId = '' then Result.Identity.UserId := 'local';
   Result.OnText        := nil;
   Result.OnToolCall    := Handlers.OnToolCall;
   Result.OnToolResult  := Handlers.OnToolResult;
