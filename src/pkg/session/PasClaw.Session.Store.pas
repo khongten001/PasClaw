@@ -86,7 +86,15 @@ type
   end;
 
 function NewSessionId: string;
+{ True when Id is a safe filename component for a session file — see
+  IsSafeSessionId in the implementation for the exact rules. Exposed
+  so CLI callers (cmd/session, cmd/agent) can surface a clear error
+  before invoking Save/Load/Delete with a hostile id. }
+function IsSafeSessionId(const Id: string): Boolean;
 function SessionsDir: string;
+{ Returns '' when Id fails IsSafeSessionId, otherwise the absolute
+  path of the session file. Callers MUST handle the empty-string
+  case (treat as "no session named X"). }
 function SessionPath(const Id: string): string;
 function ListSessions: TSessionMetaArray;
 function DeleteSession(const Id: string): Boolean;
@@ -118,6 +126,35 @@ begin
   Result := Stamp + '-' + LowerCase(Rand);
 end;
 
+{ A session id becomes a filename under workspace/sessions/, so we
+  refuse anything that could escape the directory (`..`, `/`, `\`,
+  NULs, leading `.`) or surprise the FS (overlong names). Allowed
+  charset is the superset of NewSessionId's output plus the things a
+  human is likely to want for hand-picked ids (`-`, `_`, `.` mid-name)
+  — Codex P1 on PR #117. Keep this strict; widening the charset
+  later is easy, narrowing it after files exist on disk is not. }
+function IsSafeSessionId(const Id: string): Boolean;
+var
+  i: Integer;
+  C: Char;
+begin
+  Result := False;
+  if Id = '' then Exit;
+  if Length(Id) > 128 then Exit;
+  if (Id = '.') or (Id = '..') then Exit;
+  if Id[1] = '.' then Exit;
+  for i := 1 to Length(Id) do
+  begin
+    C := Id[i];
+    if not (((C >= 'a') and (C <= 'z'))
+         or ((C >= 'A') and (C <= 'Z'))
+         or ((C >= '0') and (C <= '9'))
+         or (C = '-') or (C = '_') or (C = '.')) then
+      Exit;
+  end;
+  Result := True;
+end;
+
 function SessionsDir: string;
 begin
   Result := JoinPath(GetHome, 'workspace/sessions');
@@ -125,6 +162,7 @@ end;
 
 function SessionPath(const Id: string): string;
 begin
+  if not IsSafeSessionId(Id) then Exit('');
   Result := JoinPath(SessionsDir, Id + '.json');
 end;
 
@@ -244,7 +282,11 @@ var
   Arr: TJsonArray;
   i: Integer;
   S: TStringList;
+  Path, TmpPath: string;
 begin
+  Path := SessionPath(Meta.Id);
+  if Path = '' then
+    raise EArgumentException.CreateFmt('Session.Save: unsafe id %s', [Meta.Id]);
   EnsureSessionsDir;
   Root := TJsonObject.Create;
   try
@@ -266,14 +308,29 @@ begin
     end;
     Root.PutArray('messages', Arr);
 
+    { Atomic write: tmp file + rename. A crash partway through
+      SaveToFile would otherwise leave a half-written JSON that Load
+      can't parse, defeating the "your conversation survives Ctrl-C"
+      promise. POSIX rename(2) is atomic and overwrites; Windows
+      MoveFile requires the destination not exist — delete first.
+      Codex P2 on PR #117. }
+    TmpPath := Path + '.tmp';
     S := TStringList.Create;
     try
       S.Text := Root.ToJSON;
-      S.SaveToFile(SessionPath(Meta.Id));
-      FExists := True;
+      S.SaveToFile(TmpPath);
     finally
       S.Free;
     end;
+    {$IFDEF MSWINDOWS}
+    if FileExists(Path) then SysUtils.DeleteFile(Path);
+    {$ENDIF}
+    if not RenameFile(TmpPath, Path) then
+    begin
+      SysUtils.DeleteFile(TmpPath);
+      raise Exception.CreateFmt('Session.Save: rename %s -> %s failed', [TmpPath, Path]);
+    end;
+    FExists := True;
   finally
     Root.Free;
   end;
@@ -292,6 +349,7 @@ begin
   Meta := Default(TSessionMeta);
   Meta.Id := AId;
   Path := SessionPath(AId);
+  if Path = '' then Exit;          { unsafe id — treat as not found }
   if not FileExists(Path) then Exit;
 
   S := TStringList.Create;
@@ -371,8 +429,7 @@ end;
 function ListSessions: TSessionMetaArray;
 var
   SR: TSearchRec;
-  Pattern: string;
-  Found: Integer;
+  Pattern, Id: string;
   TmpSess: TSession;
 begin
   SetLength(Result, 0);
@@ -381,15 +438,22 @@ begin
   try
     repeat
       if (SR.Attr and faDirectory) <> 0 then Continue;
-      Found := Length(Result);
-      SetLength(Result, Found + 1);
+      Id := ChangeFileExt(SR.Name, '');
+      { Skip stray files (.tmp leftovers from a crashed Save, or
+        anything a human dropped in here) — only ids that round-trip
+        through IsSafeSessionId are real sessions. }
+      if not IsSafeSessionId(Id) then Continue;
       { Load only the meta; this is wasteful but the sessions tree is
         typically small (10s to low 100s) and ListSessions runs from
         an interactive command. If it grows: write a "headers only"
         Load. }
-      TmpSess := TSession.Create(ChangeFileExt(SR.Name, ''));
+      TmpSess := TSession.Create(Id);
       try
-        Result[Found] := TmpSess.Meta;
+        if TmpSess.MetaExists then
+        begin
+          SetLength(Result, Length(Result) + 1);
+          Result[High(Result)] := TmpSess.Meta;
+        end;
       finally
         TmpSess.Free;
       end;
@@ -403,8 +467,11 @@ function DeleteSession(const Id: string): Boolean;
 var
   Path: string;
 begin
+  Result := False;
   Path := SessionPath(Id);
-  Result := FileExists(Path) and DeleteFile(Path);
+  if Path = '' then Exit;                 { unsafe id }
+  if not FileExists(Path) then Exit;
+  Result := DeleteFile(Path);
   if Result then
     LogInfo('session %s deleted', [Id]);
 end;

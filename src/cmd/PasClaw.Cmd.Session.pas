@@ -139,7 +139,7 @@ var
   S: TStringList;
 begin
   Path := SessionPath(Id);
-  if not FileExists(Path) then
+  if (Path = '') or (not FileExists(Path)) then
   begin
     WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'no session named ', Id);
     Exit(1);
