@@ -1,0 +1,42 @@
+# Keep the docker build context lean. The builder stage runs `make` which
+# rebuilds everything from source, so prebuilt artifacts and IDE state on
+# the host are pure noise.
+
+# Build outputs — the runtime stage gets a fresh binary from the builder.
+build/
+**/build/
+*.o
+*.ppu
+*.dcu
+
+# Indy is fetched fresh inside the builder via `make get-indy` so we don't
+# ship our local clone (gitignored anyway, but defensive).
+vendor/Indy/
+
+# Git metadata — not needed for the build.
+.git/
+.github/
+
+# Editor / OS scratch.
+*.swp
+*.swo
+*.bak
+.DS_Store
+Thumbs.db
+
+# IDE state.
+*.dproj.local
+*.identcache
+*.local
+__history/
+__recovery/
+
+# Samples + tests aren't needed for the production image. The component
+# samples have their own Makefiles and pull from src/; we don't want
+# `make` to descend into them.
+samples/**/build/
+
+# Anything dropped under docker/vendor/ is a generated cache (.deb files,
+# extracted .so files); the Dockerfile pulls them at build time so we
+# don't need them in context.
+docker/vendor/
