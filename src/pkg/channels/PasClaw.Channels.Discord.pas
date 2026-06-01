@@ -68,7 +68,8 @@ uses
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Providers.HTTP,
-  PasClaw.Tools.ToolLoop;
+  PasClaw.Tools.ToolLoop,
+  PasClaw.Identity;
 
 (* ---- Webhook ---- *)
 
@@ -192,7 +193,7 @@ var
   Arr: TJsonArray;
   Msg, Author: TJsonObject;
   i: Integer;
-  Content, Id, NewestId: string;
+  Content, Id, NewestId, AuthorId, AuthorName: string;
   IsBot: Boolean;
   Msgs: array of TMessage;
   Loop: TToolLoopResult;
@@ -212,9 +213,13 @@ begin
         Content := Msg.GetStr('content', '');
         Author  := Msg.ChildObject('author');
         IsBot   := False;
+        AuthorId   := '';
+        AuthorName := '';
         if Author <> nil then
         begin
-          IsBot := Author.GetBool('bot', False);
+          IsBot      := Author.GetBool('bot',     False);
+          AuthorId   := Author.GetStr ('id',      '');
+          AuthorName := Author.GetStr ('username', '');
           Author.Free;
         end;
         if NewestId = '' then NewestId := Id;
@@ -225,6 +230,14 @@ begin
         if FProvider = nil then
         begin
           PostMessage('(no provider configured)');
+          Continue;
+        end;
+
+        LoopCfg.Identity := MakeIdentity('discord', AuthorId, AuthorName, FChannel);
+        if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
+        begin
+          LogInfo('discord: sender %s rejected by allow_senders',
+                  [FormatIdentity(LoopCfg.Identity)]);
           Continue;
         end;
 

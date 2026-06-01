@@ -80,7 +80,8 @@ uses
   PasClaw.Providers.HTTP,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
-  PasClaw.Crypto.HMAC;
+  PasClaw.Crypto.HMAC,
+  PasClaw.Identity;
 
 type
   (* One-shot worker that calls TLineBot.ProcessEvent off the Indy
@@ -275,6 +276,14 @@ begin
     Response := '(no provider configured — run `pasclaw onboard`)';
     if not Reply(ReplyToken, Response) and (SourceId <> '') then
       FPush.Push(SourceId, Response);
+    Exit;
+  end;
+
+  LoopCfg.Identity := MakeIdentity('line', SourceId);
+  if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
+  begin
+    LogInfo('line: sender %s rejected by allow_senders',
+            [FormatIdentity(LoopCfg.Identity)]);
     Exit;
   end;
 

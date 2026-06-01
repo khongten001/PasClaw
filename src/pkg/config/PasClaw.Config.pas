@@ -222,6 +222,13 @@ type
     Subagents:  TSubagentSpecArray;  { see comment on the type alias }
     WebSearch:  TWebSearchConfig;
     PromptCache: TPromptCacheConfig;
+    (* Sender allowlist — canonical PasClaw.Identity strings or
+       wildcards ("slack:U123", "telegram:*", "*"). Channels call
+       PasClaw.Identity.IsAllowedSender(Identity, AllowSenders)
+       before invoking the agent; empty array = no gate (matches
+       picoclaw's pkg/channels/base.go IsAllowedSender semantics).
+       Configure via "allow_senders": [...] in config.json. *)
+    AllowSenders: array of string;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -407,6 +414,13 @@ begin
       Root.PutObject('prompt_cache', Tmp);
     end;
 
+    if Length(AllowSenders) > 0 then
+    begin
+      Arr := TJsonArray.Create;
+      for i := 0 to High(AllowSenders) do Arr.AddStr(AllowSenders[i]);
+      Root.PutArray('allow_senders', Arr);
+    end;
+
     Arr := TJsonArray.Create;
     for i := 0 to High(Providers) do
     begin
@@ -545,6 +559,15 @@ begin
       PromptCache.TTL     := Obj.GetStr ('ttl',     PromptCache.TTL);
     finally
       Obj.Free;
+    end;
+
+    Arr := Root.ChildArray('allow_senders');
+    if Arr <> nil then
+    try
+      SetLength(AllowSenders, Arr.Count);
+      for i := 0 to Arr.Count - 1 do AllowSenders[i] := Arr.ItemStr(i, '');
+    finally
+      Arr.Free;
     end;
 
     Arr := Root.ChildArray('providers');

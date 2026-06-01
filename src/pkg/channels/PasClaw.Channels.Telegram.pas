@@ -48,7 +48,8 @@ uses
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Providers.HTTP,
-  PasClaw.Tools.ToolLoop;
+  PasClaw.Tools.ToolLoop,
+  PasClaw.Identity;
 
 constructor TTelegramChannel.Create(const Token: string; Cfg: TConfig;
                                     Provider: ILLMProvider; Registry: TToolRegistry);
@@ -148,6 +149,14 @@ begin
   if FProvider = nil then
   begin
     SendMessage(ChatId, '(no provider configured — run `pasclaw onboard`)');
+    Exit;
+  end;
+
+  LoopCfg.Identity := MakeIdentity('telegram', IntToStr(ChatId));
+  if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
+  begin
+    LogInfo('telegram: sender %s rejected by allow_senders',
+            [FormatIdentity(LoopCfg.Identity)]);
     Exit;
   end;
 

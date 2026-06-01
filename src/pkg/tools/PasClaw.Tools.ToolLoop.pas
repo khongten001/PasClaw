@@ -17,7 +17,8 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
   PasClaw.Agent.Compact,
-  PasClaw.Agent.Hooks;
+  PasClaw.Agent.Hooks,
+  PasClaw.Identity;
 
 type
   TToolLoopConfig = record
@@ -68,6 +69,16 @@ type
        events have. RunToolLoop doesn't own the hooks; caller
        lifetime applies. *)
     Hooks:          TPasClawHookArray;
+    (* Canonical sender identity for the turn. Channels populate this
+       from the inbound payload (Slack user id, Matrix MXID, Telegram
+       chat id, email From, etc.); the CLI sets cli:<$USER>. Default
+       zero record means "unknown / not propagated" — same as
+       picoclaw's empty CanonicalID, surfaces as '(unknown)' in logs.
+       Hooks read Cfg.Identity to gate behaviour by sender. The
+       allowlist check (PasClaw.Identity.IsAllowedSender) is run by
+       the channel BEFORE RunToolLoop — by the time the loop is
+       called, the operator has already approved this sender. *)
+    Identity:       TIdentity;
   end;
 
   TToolLoopResult = record
@@ -481,6 +492,14 @@ begin
   Loop.TotalUsage := Default(TUsageInfo);
 
   if Cfg.Provider = nil then Exit(False);
+
+  { Annotate the log stream once per turn with the canonical sender
+    id (picoclaw parity — pkg/identity). Hooks and post-hoc audit
+    tooling can grep for `identity=` to attribute actions. Empty
+    canonical id means CLI / cron / embedder use without a
+    populated TIdentity — we skip the log line to keep noise low. }
+  if CanonicalOf(Cfg.Identity) <> '' then
+    LogDebug('toolloop start identity=%s', [FormatIdentity(Cfg.Identity)]);
 
   { Copy input messages to a growable history. }
   SetLength(Hist, Length(Messages));

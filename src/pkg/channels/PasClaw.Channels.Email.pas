@@ -107,7 +107,8 @@ uses
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Providers.Factory,
-  PasClaw.Tools.ToolLoop;
+  PasClaw.Tools.ToolLoop,
+  PasClaw.Identity;
 
 const
   { Per-operation IMAP / SMTP timeout. Bounds how long a single
@@ -392,6 +393,14 @@ begin
 
             { Run through the agent loop. }
             SetLength(RToolMsgs, 1);
+            LoopCfg.Identity := MakeIdentity('email', FromAddr);
+            if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
+            begin
+              LogInfo('email: sender %s rejected by allow_senders',
+                      [FormatIdentity(LoopCfg.Identity)]);
+              Continue;
+            end;
+
             RToolMsgs[0] := MakeMessage(mrUser, BodyText);
             LoopCfg.Provider      := FProvider;
             LoopCfg.Registry      := FRegistry;

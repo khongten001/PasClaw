@@ -112,6 +112,7 @@ UNIT_DIRS = \
 	src/pkg/cron \
 	src/pkg/skills \
 	src/pkg/session \
+	src/pkg/identity \
 	src/pkg/agent \
 	src/pkg/memory \
 	src/pkg/updater \

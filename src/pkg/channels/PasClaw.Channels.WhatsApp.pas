@@ -100,7 +100,8 @@ uses
   PasClaw.Providers.HTTP,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
-  PasClaw.Crypto.HMAC;
+  PasClaw.Crypto.HMAC,
+  PasClaw.Identity;
 
 type
   (* One-shot worker that calls TWhatsAppBot.ProcessMessage off the Indy
@@ -300,6 +301,14 @@ begin
   begin
     FPush.Push(FromNumber,
                '(no provider configured — run `pasclaw onboard`)');
+    Exit;
+  end;
+
+  LoopCfg.Identity := MakeIdentity('whatsapp', FromNumber);
+  if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
+  begin
+    LogInfo('whatsapp: sender %s rejected by allow_senders',
+            [FormatIdentity(LoopCfg.Identity)]);
     Exit;
   end;
 
