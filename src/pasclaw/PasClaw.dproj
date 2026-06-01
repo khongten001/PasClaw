@@ -70,7 +70,7 @@
         <Manifest_File>None</Manifest_File>
         <DCC_UsePackage>$(DCC_UsePackage)</DCC_UsePackage>
         <!-- Every src/pkg/* directory + src/cmd, relative to src/pasclaw/ -->
-        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\agent;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\vendor\dmvcframework;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\session;..\pkg\agent;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\vendor\dmvcframework;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <!--
           DCC_Namespace lets dcc32/dcc64 resolve bare unit names ("SysUtils",
           "Classes", "Windows") back to their fully qualified modern names
@@ -126,6 +126,7 @@
         <DCCReference Include="..\cmd\PasClaw.Cmd.MCP.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Migrate.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Skills.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Session.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Model.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Config_.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Update.pas"/>
@@ -230,6 +231,9 @@
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.Zip.pas"/>
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.GitHub.pas"/>
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.ClawHub.pas"/>
+
+        <!-- pkg/session -->
+        <DCCReference Include="..\pkg\session\PasClaw.Session.Store.pas"/>
 
         <!-- pkg/agent -->
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Prompt.pas"/>

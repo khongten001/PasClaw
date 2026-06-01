@@ -98,6 +98,7 @@ UNIT_DIRS = \
 	$(ROOT)/src/pkg/search \
 	$(ROOT)/src/pkg/cron \
 	$(ROOT)/src/pkg/skills \
+	$(ROOT)/src/pkg/session \
 	$(ROOT)/src/pkg/agent \
 	$(ROOT)/src/pkg/memory \
 	$(ROOT)/src/pkg/updater \

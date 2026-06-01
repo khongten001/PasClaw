@@ -36,6 +36,7 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
   PasClaw.Agent.Subagent,
+  PasClaw.Session.Store,
   PasClaw.Tools.Sandbox;
 
 type
@@ -50,6 +51,15 @@ type
     NoTools:       Boolean;
     NoMCP:         Boolean;
     NoHashline:    Boolean;
+    { Session id to resume. Empty (the default) = interactive mode
+      auto-allocates a fresh id and persists from turn 1, so a Ctrl-C
+      / crash never drops the conversation. Non-empty AND existing on
+      disk = load history + system-prompt override from
+      workspace/sessions/<id>.json. Non-empty AND missing on disk =
+      create that session id with empty history (so a script can
+      pre-seed an id like "daily-2026-06-01"). RunSingleTurn (one-shot
+      -m) ignores this — single turns aren't worth persisting. }
+    Session:       string;
   end;
 
   TLoopHandlers = class
@@ -113,6 +123,7 @@ begin
     if Argv[i] = '--no-tools'    then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--session'     then begin if i = High(Argv) then Exit(False); A.Session := Argv[i + 1]; Inc(i, 2); Continue; end;
     Inc(i);
   end;
 end;
@@ -283,8 +294,25 @@ var
   ThinkingOn: Boolean;             { toggled by /think; cleared each turn after sending }
   CompactOptsLocal: TCompactOptions;
   CompactedLiveOpts: TChatOptions;
+  Session: TSession;               { always non-nil in interactive mode }
+
+  procedure PersistSession;
+  var j: Integer;
+  begin
+    if Session = nil then Exit;
+    SetLength(Session.Messages, Length(Msgs));
+    for j := 0 to High(Msgs) do Session.Messages[j] := Msgs[j];
+    Session.Meta.SystemPromptOverride := SystemPromptOverride;
+    Session.Meta.Model := Model;
+    if Provider <> nil then Session.Meta.Provider := Provider.GetName;
+    Session.AutoTitle;
+    Session.Touch;
+    Session.Save;
+  end;
+
 begin
   SystemPromptOverride := '';
+  Session := nil;
   Offline := not PickProvider(Cfg, A, Provider, Err);
   if Offline then
     WriteLn(Ansi.Yellow, '(offline preview — ', Err, ')', Ansi.Reset);
@@ -299,6 +327,26 @@ begin
   try
     SetLength(Msgs, 0);
     ThinkingOn := False;
+
+    { Persistence is on by default in interactive mode — a passed
+      --session resumes that id (or starts fresh under it when the
+      file doesn't exist), an empty --session auto-allocates a new
+      id so the conversation survives Ctrl-C / crash regardless.
+      Codex P1 on PR #117: making this opt-in defeated the whole
+      "history survives restarts" point. }
+    Session := TSession.Create(A.Session);
+    if Session.MetaExists then
+    begin
+      SetLength(Msgs, Length(Session.Messages));
+      for i := 0 to High(Session.Messages) do Msgs[i] := Session.Messages[i];
+      SystemPromptOverride := Session.Meta.SystemPromptOverride;
+      WriteLn(Ansi.Dim, '(resumed session ', Session.Meta.Id,
+              ' — ', Length(Msgs), ' messages)', Ansi.Reset);
+    end
+    else
+      WriteLn(Ansi.Dim, '(new session ', Session.Meta.Id,
+              ' — pasclaw resume ', Session.Meta.Id, ' to continue later)', Ansi.Reset);
+
     while True do
     begin
       Write(Ansi.Bold, '> ', Ansi.Reset);
@@ -310,7 +358,21 @@ begin
       begin
         SetLength(Msgs, 0);
         SystemPromptOverride := '';   { drop the compacted summary too }
-        WriteLn(Ansi.Dim, '(history cleared)', Ansi.Reset);
+        { /new starts a brand-new session id so the existing one
+          stays on disk for resume; /reset keeps the current session
+          but clears its messages in place. Distinction matches
+          openclaw and nanobot semantics. }
+        if Line = '/new' then
+        begin
+          Session.Free;
+          Session := TSession.Create('');   { fresh id }
+          WriteLn(Ansi.Dim, '(new session ', Session.Meta.Id, ')', Ansi.Reset);
+        end
+        else
+        begin
+          PersistSession;   { writes empty Msgs + cleared override }
+          WriteLn(Ansi.Dim, '(history cleared)', Ansi.Reset);
+        end;
         Continue;
       end;
       if Line = '/tools' then
@@ -393,6 +455,11 @@ begin
         Msgs := CompactMessages(Provider, Model, Msgs,
                                  CompactedLiveOpts, CompactOptsLocal);
         SystemPromptOverride := CompactedLiveOpts.SystemPrompt;
+        { Persist the compacted state immediately — otherwise a
+          /quit or Ctrl-C before the next LLM turn loses the
+          summary and resume replays the full transcript. Codex P2
+          on PR #117. }
+        PersistSession;
         WriteLn(Ansi.Dim, '(history compacted; summary folded into system prompt)', Ansi.Reset);
         Continue;
       end;
@@ -454,6 +521,11 @@ begin
           Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
         end;
         SystemPromptOverride := Loop.FinalSystemPrompt;
+
+        { Persist after every successful turn — crash / Ctrl-C in
+          the middle of the NEXT user prompt only loses what they
+          were typing, not the existing conversation. }
+        PersistSession;
       end;
     end;
   finally
@@ -461,6 +533,7 @@ begin
     FreeMCPClients(MCPClients);
     if Spawn <> nil then Spawn.Free;
     Reg.Free;
+    if Session <> nil then Session.Free;
   end;
 end;
 
