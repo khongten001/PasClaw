@@ -37,6 +37,24 @@ docker run --rm -p 8088:8088 \
 
 Provider API keys live in `config.json` under `providers[].api_key`. Alternatively set them via env on `docker run` and reference `${ENV_VAR}` from config — env vars take precedence when both are set.
 
+## Pinned port + bind
+
+The image's default `CMD` is `gateway --addr 0.0.0.0 --port 8088` — both flags matter:
+
+- `--addr 0.0.0.0` overrides PasClaw's default `127.0.0.1` bind, which inside a container would mean "container-loopback only" and Docker's `-p 8088:8088` mapping wouldn't actually reach the gateway.
+- `--port 8088` is explicit so `HEALTHCHECK`, `EXPOSE`, and the in-container gateway port stay in sync even if a mounted `config.json` sets `gateway.port` to something else (the CLI flag wins).
+
+If you want the container to listen on a different in-container port, override **both** `CMD` and `HEALTHCHECK`:
+
+```sh
+docker run --rm \
+  -p 9000:9000 \
+  --health-cmd 'curl -fsS http://localhost:9000/v1/models > /dev/null' \
+  pasclaw:dev gateway --addr 0.0.0.0 --port 9000
+```
+
+The simpler path is to keep the in-container port at 8088 and remap on the host (`-p 9000:8088`).
+
 ## Multi-arch builds
 
 The Dockerfile is `linux/amd64` + `linux/arm64` ready (the bundled-OpenSSL stage picks the right `.deb` by `$TARGETARCH`).

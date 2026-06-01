@@ -62,8 +62,17 @@ COPY . .
 
 # Vendor Indy + build. `make get-indy` clones IndySockets/Indy; `make`
 # produces build/pasclaw.
+#
+# LAZUTILS_DIR override: bookworm's lazarus-src is 2.2.6+dfsg2-2 and
+# installs to /usr/lib/lazarus/2.2.6/, but the Makefile defaults to
+# /usr/lib/lazarus/3.0/ (which is what some Ubuntu releases ship).
+# Without this override the `Masks` import in
+# src/pkg/tools/PasClaw.Tools.FS.pas fails to resolve. Codex P1 on
+# PR #121. When Debian trixie ships lazarus 3.x, bump this in lock-
+# step with DEBIAN_VERSION.
+ARG LAZUTILS_DIR=/usr/lib/lazarus/2.2.6/components/lazutils
 RUN make get-indy \
-    && make \
+    && make LAZUTILS_DIR="${LAZUTILS_DIR}" \
     && test -x build/pasclaw \
     && build/pasclaw version
 
@@ -154,12 +163,24 @@ RUN mkdir -p ${PASCLAW_HOME}/workspace
 EXPOSE 8088
 
 # Probe the gateway's model-listing endpoint — always returns 200 when
-# the gateway is up, even with no providers configured.
+# the gateway is up, even with no providers configured. The probe is
+# hardcoded to 8088 because the default CMD below pins the gateway to
+# the same port; users who override CMD to a different `--port N` must
+# either also rebuild with a matching port or override HEALTHCHECK at
+# `docker run --health-cmd ...`. (Codex P2 on PR #121.)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD curl -fsS http://localhost:8088/v1/models > /dev/null || exit 1
 
 # `pasclaw` is the only thing the image runs. Default subcommand is the
 # HTTP gateway; override with `docker run pasclaw <cmd>` to get agent /
 # serve / status / etc.
+#
+# `--addr 0.0.0.0` is mandatory inside the container: pasclaw's default
+# bind is 127.0.0.1 (sane for desktop CLI use), which inside a
+# container means "container loopback only" — Docker's published host
+# port couldn't reach it even though the in-container HEALTHCHECK
+# would still pass. Codex P1 on PR #121.
+# `--port 8088` is explicit so HEALTHCHECK and EXPOSE stay in sync
+# even when a mounted config.json sets gateway.port to something else.
 ENTRYPOINT ["pasclaw"]
-CMD ["gateway"]
+CMD ["gateway", "--addr", "0.0.0.0", "--port", "8088"]
