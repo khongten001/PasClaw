@@ -14,7 +14,38 @@ UNAME_S      := $(shell uname -s)
 UNAME_M      := $(shell uname -m)
 FPC_VERSION  ?= 3.2.2
 
-ifeq ($(UNAME_S),Darwin)
+# Cross-target override. Set CROSS_TARGET to one of:
+#
+#   aarch64-win64   Windows on ARM64 (Delphi 13 / FPC 3.2+ with the
+#                   aarch64-win64 cross-build installed). FPC switches
+#                   target via -Twin64 -Paarch64; unit search path
+#                   must point at the aarch64-win64 RTL fcl-db /
+#                   sqlite / iconvenc ppu files via FPC_UNITS_DIR.
+#                   Typical invocation:
+#                     make CROSS_TARGET=aarch64-win64 \
+#                          FPC_UNITS_DIR=/opt/fpc/units/aarch64-win64 \
+#                          FPC='fpc -Twin64 -Paarch64' \
+#                          BIN=build/pasclaw-arm64.exe
+#
+#   x86_64-win64    Windows x64 cross-compile. Set FPC='fpc -Twin64'
+#                   and the corresponding unit dir.
+#
+# When CROSS_TARGET is empty the host-target autodetection below
+# (Darwin / Linux × x86_64 / aarch64) wins, same as before.
+ifneq ($(CROSS_TARGET),)
+  FPC_ARCH ?= $(CROSS_TARGET)
+  # Unit directory layout for cross-targets isn't standardised; the
+  # caller knows where their cross-build's units live. Require
+  # FPC_UNITS_DIR explicitly so the Makefile doesn't blindly hand a
+  # wrong path to fpc.
+  ifndef FPC_UNITS_DIR
+    $(error CROSS_TARGET=$(CROSS_TARGET) requires FPC_UNITS_DIR pointing at the cross-build unit tree)
+  endif
+  # Lazarus's Masks unit (LAZUTILS_DIR) is platform-portable Pascal,
+  # so the host build's lazutils tree works for cross-builds. Empty
+  # disables the include.
+  LAZUTILS_DIR ?=
+else ifeq ($(UNAME_S),Darwin)
   # Homebrew FPC lays units under <prefix>/lib/fpc/<ver>/units/<arch>-darwin/.
   # Prefix is /opt/homebrew on Apple Silicon, /usr/local on Intel.
   ifeq ($(UNAME_M),arm64)

@@ -61,7 +61,9 @@ uses
 function HostPlatformSuffix: string;
 begin
   {$IF DEFINED(MSWINDOWS) OR DEFINED(WINDOWS)}
-    {$IF DEFINED(CPUX86_64) OR DEFINED(CPU_X64) OR DEFINED(CPU64)}
+    {$IF DEFINED(CPUAARCH64) OR DEFINED(CPU_ARM64)}
+      Result := 'windows_arm64.exe';
+    {$ELSEIF DEFINED(CPUX86_64) OR DEFINED(CPU_X64) OR DEFINED(CPU64)}
       Result := 'windows_amd64.exe';
     {$ELSE}
       Result := 'windows_386.exe';
