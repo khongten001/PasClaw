@@ -63,6 +63,17 @@ type
     function SupportsStreaming: Boolean;
   end;
 
+{ Exported for test fixtures — given a TLLMResponse-shaped input,
+  returns the JSON body that would be POSTed to generateContent.
+  Used by the Codex PR #116 review-fix test to assert SystemPrompt
+  / in-history mrSystem dedup without spinning up a real HTTPS
+  round-trip. Tools / ToolIds / ToolNames are normally constructed
+  inside the request flow; tests pass empty arrays. }
+function BuildRequest(const Messages: array of TMessage;
+                      const Tools:    array of TToolDefinition;
+                      const Model:    string;
+                      const Options:  TChatOptions): string;
+
 implementation
 
 uses
@@ -120,16 +131,28 @@ begin
   try
     Contents := TJsonArray.Create;
 
-    { First pass: collect every system prompt for systemInstruction. }
+    { First pass: collect system prompt for systemInstruction.
+
+      Precedence matches the OpenAI / Anthropic builders: when
+      Options.SystemPrompt is non-empty, that wins and in-history
+      mrSystem entries are skipped. When SystemPrompt is empty,
+      fold every in-history mrSystem into Sys. Earlier this
+      builder concatenated BOTH, which double-shipped the policy
+      when the ToolLoop's steering fold copied in-history
+      mrSystem into LiveOptions.SystemPrompt (the original entries
+      stay in Hist for ephemeral-reset recovery — see
+      CopyHistorySystem in PasClaw.Tools.ToolLoop). Codex P2 on
+      PR #116. }
     Sys := Options.SystemPrompt;
-    for i := 0 to High(Messages) do
-      if (Messages[i].Role = mrSystem) and (Trim(Messages[i].Content) <> '') then
-      begin
-        if Sys = '' then
-          Sys := Messages[i].Content
-        else
-          Sys := Sys + sLineBreak + Messages[i].Content;
-      end;
+    if Sys = '' then
+      for i := 0 to High(Messages) do
+        if (Messages[i].Role = mrSystem) and (Trim(Messages[i].Content) <> '') then
+        begin
+          if Sys = '' then
+            Sys := Messages[i].Content
+          else
+            Sys := Sys + sLineBreak + Messages[i].Content;
+        end;
 
     { Pre-scan assistant turns so tool-result messages can resolve a
       function name from their tool_call_id. Gemini's functionResponse
