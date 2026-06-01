@@ -55,6 +55,22 @@ Form-designable with published properties for the VCL/FMX path; code-driven OOP 
 
 **Interactive chat** — `pasclaw agent` and `pasclaw tui` ship slash commands: `/help` lists them; `/status` shows model + provider + message count + thinking state; `/new` and `/reset` clear history; `/compact` forces a summariser pass; `/think` toggles extended-thinking mode for the next turn (Anthropic Claude); `/tools` lists registered tools; `/quit` exits.
 
+**Subagents** — fan-out to focused specialists via a `spawn(agent, prompt)` tool. Declare them in `config.json`'s `subagents:` array (name + description + system prompt + tool allowlist + optional model / max-iterations override). Each spawn runs a short `RunToolLoop` against the parent's provider + fallback chain with a registry filtered to the named tools and a specialist system prompt; result lands back as the parent's `tool_result`. Implementation in `src/pkg/agent/PasClaw.Agent.Subagent.pas` — picoclaw's `SubTurn` pattern, nanobot's `subagent` module, openclaw's multi-agent routing, ~300 LOC.
+
+```json
+"subagents": [
+  { "name": "researcher",
+    "description": "Web search + summary specialist",
+    "system_prompt": "You search the web and produce a 3-bullet summary...",
+    "tools": ["web_search", "web_fetch"],
+    "max_iterations": 4 },
+  { "name": "coder",
+    "description": "Code editor",
+    "system_prompt": "You edit code precisely using hashline patches...",
+    "tools": ["fs_read", "fs_write", "fs_grep", "fs_edit_hashline"] }
+]
+```
+
 **Cross-platform** — Linux x86_64 + aarch64 under FPC 3.2+; macOS x86_64 + arm64 under FPC (Homebrew unit paths autodetected); Windows + Linux + macOS under Delphi 12 / RAD Studio. The Makefile probes `uname` and picks the right `fcl-db` / `sqlite` / `iconvenc` / `lazutils` paths automatically. Three sample binaries under `samples/component-console/` plus matching `.dproj` files for RAD Studio and `dcc32.cfg` / `dcc64.cfg` for cmdline Delphi builds.
 
 ## Requirements

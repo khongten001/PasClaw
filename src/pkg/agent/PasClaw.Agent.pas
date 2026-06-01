@@ -96,6 +96,19 @@ type
                                     the registry early without skipping
                                     the lazy built-in install on first
                                     Chat. }
+    FSubagentCtx: TSubagentContext;  { populated in EnsureRegistry when
+                                       FConfig.Subagents is non-empty;
+                                       captured by value into the TSpawnTool
+                                       instance so the tool can run a child
+                                       loop against the parent's provider
+                                       + fallbacks + registry. }
+    FSpawnTool:   TSpawnTool;         { borrowed reference into FOwnedTools.
+                                       Non-nil when EnsureRegistry installed
+                                       a spawn tool; lets RefreshSubagentContext
+                                       update the captured ctx when an
+                                       embedder swaps providers mid-session
+                                       (SetProvider after first Chat). Set
+                                       to nil in Destroy / not freed here. }
     FProviderOverride:    TProviderConfig;  { populated by SetProvider, then
                                               folded into FConfig.Providers
                                               when EnsureConfig runs (if before
@@ -109,6 +122,7 @@ type
     procedure EnsureConfig;
     procedure EnsureProvider;
     procedure EnsureRegistry;
+    procedure RefreshSubagentContext;
     procedure ForwardText      (const S: string);
     procedure ForwardToolCall  (const Name, ArgsJSON: string);
     procedure ForwardToolResult(const Name, ResultText, Err: string);
@@ -282,6 +296,7 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
+  PasClaw.Agent.Subagent,
   PasClaw.Tools.ToolLoop;
 
 { ------------------------------ helpers ------------------------------ }
@@ -446,6 +461,23 @@ begin
   RegisterSkills(FRegistry, Skills);
   if FUseMCP then
     FMCPClients := ConnectMCPServers(FConfig, FRegistry);
+  { Subagent spawn tool — installs only when the operator declared
+    subagents in config.json. Needs FProvider already resolved so
+    the spawn tool's context captures the live ILLMProvider; in
+    the ChatHistory path EnsureProvider runs before EnsureRegistry,
+    so by here FProvider is non-nil. }
+  if (Length(FConfig.Subagents) > 0) and (FProvider <> nil) then
+  begin
+    FSubagentCtx.Provider       := FProvider;
+    FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig);
+    FSubagentCtx.ParentRegistry := FRegistry;
+    if FModel <> '' then
+      FSubagentCtx.DefaultModel := FModel
+    else
+      FSubagentCtx.DefaultModel := FConfig.DefaultModel;
+    FSpawnTool := RegisterSpawnTool(FRegistry, FSubagentCtx, FConfig.Subagents);
+    FOwnedTools.Add(FSpawnTool);
+  end;
   FBuiltinsInstalled := True;
   { Re-install OOP tools that were registered before this point so
     user names override the built-ins on conflict. TToolRegistry.
@@ -455,6 +487,26 @@ begin
     and skip this re-pass. }
   for i := 0 to FOwnedTools.Count - 1 do
     TPasClawTool(FOwnedTools[i]).Install(FRegistry);
+end;
+
+procedure TPasClawAgent.RefreshSubagentContext;
+begin
+  { Called by ChatHistory after EnsureProvider so the spawn tool's
+    captured TSubagentContext reflects the live provider, fallback
+    chain, and model. Without this, an embedder that calls
+    SetProvider after the first Chat would leave the spawn tool
+    pointing at the old ILLMProvider — EnsureRegistry early-exits
+    on FBuiltinsInstalled and never refreshes the tool. (Codex P2
+    on PR #107.) }
+  if (FSpawnTool = nil) or (FProvider = nil) then Exit;
+  FSubagentCtx.Provider       := FProvider;
+  FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig);
+  FSubagentCtx.ParentRegistry := FRegistry;
+  if FModel <> '' then
+    FSubagentCtx.DefaultModel := FModel
+  else
+    FSubagentCtx.DefaultModel := FConfig.DefaultModel;
+  FSpawnTool.SetContext(FSubagentCtx);
 end;
 
 procedure TPasClawAgent.RegisterTool(ATool: TPasClawTool);
@@ -572,6 +624,12 @@ begin
     Exit;
   end;
   EnsureRegistry;
+  { After EnsureProvider rebuilt FProvider (e.g. because SetProvider
+    was called post-Chat), the spawn tool may be holding a stale
+    captured context. Refresh it now so the next spawn dispatch
+    uses the live provider + fallbacks. No-op when there's no
+    subagent tool installed. }
+  RefreshSubagentContext;
 
   SetLength(Msgs, Length(History));
   for i := 0 to High(History) do Msgs[i] := History[i];

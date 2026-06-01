@@ -35,6 +35,7 @@ uses
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
+  PasClaw.Agent.Subagent,
   PasClaw.Tools.Sandbox;
 
 type
@@ -144,6 +145,25 @@ begin
   RegisterSkills(Result, Skills);
 end;
 
+{ When the operator declared subagents in config.json, install the
+  `spawn` tool into the registry — once MCP tools have already been
+  bridged in so subagents can include them in their allowlist.
+  Returns the created spawn tool so the caller can `Free` it during
+  cleanup; nil when no subagents are configured. }
+function MaybeRegisterSpawnTool(Cfg: TConfig; Provider: ILLMProvider;
+                                 Reg: TToolRegistry; const Model: string): TSpawnTool;
+var
+  Ctx: TSubagentContext;
+begin
+  Result := nil;
+  if (Reg = nil) or (Length(Cfg.Subagents) = 0) then Exit;
+  Ctx.Provider       := Provider;
+  Ctx.Fallbacks      := ResolveFallbacks(Cfg);
+  Ctx.ParentRegistry := Reg;
+  Ctx.DefaultModel   := Model;
+  Result := RegisterSpawnTool(Reg, Ctx, Cfg.Subagents);
+end;
+
 function ConnectMCP(Cfg: TConfig; Reg: TToolRegistry; NoMCP: Boolean): TMCPClientList;
 begin
   SetLength(Result, 0);
@@ -197,6 +217,7 @@ var
   LoopCfg: TToolLoopConfig;
   Model: string;
   MCPClients: TMCPClientList;
+  Spawn: TSpawnTool;
 begin
   if not PickProvider(Cfg, A, Provider, Err) then
   begin
@@ -206,15 +227,23 @@ begin
     Exit;
   end;
 
+  { Resolve the effective model BEFORE registering the spawn tool.
+    MaybeRegisterSpawnTool captures Model into the TSubagentContext
+    by value; if we hand it an empty string the child subagent loop
+    will fall back to the provider's GetDefaultModel instead of the
+    user's --model selection. RunInteractive already does this in the
+    right order — fixing the asymmetry here. (Codex P2 on PR #107.) }
+  if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
+
   Reg := nil;
   if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
+  Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
   try
     SetLength(Msgs, 1);
     Msgs[0] := MakeMessage(mrUser, Prompt);
 
-    if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
     LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
 
     WriteLn(Ansi.Cyan, 'assistant', Ansi.Reset, ' (', Provider.GetName, '/', Model, '):');
@@ -229,6 +258,7 @@ begin
   finally
     Handlers.Free;
     FreeMCPClients(MCPClients);
+    if Spawn <> nil then Spawn.Free;
     Reg.Free;
   end;
 end;
@@ -248,6 +278,7 @@ var
   i: Integer;
   Names: TStringArray;
   MCPClients: TMCPClientList;
+  Spawn: TSpawnTool;
   SystemPromptOverride: string;   { tracks the compacted system prompt across turns }
   ThinkingOn: Boolean;             { toggled by /think; cleared each turn after sending }
   CompactOptsLocal: TCompactOptions;
@@ -263,6 +294,7 @@ begin
   Reg := nil;
   if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
+  Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
   try
     SetLength(Msgs, 0);
@@ -427,6 +459,7 @@ begin
   finally
     Handlers.Free;
     FreeMCPClients(MCPClients);
+    if Spawn <> nil then Spawn.Free;
     Reg.Free;
   end;
 end;
