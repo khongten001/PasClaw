@@ -16,7 +16,8 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
-  PasClaw.Agent.Compact;
+  PasClaw.Agent.Compact,
+  PasClaw.Agent.Hooks;
 
 type
   TToolLoopConfig = record
@@ -58,6 +59,15 @@ type
        — is required because dcc64 enforces strict named-type matching
        on dynamic-array assignments. *)
     Fallbacks:      TLLMProviderArray;
+    (* Hook callbacks for observe / veto / transform / steer. See
+       PasClaw.Agent.Hooks for the TPasClawHook base class and the
+       four virtuals embedders override (BeforeTurn, BeforeToolCall,
+       AfterToolResult, OnError). Hooks fire on the main thread in
+       array order even when tool dispatch is parallel — same
+       ordering guarantees the legacy OnToolCall / OnToolResult
+       events have. RunToolLoop doesn't own the hooks; caller
+       lifetime applies. *)
+    Hooks:          TPasClawHookArray;
   end;
 
   TToolLoopResult = record
@@ -97,6 +107,11 @@ type
     Call:       TToolCall;
     ResultText: string;
     Err:        string;
+    { Set True when a BeforeToolCall hook short-circuited the tool;
+      ResultText holds the synthetic answer. Workers check this and
+      skip dispatch — the synthetic result is what gets appended to
+      history. }
+    Cancelled:  Boolean;
   end;
   PToolCallDispatch = ^TToolCallDispatch;
 
@@ -327,6 +342,10 @@ end;
 
 procedure TToolCallWorker.Execute;
 begin
+  { Skip dispatch entirely when a BeforeToolCall hook already
+    short-circuited this call. The slot's ResultText holds the
+    hook's synthetic reply; nothing else for the worker to do. }
+  if FSlot^.Cancelled then Exit;
   try
     DispatchOneToolCall(FCfg, FSlot^);
   except
@@ -412,6 +431,7 @@ var
   Batches: TToolBatchArray;
   Batch: TToolBatch;
   Workers: array of TToolCallWorker;
+  Steering, BatchSteering: string;
 begin
   Loop.Content    := '';
   Loop.Iterations := 0;
@@ -451,6 +471,19 @@ begin
        NeedsCompact(Hist, Cfg.CompactOpts.ThresholdTokens) then
       Hist := CompactMessages(Cfg.Provider, Cfg.Model, Hist,
                                LiveOptions, Cfg.CompactOpts);
+
+    { Fire BeforeTurn hooks. Embedder can mutate Hist (e.g. inject
+      a system note based on out-of-band state) or set
+      ContinueTurn := False to abort the loop gracefully with
+      whatever content was last accumulated. }
+    if (Length(Cfg.Hooks) > 0) and (not HooksBeforeTurn(Cfg.Hooks, Hist)) then
+    begin
+      Loop.Content    := Resp.Content;   { last response, possibly empty }
+      Loop.Iterations := Iter;
+      Loop.FinalMessages    := Hist;
+      Loop.FinalSystemPrompt := LiveOptions.SystemPrompt;
+      Exit(True);
+    end;
 
     Resp := Cfg.Provider.Chat(Hist, Tools, Cfg.Model, LiveOptions);
     { Provider fallback. Retryable conditions: HTTP 408 / 429 / 5xx,
@@ -514,6 +547,7 @@ begin
       Dispatches[i].Call       := Resp.ToolCalls[i];
       Dispatches[i].ResultText := '';
       Dispatches[i].Err        := '';
+      Dispatches[i].Cancelled  := False;
     end;
 
     { Partition into batches: read-only calls fan out concurrently
@@ -527,21 +561,31 @@ begin
     begin
       Batch := Batches[bi];
 
-      { Fire OnToolCall for every call in the batch on the main thread,
-        in array order, before any worker starts. Embedders rely on
-        OnToolCall firing before its matching OnToolResult and on the
-        announcements appearing in the same order the model produced
-        the tool_use blocks. }
+      { Phase 1: fire OnToolCall + BeforeToolCall hooks for every
+        call in the batch on the main thread, in array order, before
+        any worker starts. Embedders rely on OnToolCall firing
+        before its matching OnToolResult and on the announcements
+        appearing in the same order the model produced the tool_use
+        blocks. A BeforeToolCall hook that sets Cancel := True marks
+        the slot Cancelled — workers + serial path both skip
+        dispatch, and the synthetic result becomes the tool_result. }
       for j := 0 to High(Batch) do
+      begin
         if Assigned(Cfg.OnToolCall) then
           Cfg.OnToolCall(Dispatches[Batch[j]].Call.Func.Name,
                           Dispatches[Batch[j]].Call.Func.Arguments);
+        if Length(Cfg.Hooks) > 0 then
+          HooksBeforeToolCall(Cfg.Hooks, Dispatches[Batch[j]].Call,
+                               Dispatches[Batch[j]].Cancelled,
+                               Dispatches[Batch[j]].ResultText);
+      end;
 
       if Cfg.Parallel and (Length(Batch) > 1) then
       begin
         { Parallel batch: spawn one TThread per call, suspended; Start
           all in array order; WaitFor all in array order; Free each
-          worker after WaitFor. }
+          worker after WaitFor. Cancelled slots short-circuit inside
+          the worker's Execute — see TToolCallWorker.Execute. }
         SetLength(Workers, Length(Batch));
         for j := 0 to High(Batch) do
           Workers[j] := TToolCallWorker.Create(Cfg, @Dispatches[Batch[j]]);
@@ -558,15 +602,34 @@ begin
       begin
         { Serial batch (or Parallel disabled): just run inline on the
           main thread. Same DispatchOneToolCall the workers use, so
-          fs_edit_hashline retry semantics are identical. }
+          fs_edit_hashline retry semantics are identical. Skip
+          cancelled slots — synthetic result already in ResultText. }
         for j := 0 to High(Batch) do
-          DispatchOneToolCall(Cfg, Dispatches[Batch[j]]);
+          if not Dispatches[Batch[j]].Cancelled then
+            DispatchOneToolCall(Cfg, Dispatches[Batch[j]]);
       end;
 
-      { Fire OnToolResult and append tool_result messages on the main
-        thread, in array order, AFTER the whole batch has joined. }
+      { Phase 2: fire AfterToolResult hooks + OnToolResult event +
+        append tool_result messages on the main thread, in array
+        order, AFTER the whole batch has joined. AfterToolResult
+        hooks can rewrite ResultText/ErrMsg AND contribute steering
+        notes that get concatenated and appended as a system
+        message after the tool_result batch lands. }
+      BatchSteering := '';
       for j := 0 to High(Batch) do
       begin
+        if Length(Cfg.Hooks) > 0 then
+        begin
+          Steering := HooksAfterToolResult(Cfg.Hooks,
+                                            Dispatches[Batch[j]].Call,
+                                            Dispatches[Batch[j]].ResultText,
+                                            Dispatches[Batch[j]].Err);
+          if Steering <> '' then
+          begin
+            if BatchSteering <> '' then BatchSteering := BatchSteering + sLineBreak + sLineBreak;
+            BatchSteering := BatchSteering + Steering;
+          end;
+        end;
         if Assigned(Cfg.OnToolResult) then
           Cfg.OnToolResult(Dispatches[Batch[j]].Call.Func.Name,
                            Dispatches[Batch[j]].ResultText,
@@ -578,6 +641,17 @@ begin
         else
           Hist[High(Hist)] := MakeToolResult(Dispatches[Batch[j]].Call.Id,
                                               Dispatches[Batch[j]].ResultText);
+      end;
+
+      { Phase 3: if any hook contributed a steering note, append one
+        consolidated system-role message so the next iteration's LLM
+        round-trip sees it. Picoclaw's steering pattern — lets the
+        embedder inject "based on the file you just read, also check X"
+        without restructuring the loop. }
+      if BatchSteering <> '' then
+      begin
+        SetLength(Hist, Length(Hist) + 1);
+        Hist[High(Hist)] := MakeMessage(mrSystem, BatchSteering);
       end;
     end;
   end;

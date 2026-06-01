@@ -64,6 +64,7 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Tools.Registry,
   PasClaw.Tools.Obj,
+  PasClaw.Agent.Hooks,
   PasClaw.Gateway.Server,
   PasClaw.MCP.Bridge;
 
@@ -83,6 +84,7 @@ type
     FRegistry:       TToolRegistry;
     FMCPClients:     TMCPClientList;
     FOwnedTools:     TObjectList;    { TPasClawTool instances registered via RegisterTool }
+    FHooks:          TObjectList;    { TPasClawHook instances registered via RegisterHook }
     FProviderName:   string;
     FModel:          string;
     FSystemPrompt:   string;
@@ -123,6 +125,7 @@ type
     procedure EnsureProvider;
     procedure EnsureRegistry;
     procedure RefreshSubagentContext;
+    function  BuildHookArray: TPasClawHookArray;
     procedure ForwardText      (const S: string);
     procedure ForwardToolCall  (const Name, ArgsJSON: string);
     procedure ForwardToolResult(const Name, ResultText, Err: string);
@@ -148,6 +151,23 @@ type
       after the first Chat — the registry is built lazily but
       RegisterTool ensures it exists. }
     procedure RegisterTool(ATool: TPasClawTool);
+
+    { Register a TPasClawHook (PasClaw.Agent.Hooks). Hooks fire at
+      well-defined points in the agent loop — before each turn,
+      before/after each tool dispatch, on error — and can observe,
+      transform, or veto. AHook becomes owned by the agent and is
+      freed in Destroy. Common patterns:
+
+        * Approval gate: BeforeToolCall checks the call name +
+          arguments, sets Cancel := True for sensitive tools.
+        * Steering: AfterToolResult returns a SteeringMessage that
+          gets appended as a system note before the next LLM round.
+        * Audit: OnError / AfterToolResult log to your telemetry
+          backend.
+
+      Multiple hooks form an ordered chain in registration order;
+      see PasClaw.Agent.Hooks for the combine semantics. }
+    procedure RegisterHook(AHook: TPasClawHook);
 
     { Code-driven provider configuration. Builds a TProviderConfig
       in-memory from a catalog Kind ("anthropic", "openai", "gemini",
@@ -380,6 +400,7 @@ begin
   FUseMCP        := True;
   FUseHashline   := True;
   FOwnedTools    := TObjectList.Create(True);  { owns + frees its items }
+  FHooks         := TObjectList.Create(True);  { owns + frees registered hooks }
   GAgentInstance := Self;
 end;
 
@@ -396,6 +417,7 @@ begin
   FProvider := nil;
   FreeAndNil(FConfig);
   FreeAndNil(FOwnedTools);  { frees every TPasClawTool we accepted }
+  FreeAndNil(FHooks);       { frees every TPasClawHook we accepted }
   if GAgentInstance = Self then GAgentInstance := nil;
   inherited Destroy;
 end;
@@ -509,6 +531,15 @@ begin
   FSpawnTool.SetContext(FSubagentCtx);
 end;
 
+function TPasClawAgent.BuildHookArray: TPasClawHookArray;
+var
+  i: Integer;
+begin
+  SetLength(Result, FHooks.Count);
+  for i := 0 to FHooks.Count - 1 do
+    Result[i] := TPasClawHook(FHooks[i]);
+end;
+
 procedure TPasClawAgent.RegisterTool(ATool: TPasClawTool);
 begin
   if ATool = nil then Exit;
@@ -531,6 +562,12 @@ begin
     FRegistry := TToolRegistry.Create;
   FOwnedTools.Add(ATool);
   ATool.Install(FRegistry);
+end;
+
+procedure TPasClawAgent.RegisterHook(AHook: TPasClawHook);
+begin
+  if AHook = nil then Exit;
+  FHooks.Add(AHook);   { TObjectList owns; freed in Destroy }
 end;
 
 procedure TPasClawAgent.SetProvider(const Kind, APIKey: string);
@@ -642,6 +679,7 @@ begin
   Cfg.MaxIterations := FMaxIterations;
   Cfg.Parallel := True;
   Cfg.Fallbacks     := ResolveFallbacks(FConfig);
+  Cfg.Hooks         := BuildHookArray;
   Cfg.Options       := DefaultChatOptions;
   { Derive ToolsEnabled from the registry we are about to hand to
     RunToolLoop, NOT from FUseTools. EnsureRegistry caches FRegistry
