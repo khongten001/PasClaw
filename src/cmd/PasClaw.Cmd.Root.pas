@@ -40,6 +40,7 @@ uses
   PasClaw.Cmd.Migrate,
   PasClaw.Cmd.Skills,
   PasClaw.Cmd.Session,
+  PasClaw.Cmd.Steer,
   PasClaw.Cmd.Model,
   PasClaw.Cmd.Config_,
   PasClaw.Cmd.Update,
@@ -99,7 +100,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 19);
+  SetLength(Sub, 20);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -117,8 +118,9 @@ begin
   Sub[14] := 'membench     Benchmark the memory log subsystem';
   Sub[15] := 'session      List/show/delete/export saved sessions';
   Sub[16] := 'resume       Resume a saved session (alias for agent --session)';
-  Sub[17] := 'update       Self-update PasClaw';
-  Sub[18] := 'version      Show version info';
+  Sub[17] := 'steer        Push a mid-loop follow-up into a running agent';
+  Sub[18] := 'update       Self-update PasClaw';
+  Sub[19] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -160,6 +162,7 @@ begin
       Result := Cmd_Agent_Run(ResumeArgv);
     end;
   end
+  else if Cmd = 'steer'    then Result := Cmd_Steer_Run(Argv)
   else if Cmd = 'model'    then Result := Cmd_Model_Run(Argv)
   else if Cmd = 'post'     then Result := Cmd_Post_Run(Argv)
   else if Cmd = 'membench' then Result := Cmd_Membench_Run(Argv)

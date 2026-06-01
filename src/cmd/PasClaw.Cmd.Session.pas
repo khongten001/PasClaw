@@ -23,7 +23,8 @@ uses
   SysUtils, Classes, DateUtils,
   PasClaw.CliUI,
   PasClaw.Providers.Types,   { TMsgRole = (mrSystem, mrUser, mrAssistant, mrTool) }
-  PasClaw.Session.Store;
+  PasClaw.Session.Store,
+  PasClaw.Agent.Steering;
 
 procedure PrintHelp;
 begin
@@ -123,6 +124,9 @@ function DoDelete(const Id: string): Integer;
 begin
   if DeleteSession(Id) then
   begin
+    { Stray steering messages for the just-deleted session would
+      otherwise sit on disk forever — clear them too. }
+    ClearSteering(Id);
     WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'deleted session ', Id);
     Result := 0;
   end

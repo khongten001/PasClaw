@@ -67,6 +67,16 @@ Form-designable with published properties for the VCL/FMX path; code-driven OOP 
 
 Patterns are exact ids or `<platform>:*` wildcards; `*` allows anyone (escape hatch). Empty array (default) = no gate. Each channel calls `IsAllowedSender` before invoking the agent — non-matching senders are dropped at the boundary with a log line, the model never sees them. Ports picoclaw's `pkg/identity` pattern.
 
+**Mid-loop steering** — push a follow-up into a running agent without waiting for the current tool loop to finish. From another terminal:
+
+```sh
+pasclaw steer 20260601T093015-1a2b3c4d "actually skip X, focus on Y"
+pasclaw steer <session-id> --list        # show pending count
+pasclaw steer <session-id> --clear       # drop the queue
+```
+
+The running `pasclaw agent --session <id>` drains the queue at the top of its NEXT tool-loop iteration and folds each pending message into history as a `[user steering] ...` system note before the next LLM round-trip. Up to 4 messages per iteration are applied (`MaxSteeringPerTurn`, matching nanobot's `_MAX_INJECTIONS_PER_TURN`); extras are dropped with a warning so a runaway pusher can't grow history unbounded. `/steer <msg>` inside an interactive session is the same mechanism (handy for testing). `/reset`, `/new`, and `pasclaw session delete` clear the queue. Storage is one append-only JSONL file per session under `$PASCLAW_HOME/workspace/steering/<id>.jsonl` — atomic per-line POSIX appends + rename-to-tmp-on-drain so concurrent push/drain doesn't lose messages. Currently only CLI sessions wire `SteeringKey`; channels can opt in by passing their own per-conversation key on `TToolLoopConfig.SteeringKey` once they restructure to non-blocking poll loops.
+
 **Hooks + steering** — `TPasClawHook` (in `PasClaw.Agent.Hooks`) is the typed callback surface for embedders to observe, transform, or veto agent events. Four virtuals: `BeforeTurn(var ContinueTurn, var Messages)` — set ContinueTurn := False to abort cleanly; `BeforeToolCall(call, var Cancel, var SyntheticResult)` — Cancel := True bypasses the real tool handler and uses SyntheticResult as the tool_result (the approval-gate pattern); `AfterToolResult(call, var ResultText, var ErrMsg, var SteeringMessage)` — rewrite results inline AND inject a system note before the next LLM round (picoclaw's steering); `OnError(Stage, Msg)` — observe failures. Register via `Agent.RegisterHook(THook.Create)`; multiple hooks form an ordered chain in registration order.
 
 **Subagents** — fan-out to focused specialists via a `spawn(agent, prompt)` tool. Declare them in `config.json`'s `subagents:` array (name + description + system prompt + tool allowlist + optional model / max-iterations override). Each spawn runs a short `RunToolLoop` against the parent's provider + fallback chain with a registry filtered to the named tools and a specialist system prompt; result lands back as the parent's `tool_result`. Implementation in `src/pkg/agent/PasClaw.Agent.Subagent.pas` — picoclaw's `SubTurn` pattern, nanobot's `subagent` module, openclaw's multi-agent routing, ~300 LOC.

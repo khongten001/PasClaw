@@ -38,7 +38,8 @@ uses
   PasClaw.Agent.Subagent,
   PasClaw.Session.Store,
   PasClaw.Tools.Sandbox,
-  PasClaw.Identity;
+  PasClaw.Identity,
+  PasClaw.Agent.Steering;
 
 type
   TAgentArgs = record
@@ -411,15 +412,31 @@ begin
           openclaw and nanobot semantics. }
         if Line = '/new' then
         begin
+          { Old session's queue might have leftover pending steering
+            messages — drop them before re-keying so the fresh session
+            doesn't pick up the previous conversation's interrupts. }
+          ClearSteering(Session.Meta.Id);
           Session.Free;
           Session := TSession.Create('');   { fresh id }
           WriteLn(Ansi.Dim, '(new session ', Session.Meta.Id, ')', Ansi.Reset);
         end
         else
         begin
+          ClearSteering(Session.Meta.Id);
           PersistSession;   { writes empty Msgs + cleared override }
           WriteLn(Ansi.Dim, '(history cleared)', Ansi.Reset);
         end;
+        Continue;
+      end;
+      if Copy(Line, 1, 7) = '/steer ' then
+      begin
+        { Same-process steering — handy for testing, but the real
+          win is `pasclaw steer <id> "..."` from another terminal
+          while a long loop is mid-execution. }
+        if PushSteering(Session.Meta.Id, Copy(Line, 8, MaxInt)) then
+          WriteLn(Ansi.Dim, '(queued; injects at top of next iteration)', Ansi.Reset)
+        else
+          WriteLn(Ansi.Red, '(steer push failed)', Ansi.Reset);
         Continue;
       end;
       if Line = '/tools' then
@@ -435,14 +452,15 @@ begin
       end;
       if (Line = '/help') or (Line = '/?') then
       begin
-        WriteLn('  /help     show this list');
-        WriteLn('  /status   model + provider + message count + thinking state');
-        WriteLn('  /new      clear conversation history (alias: /reset)');
-        WriteLn('  /reset    clear conversation history');
-        WriteLn('  /compact  force a one-shot summariser pass on the history now');
-        WriteLn('  /think    toggle extended thinking on the next turn (if the provider supports it)');
-        WriteLn('  /tools    list registered tools');
-        WriteLn('  /quit     exit (alias: /exit)');
+        WriteLn('  /help        show this list');
+        WriteLn('  /status      model + provider + message count + thinking state');
+        WriteLn('  /new         clear conversation history (alias: /reset)');
+        WriteLn('  /reset       clear conversation history');
+        WriteLn('  /compact     force a one-shot summariser pass on the history now');
+        WriteLn('  /think       toggle extended thinking on the next turn (if the provider supports it)');
+        WriteLn('  /tools       list registered tools');
+        WriteLn('  /steer <msg> queue a mid-loop steering message for the NEXT iteration');
+        WriteLn('  /quit        exit (alias: /exit)');
         Continue;
       end;
       if Line = '/status' then
@@ -476,6 +494,14 @@ begin
         end
         else
           WriteLn('  cache:     off (prompt_cache.enabled=false in config)');
+        if Session <> nil then
+        begin
+          i := PendingSteeringCount(Session.Meta.Id);
+          if i > 0 then
+            WriteLn('  steering:  ', i, ' pending (folded at next iteration)')
+          else
+            WriteLn('  steering:  none queued');
+        end;
         Continue;
       end;
       if Line = '/think' then
@@ -550,7 +576,15 @@ begin
         prefix). Anthropic ignores the field; OpenAI uses it to pin
         prefix routing on the back-end. }
       if Session <> nil then
+      begin
         LoopCfg.Options.CacheKey := Session.Meta.Id;
+        { Steering queue key — RunToolLoop drains it at iteration
+          top and folds pending messages into history as
+          "[user steering] ..." system notes. The other terminal's
+          `pasclaw steer <session-id> "..."` writes to the same
+          file the loop is about to read. }
+        LoopCfg.SteeringKey := Session.Meta.Id;
+      end;
       { /think: apply ThinkingLevel for this turn, then clear so
         subsequent turns reset (matches the OpenClaw /think model —
         single-turn extended thinking). The user can /think again
