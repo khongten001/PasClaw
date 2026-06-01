@@ -73,7 +73,7 @@ Form-designable with published properties for the VCL/FMX path; code-driven OOP 
 ]
 ```
 
-**Cross-platform** — Linux x86_64 + aarch64 under FPC 3.2+; macOS x86_64 + arm64 under FPC (Homebrew unit paths autodetected); Windows x64 + ARM64 + Linux + macOS under Delphi 12 / 13 / RAD Studio. The Makefile probes `uname` for host targets and accepts `CROSS_TARGET=aarch64-win64` (or any FPC target triple) for cross-builds — pair with `FPC_UNITS_DIR` pointing at the cross-build's unit tree. `PasClaw.dproj` ships `Win64x` (ARM Windows) alongside `Win32` / `Win64` / `Linux64`. The updater's release-binary suffix has the matching `windows_arm64.exe` branch. Three sample binaries under `samples/component-console/` plus matching `.dproj` files for RAD Studio and `dcc32.cfg` / `dcc64.cfg` for cmdline Delphi builds.
+**Cross-platform** — Linux x86_64 + aarch64 under FPC 3.2+; macOS x86_64 + arm64 under FPC (Homebrew unit paths autodetected); Windows x64 + Linux + macOS under Delphi 12 / RAD Studio. Windows-on-ARM64 builds via FPC are supported through the Makefile's `CROSS_TARGET=aarch64-win64` override (pair with `FPC_UNITS_DIR` pointing at the cross-build's unit tree); the updater emits `windows_arm64.exe` as the release-asset suffix on those builds. The `Delphi 13 WinArm64EC` target isn't wired into `PasClaw.dproj` yet — add the platform via the IDE's Project Manager when you're ready to ship for it. Three sample binaries under `samples/component-console/` plus matching `.dproj` files for RAD Studio and `dcc32.cfg` / `dcc64.cfg` for cmdline Delphi builds.
 
 ## Requirements
 
