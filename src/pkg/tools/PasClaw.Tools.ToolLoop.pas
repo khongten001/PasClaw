@@ -373,6 +373,36 @@ end;
   the bare-array → TToolCallArray pass-through with E2010. FPC happens
   to accept it either way, but the open-array form compiles cleanly
   under both. }
+
+{ Drain every mrSystem entry from Hist (in array order), return their
+  concatenated content separated by blank lines. Hist is rewritten in
+  place to skip those entries. Used by the steering fold so an
+  embedder's in-history system policy doesn't silently disappear the
+  moment LiveOptions.SystemPrompt becomes non-empty: the OpenAI /
+  Anthropic builders drop in-history mrSystem when the option is set,
+  so we lift them into the option slot first. Codex P2 on PR #113. }
+function DrainHistorySystem(var Hist: TMessageArray): string;
+var
+  i, dst: Integer;
+begin
+  Result := '';
+  dst := 0;
+  for i := 0 to High(Hist) do
+  begin
+    if Hist[i].Role = mrSystem then
+    begin
+      if Result <> '' then Result := Result + sLineBreak + sLineBreak;
+      Result := Result + Hist[i].Content;
+    end
+    else
+    begin
+      if dst <> i then Hist[dst] := Hist[i];
+      Inc(dst);
+    end;
+  end;
+  if dst < Length(Hist) then SetLength(Hist, dst);
+end;
+
 function PartitionToolBatches(const Calls: array of TToolCall;
                               Reg: TToolRegistry): TToolBatchArray;
 var
@@ -431,7 +461,7 @@ var
   Batches: TToolBatchArray;
   Batch: TToolBatch;
   Workers: array of TToolCallWorker;
-  Steering, BatchSteering: string;
+  Steering, BatchSteering, HistSystem: string;
 begin
   Loop.Content    := '';
   Loop.Iterations := 0;
@@ -485,7 +515,27 @@ begin
       Exit(True);
     end;
 
-    Resp := Cfg.Provider.Chat(Hist, Tools, Cfg.Model, LiveOptions);
+    { Wrapping Cfg.Provider.Chat in try/except: most provider
+      implementations classify network / TLS / parse failures
+      themselves and return StatusCode := -1, but an unexpected
+      exception (out-of-memory in CollapseSSE, malformed JSON the
+      builder doesn't catch, Indy raising EIdSocketError on a
+      torn-down TLS handshake) used to propagate out and bypass
+      the OnError hook entirely. Now any raised exception turns
+      into a synthetic -1 response — the fallback walk continues
+      and the post-walk HooksOnError check fires with the
+      exception text in Resp.Content. (Codex P2 on PR #113.) }
+    try
+      Resp := Cfg.Provider.Chat(Hist, Tools, Cfg.Model, LiveOptions);
+    except
+      on E: Exception do
+      begin
+        LogWarn('provider Chat raised: %s: %s', [E.ClassName, E.Message]);
+        Resp := Default(TLLMResponse);
+        Resp.StatusCode := -1;
+        Resp.Content := E.ClassName + ': ' + E.Message;
+      end;
+    end;
     { Provider fallback. Retryable conditions: HTTP 408 / 429 / 5xx,
       and StatusCode <= 0 (network / TLS / pre-HTTP failure that the
       provider couldn't classify). Walk Cfg.Fallbacks in order until
@@ -511,7 +561,18 @@ begin
         if FallbackModel = '' then FallbackModel := Cfg.Model;
         LogDebug('fallback %d: trying %s with model=%s',
                  [fbi, Cfg.Fallbacks[fbi].GetName, FallbackModel]);
-        Resp := Cfg.Fallbacks[fbi].Chat(Hist, Tools, FallbackModel, LiveOptions);
+        try
+          Resp := Cfg.Fallbacks[fbi].Chat(Hist, Tools, FallbackModel, LiveOptions);
+        except
+          on E: Exception do
+          begin
+            LogWarn('fallback %s Chat raised: %s: %s',
+                    [Cfg.Fallbacks[fbi].GetName, E.ClassName, E.Message]);
+            Resp := Default(TLLMResponse);
+            Resp.StatusCode := -1;
+            Resp.Content := E.ClassName + ': ' + E.Message;
+          end;
+        end;
         if not IsRetryableStatus(Resp.StatusCode) then
         begin
           LogWarn('fallback hit: %s status=%d',
@@ -532,8 +593,21 @@ begin
       / alerting hook most wants to see. (Codex P2 on PR #111.) }
     if (Length(Cfg.Hooks) > 0) and
        ((Resp.StatusCode < 200) or (Resp.StatusCode >= 300)) then
-      HooksOnError(Cfg.Hooks, hsProviderCall,
-                    Format('provider returned status=%d', [Resp.StatusCode]));
+    begin
+      { Include Resp.Content when populated — for raised exceptions
+        (the try/except blocks above stash "EClass: message" there)
+        this gives the hook the actual exception text instead of
+        just "status=-1". For non-2xx HTTP responses Resp.Content
+        is typically the provider's error JSON, which is also
+        useful telemetry. }
+      if Resp.Content <> '' then
+        HooksOnError(Cfg.Hooks, hsProviderCall,
+                      Format('provider returned status=%d: %s',
+                             [Resp.StatusCode, Resp.Content]))
+      else
+        HooksOnError(Cfg.Hooks, hsProviderCall,
+                      Format('provider returned status=%d', [Resp.StatusCode]));
+    end;
 
     { Stream the text part to the caller now so they can show progress. }
     if Assigned(Cfg.OnText) and (Resp.Content <> '') then
@@ -688,6 +762,24 @@ begin
           they can reset SystemPrompt in BeforeTurn. }
       if BatchSteering <> '' then
       begin
+        { Drain any mrSystem messages from Hist into the SystemPrompt
+          slot before appending the steering text. Provider builders
+          drop in-history mrSystem when SystemPrompt is non-empty, so
+          a direct-RunToolLoop embedder who supplied policy via
+          mrSystem (leaving Cfg.Options.SystemPrompt empty) would
+          otherwise see their policy disappear the first time
+          steering fires. (Codex P2 on PR #113.) Idempotent — once
+          drained, subsequent passes find no mrSystem to fold. }
+        HistSystem := DrainHistorySystem(Hist);
+        if HistSystem <> '' then
+        begin
+          if LiveOptions.SystemPrompt <> '' then
+            LiveOptions.SystemPrompt := LiveOptions.SystemPrompt
+                                        + sLineBreak + sLineBreak
+                                        + HistSystem
+          else
+            LiveOptions.SystemPrompt := HistSystem;
+        end;
         if LiveOptions.SystemPrompt <> '' then
           LiveOptions.SystemPrompt := LiveOptions.SystemPrompt
                                       + sLineBreak + sLineBreak
