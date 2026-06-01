@@ -67,6 +67,12 @@ type
     FLastResizeH:       Integer;
     FStatusFlash:       string;        { one-line transient message shown in footer }
     FStatusFlashUntil:  TDateTime;
+    FLoopSessionId:     string;        { id of the session that originated the
+                                         in-flight loop — Codex P1 on PR #122:
+                                         if the user swaps sessions while a
+                                         loop is running, the result must land
+                                         in the ORIGINATING session, never in
+                                         whatever FSession now points at }
     procedure DrawFrame;
     procedure DrawHeaderBar(W: Integer);
     procedure DrawSessionPane(X, Y, W, H: Integer);
@@ -215,6 +221,8 @@ end;
 {$IFNDEF FPC}
 
 destructor TTUI.Destroy;
+const
+  CleanupWaitMs = 250;
 var
   Worker: TRunToolLoopThread;
 begin
@@ -222,8 +230,18 @@ begin
   begin
     Worker := TRunToolLoopThread(FLoopThread);
     Worker.Terminate;
-    Worker.WaitFor;
-    Worker.Free;
+    { Bounded wait — RunToolLoop doesn't poll Terminated, so a slow
+      provider HTTP call or hung shell-tool can block WaitFor
+      indefinitely. Give it a quarter second to wrap up cleanly,
+      otherwise hand ownership to the OS via FreeOnTerminate and
+      let the process teardown reap it. Codex P2 on PR #122. }
+    if Worker.DoneEvent.WaitFor(CleanupWaitMs) = wrSignaled then
+    begin
+      Worker.WaitFor;
+      Worker.Free;
+    end
+    else
+      Worker.FreeOnTerminate := True;
     FLoopThread := nil;
   end;
   FSession.Free;
@@ -362,9 +380,84 @@ begin
 
   Worker := TRunToolLoopThread.Create(Cfg, FSession.Messages);
   Worker.Start;
-  FLoopThread    := Worker;
-  FLoopStartedAt := Now;
-  FChatScroll    := 0;
+  FLoopThread     := Worker;
+  FLoopSessionId  := FSession.Meta.Id;
+  FLoopStartedAt  := Now;
+  FChatScroll     := 0;
+end;
+
+{ Apply a completed loop result back to its ORIGINATING session.
+  When the originating session is still the currently-loaded one
+  (FSession.Meta.Id matches), update FSession in place and persist.
+  When the user has swapped sessions while the loop was in flight,
+  open the originating session by id, append + persist, free —
+  the currently-loaded FSession is never touched. Codex P1 on PR
+  #122: without this gate a parallel turn would overwrite a fresh
+  conversation with another session's history. }
+procedure ApplyLoopResultTo(const SessionId: string; const Loop: TToolLoopResult;
+                            CurrentSession: TSession);
+var
+  Target: TSession;
+  i: Integer;
+  OwnsTarget: Boolean;
+begin
+  if (CurrentSession <> nil) and (CurrentSession.Meta.Id = SessionId) then
+  begin
+    Target := CurrentSession;
+    OwnsTarget := False;
+  end
+  else
+  begin
+    Target := TSession.Create(SessionId);
+    OwnsTarget := True;
+  end;
+  try
+    if Length(Loop.FinalMessages) > 0 then
+    begin
+      SetLength(Target.Messages, Length(Loop.FinalMessages) + 1);
+      for i := 0 to High(Loop.FinalMessages) do
+        Target.Messages[i] := Loop.FinalMessages[i];
+      Target.Messages[High(Target.Messages)] :=
+        MakeMessage(mrAssistant, Loop.Content);
+    end
+    else
+    begin
+      SetLength(Target.Messages, Length(Target.Messages) + 1);
+      Target.Messages[High(Target.Messages)] :=
+        MakeMessage(mrAssistant, Loop.Content);
+    end;
+    Target.AutoTitle;
+    Target.Touch;
+    Target.Save;
+  finally
+    if OwnsTarget then Target.Free;
+  end;
+end;
+
+procedure AppendErrorTo(const SessionId: string; const ErrText: string;
+                       CurrentSession: TSession);
+var
+  Target: TSession;
+  OwnsTarget: Boolean;
+begin
+  if (CurrentSession <> nil) and (CurrentSession.Meta.Id = SessionId) then
+  begin
+    Target := CurrentSession;
+    OwnsTarget := False;
+  end
+  else
+  begin
+    Target := TSession.Create(SessionId);
+    OwnsTarget := True;
+  end;
+  try
+    SetLength(Target.Messages, Length(Target.Messages) + 1);
+    Target.Messages[High(Target.Messages)] := MakeMessage(mrAssistant, ErrText);
+    Target.Touch;
+    Target.Save;
+  finally
+    if OwnsTarget then Target.Free;
+  end;
 end;
 
 procedure TTUI.PollLoopWorker;
@@ -373,7 +466,6 @@ var
   Loop: TToolLoopResult;
   TimeoutSec: Integer;
   Elapsed: Integer;
-  i: Integer;
 begin
   if FLoopThread = nil then Exit;
   Worker := TRunToolLoopThread(FLoopThread);
@@ -386,12 +478,13 @@ begin
     LogWarn('tui tool-loop timeout after %ds', [TimeoutSec]);
     Worker.Terminate;
     Worker.FreeOnTerminate := True;
+    AppendErrorTo(FLoopSessionId,
+      Format('(request timed out after %ds)', [TimeoutSec]),
+      FSession);
     FLoopThread := nil;
-    SetLength(FSession.Messages, Length(FSession.Messages) + 1);
-    FSession.Messages[High(FSession.Messages)] :=
-      MakeMessage(mrAssistant, Format('(request timed out after %ds)', [TimeoutSec]));
-    PersistSession;
+    FLoopSessionId := '';
     Flash(Format('timed out after %ds', [TimeoutSec]));
+    RefreshSessions;
     Exit;
   end;
 
@@ -401,38 +494,21 @@ begin
   if Worker.Ok then
   begin
     Loop := Worker.LoopResult;
-    { Replace history with the loop's final state (which includes any
-      tool_use/tool_result turns the loop produced) + append the
-      assistant's textual reply as a fresh mrAssistant turn. Mirrors
-      Cmd.Agent.RunInteractive's post-turn block. }
-    if Length(Loop.FinalMessages) > 0 then
-    begin
-      SetLength(FSession.Messages, Length(Loop.FinalMessages) + 1);
-      for i := 0 to High(Loop.FinalMessages) do
-        FSession.Messages[i] := Loop.FinalMessages[i];
-      FSession.Messages[High(FSession.Messages)] :=
-        MakeMessage(mrAssistant, Loop.Content);
-    end
-    else
-    begin
-      SetLength(FSession.Messages, Length(FSession.Messages) + 1);
-      FSession.Messages[High(FSession.Messages)] :=
-        MakeMessage(mrAssistant, Loop.Content);
-    end;
-    PersistSession;
+    ApplyLoopResultTo(FLoopSessionId, Loop, FSession);
+    if FLoopSessionId <> FSession.Meta.Id then
+      Flash('result -> ' + FLoopSessionId);
     RefreshSessions;
   end
   else
   begin
     LogWarn('tui tool-loop failed: %s', [Worker.Err]);
-    SetLength(FSession.Messages, Length(FSession.Messages) + 1);
-    FSession.Messages[High(FSession.Messages)] :=
-      MakeMessage(mrAssistant, '(tool loop failed)');
-    PersistSession;
+    AppendErrorTo(FLoopSessionId, '(tool loop failed)', FSession);
+    RefreshSessions;
   end;
 
   Worker.Free;
   FLoopThread := nil;
+  FLoopSessionId := '';
 end;
 
 procedure TTUI.SubmitInput;
@@ -474,11 +550,12 @@ begin
 
   { When a loop is already running, queue the input as steering so
     the running loop can pick it up at the top of its next iteration
-    (PR #120 mechanism). The chat pane shows the pending count so
-    the user gets feedback that the message landed. }
+    (PR #120 mechanism). Route to FLoopSessionId — the originating
+    session — not FSession.Meta.Id, in case the user swapped panes
+    while the loop was in flight. Same Codex P1 fix as PollLoopWorker. }
   if FLoopThread <> nil then
   begin
-    if PushSteering(FSession.Meta.Id, Text) then
+    if PushSteering(FLoopSessionId, Text) then
       Flash('steering queued')
     else
       Flash('steer push failed');
@@ -492,37 +569,46 @@ end;
 
 procedure TTUI.HandleSessionKey(Key: Integer);
 begin
+  { Delete-confirm mode short-circuits — Y deletes, anything else
+    (including N from the [Y]es/[N]o footer hint) just dismisses
+    the prompt. Without this gate, N would dismiss AND start a new
+    session, which contradicts the advertised "N cancel" footer.
+    Codex P2 on PR #122. }
+  if FConfirmDelete then
+  begin
+    case Key of
+      Ord('y'), Ord('Y'):
+        DeleteSelectedSession;
+    else
+      FConfirmDelete := False;
+    end;
+    Exit;
+  end;
+
   case Key of
+    Ord('q'), Ord('Q'):
+      { Q only quits from the session pane — chat-pane input must
+        be able to contain the letter (Codex P1 on PR #122). }
+      FQuit := True;
     KEY_UP:
       if FSelSessIdx > 0 then Dec(FSelSessIdx);
     KEY_DOWN:
       if FSelSessIdx < High(FSessions) then Inc(FSelSessIdx);
     KEY_ENTER:
       if (FSelSessIdx >= 0) and (FSelSessIdx <= High(FSessions)) then
-      begin
-        FConfirmDelete := False;
         SelectSession(FSessions[FSelSessIdx].Id);
-      end;
     Ord('n'), Ord('N'):
-      begin
-        FConfirmDelete := False;
-        StartNewSession;
-      end;
+      StartNewSession;
     Ord('r'), Ord('R'):
       begin
-        FConfirmDelete := False;
         RefreshSessions;
         Flash('refreshed');
       end;
     Ord('d'), Ord('D'):
       begin
-        FConfirmDelete := not FConfirmDelete;
-        if FConfirmDelete then Flash('delete? y/n');
+        FConfirmDelete := True;
+        Flash('delete? y/n');
       end;
-    Ord('y'), Ord('Y'):
-      if FConfirmDelete then DeleteSelectedSession;
-  else
-    if FConfirmDelete then FConfirmDelete := False;
   end;
 end;
 
@@ -530,6 +616,17 @@ procedure TTUI.HandleChatKey(Key: Integer);
 var
   Ch: Char;
 begin
+  { Q with an empty input buffer quits — discoverability path so
+    users coming from the session pane don't have to learn that
+    Escape is the universal quit. With any input typed, Q falls
+    through to the default-char branch so words like "question"
+    work. Codex P1 on PR #122. }
+  if ((Key = Ord('q')) or (Key = Ord('Q'))) and (FInputBuf = '') then
+  begin
+    FQuit := True;
+    Exit;
+  end;
+
   case Key of
     KEY_ENTER:
       SubmitInput;
@@ -567,18 +664,19 @@ procedure TTUI.HandleKey(Key: Integer);
 const
   KEY_TAB = 9;
 begin
-  case Key of
-    Ord('q'), Ord('Q'), KEY_ESCAPE:
-      begin
-        FQuit := True;
-        Exit;
-      end;
-    KEY_TAB:
-      begin
-        if FFocus = foSessions then FFocus := foChat else FFocus := foSessions;
-        FConfirmDelete := False;
-        Exit;
-      end;
+  { Escape is the only global quit — Q/q reach the focused pane so
+    the chat input can include the letter (typing "question" used
+    to immediately quit the TUI). Codex P1 on PR #122. }
+  if Key = KEY_ESCAPE then
+  begin
+    FQuit := True;
+    Exit;
+  end;
+  if Key = KEY_TAB then
+  begin
+    if FFocus = foSessions then FFocus := foChat else FFocus := foSessions;
+    FConfirmDelete := False;
+    Exit;
   end;
   case FFocus of
     foSessions: HandleSessionKey(Key);
