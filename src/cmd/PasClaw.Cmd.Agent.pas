@@ -36,6 +36,7 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
   PasClaw.Agent.Subagent,
+  PasClaw.Session.Store,
   PasClaw.Tools.Sandbox;
 
 type
@@ -50,6 +51,13 @@ type
     NoTools:       Boolean;
     NoMCP:         Boolean;
     NoHashline:    Boolean;
+    { Session id to resume. Empty = start a fresh in-memory
+      conversation (not persisted until /save or `/new`). Non-empty
+      AND existing on disk = load history + system-prompt override
+      from workspace/sessions/<id>.json. Non-empty AND missing on
+      disk = create that session id with empty history (so a script
+      can pre-seed an id like "daily-2026-06-01"). }
+    Session:       string;
   end;
 
   TLoopHandlers = class
@@ -113,6 +121,7 @@ begin
     if Argv[i] = '--no-tools'    then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--session'     then begin if i = High(Argv) then Exit(False); A.Session := Argv[i + 1]; Inc(i, 2); Continue; end;
     Inc(i);
   end;
 end;
@@ -283,8 +292,10 @@ var
   ThinkingOn: Boolean;             { toggled by /think; cleared each turn after sending }
   CompactOptsLocal: TCompactOptions;
   CompactedLiveOpts: TChatOptions;
+  Session: TSession;               { non-nil iff --session was passed }
 begin
   SystemPromptOverride := '';
+  Session := nil;
   Offline := not PickProvider(Cfg, A, Provider, Err);
   if Offline then
     WriteLn(Ansi.Yellow, '(offline preview — ', Err, ')', Ansi.Reset);
@@ -299,6 +310,28 @@ begin
   try
     SetLength(Msgs, 0);
     ThinkingOn := False;
+
+    { Session resume: load Msgs + SystemPromptOverride from the
+      session file on disk when --session was passed. A non-existent
+      id gets created fresh (lets a script pre-seed an id like
+      "daily-2026-06-01"). The session is saved after each turn
+      below — so a Ctrl-C / crash mid-conversation only loses the
+      currently-typed prompt, not the whole history. }
+    if A.Session <> '' then
+    begin
+      Session := TSession.Create(A.Session);
+      if Session.MetaExists then
+      begin
+        SetLength(Msgs, Length(Session.Messages));
+        for i := 0 to High(Session.Messages) do Msgs[i] := Session.Messages[i];
+        SystemPromptOverride := Session.Meta.SystemPromptOverride;
+        WriteLn(Ansi.Dim, '(resumed session ', Session.Meta.Id,
+                ' — ', Length(Msgs), ' messages)', Ansi.Reset);
+      end
+      else
+        WriteLn(Ansi.Dim, '(new session ', Session.Meta.Id, ')', Ansi.Reset);
+    end;
+
     while True do
     begin
       Write(Ansi.Bold, '> ', Ansi.Reset);
@@ -310,6 +343,27 @@ begin
       begin
         SetLength(Msgs, 0);
         SystemPromptOverride := '';   { drop the compacted summary too }
+        { /new starts a brand-new session id so the existing one
+          stays on disk for resume; /reset keeps the current session
+          but clears its messages. Distinction matches openclaw and
+          nanobot semantics. }
+        if Session <> nil then
+        begin
+          if Line = '/new' then
+          begin
+            Session.Free;
+            Session := TSession.Create('');   { fresh id }
+            WriteLn(Ansi.Dim, '(new session ', Session.Meta.Id, ')', Ansi.Reset);
+            Continue;
+          end
+          else
+          begin
+            Session.ClearMessages;
+            Session.Meta.SystemPromptOverride := '';
+            Session.Touch;
+            Session.Save;
+          end;
+        end;
         WriteLn(Ansi.Dim, '(history cleared)', Ansi.Reset);
         Continue;
       end;
@@ -454,6 +508,21 @@ begin
           Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
         end;
         SystemPromptOverride := Loop.FinalSystemPrompt;
+
+        { Persist after every successful turn — crash / Ctrl-C in
+          the middle of the NEXT user prompt only loses what they
+          were typing, not the existing conversation. }
+        if Session <> nil then
+        begin
+          SetLength(Session.Messages, Length(Msgs));
+          for i := 0 to High(Msgs) do Session.Messages[i] := Msgs[i];
+          Session.Meta.SystemPromptOverride := SystemPromptOverride;
+          Session.Meta.Model    := Model;
+          if Provider <> nil then Session.Meta.Provider := Provider.GetName;
+          Session.AutoTitle;
+          Session.Touch;
+          Session.Save;
+        end;
       end;
     end;
   finally
@@ -461,6 +530,7 @@ begin
     FreeMCPClients(MCPClients);
     if Spawn <> nil then Spawn.Free;
     Reg.Free;
+    if Session <> nil then Session.Free;
   end;
 end;
 

@@ -53,7 +53,9 @@ Agent.Free;
 
 Form-designable with published properties for the VCL/FMX path; code-driven OOP API for everything else. Custom tools subclass `TPasClawTool` and override `Name` / `Description` / `Schema` / `Run` / `Category`. Single-process server: `TPasClawServer.Create('0.0.0.0', 8088); Server.Run;` blocks until `Stop` is signalled from another thread.
 
-**Interactive chat** — `pasclaw agent` and `pasclaw tui` ship slash commands: `/help` lists them; `/status` shows model + provider + message count + thinking state; `/new` and `/reset` clear history; `/compact` forces a summariser pass; `/think` toggles extended-thinking mode for the next turn (Anthropic Claude); `/tools` lists registered tools; `/quit` exits.
+**Interactive chat** — `pasclaw agent` and `pasclaw tui` ship slash commands: `/help` lists them; `/status` shows model + provider + message count + thinking state; `/new` starts a fresh session (new id, history cleared); `/reset` clears history in the current session; `/compact` forces a summariser pass; `/think` toggles extended-thinking mode for the next turn (Anthropic Claude); `/tools` lists registered tools; `/quit` exits.
+
+**Persistent sessions** — conversation history survives restarts. Each interactive session is serialised to `$PASCLAW_HOME/workspace/sessions/<id>.json` after every turn (messages + tool_calls + tool_results + model + provider + compaction summary). Resume with `pasclaw resume <id>` or `pasclaw agent --session <id>`; missing-id starts a fresh session at that id. `pasclaw session list / show / delete / export` manages saved sessions. Session ids are `yyyymmddTHHMMSS-<8 hex>` — sortable and collision-safe.
 
 **Hooks + steering** — `TPasClawHook` (in `PasClaw.Agent.Hooks`) is the typed callback surface for embedders to observe, transform, or veto agent events. Four virtuals: `BeforeTurn(var ContinueTurn, var Messages)` — set ContinueTurn := False to abort cleanly; `BeforeToolCall(call, var Cancel, var SyntheticResult)` — Cancel := True bypasses the real tool handler and uses SyntheticResult as the tool_result (the approval-gate pattern); `AfterToolResult(call, var ResultText, var ErrMsg, var SteeringMessage)` — rewrite results inline AND inject a system note before the next LLM round (picoclaw's steering); `OnError(Stage, Msg)` — observe failures. Register via `Agent.RegisterHook(THook.Create)`; multiple hooks form an ordered chain in registration order.
 
@@ -256,6 +258,20 @@ pasclaw cron remove daily-summary
 ```
 
 Each cron entry persists its last successful fire time to `$PASCLAW_HOME/workspace/cron/state.json` so a missed slot (gateway down, laptop closed) catches up on the next tick instead of being silently skipped. Delivery is **at-least-once**: the state file is written after the skill runs (`PasClaw.Cron.Scheduler.pas:175` runs the skill, `:196` persists the timestamp), so a crash between those two steps will replay the job on restart. Idempotent skills are safe; side-effecting skills (sending emails, posting to channels) should self-deduplicate. Skill output is appended to `workspace/memory/<today>.md` for the model to recall on subsequent turns, and — if `--channel <kind>:<target>` was set — posted to the configured channel. Channel kinds: `discord`, `slack`, `teams`, `webhook` (URL is the target), `line` (target is userId, token from `$PASCLAW_LINE_TOKEN`), `whatsapp` (target is phone number, credentials from `$PASCLAW_WHATSAPP_TOKEN` + `$PASCLAW_WHATSAPP_PHONE_ID`).
+
+### Sessions
+
+```sh
+pasclaw agent --session 20260601T093015-1a2b3c4d   # resume by id (creates fresh if absent)
+pasclaw resume 20260601T093015-1a2b3c4d            # shorthand for the above
+
+pasclaw session list                # id, age, title, msg count for every saved session
+pasclaw session show <id>           # metadata + last 8 messages (head trimmed)
+pasclaw session export <id>         # raw JSON to stdout (pipe through `jq`)
+pasclaw session delete <id>         # remove the session file
+```
+
+Sessions live as one JSON file per id under `$PASCLAW_HOME/workspace/sessions/<id>.json`. The file carries the full `messages` array (role / content / name / tool_call_id / tool_calls), the model + provider + title in `meta`, and any `system_prompt_override` left behind by `/compact`. `pasclaw agent` (and `pasclaw tui`) save after each turn, so killing the process mid-conversation is safe — `pasclaw resume <id>` picks up exactly where it stopped. `/new` inside an interactive session spawns a new id; `/reset` clears history in place and keeps the same id.
 
 ### Web search
 
