@@ -374,33 +374,38 @@ end;
   to accept it either way, but the open-array form compiles cleanly
   under both. }
 
-{ Drain every mrSystem entry from Hist (in array order), return their
-  concatenated content separated by blank lines. Hist is rewritten in
-  place to skip those entries. Used by the steering fold so an
-  embedder's in-history system policy doesn't silently disappear the
-  moment LiveOptions.SystemPrompt becomes non-empty: the OpenAI /
-  Anthropic builders drop in-history mrSystem when the option is set,
-  so we lift them into the option slot first. Codex P2 on PR #113. }
-function DrainHistorySystem(var Hist: TMessageArray): string;
+{ Collect every mrSystem entry's content from Hist (in array order),
+  return them concatenated with blank-line separators. Read-only —
+  does NOT modify Hist.
+
+  Used by the steering fold so an embedder's in-history system
+  policy is visible through LiveOptions.SystemPrompt (which the
+  provider builders DO ship) when steering makes that slot non-empty.
+  An earlier draft drained Hist destructively, but that made the
+  policy unrecoverable if a BeforeTurn hook later reset
+  SystemPrompt to '' for ephemeral-steering semantics (Codex P2 on
+  PR #114). Keeping mrSystem in Hist means: when SystemPrompt is
+  set, the provider drops in-history mrSystem (using the consolidated
+  SystemPrompt); when SystemPrompt is empty, the provider includes
+  the in-history mrSystem (so the policy still ships). Either way
+  the policy reaches the model.
+
+  Caller responsibility: read CopyHistorySystem ONLY when
+  LiveOptions.SystemPrompt is empty. Once SystemPrompt has the
+  policy embedded (after the first fold), subsequent folds should
+  append steering without re-reading Hist to avoid duplicating the
+  policy text. }
+function CopyHistorySystem(const Hist: TMessageArray): string;
 var
-  i, dst: Integer;
+  i: Integer;
 begin
   Result := '';
-  dst := 0;
   for i := 0 to High(Hist) do
-  begin
     if Hist[i].Role = mrSystem then
     begin
       if Result <> '' then Result := Result + sLineBreak + sLineBreak;
       Result := Result + Hist[i].Content;
-    end
-    else
-    begin
-      if dst <> i then Hist[dst] := Hist[i];
-      Inc(dst);
     end;
-  end;
-  if dst < Length(Hist) then SetLength(Hist, dst);
 end;
 
 function PartitionToolBatches(const Calls: array of TToolCall;
@@ -461,7 +466,7 @@ var
   Batches: TToolBatchArray;
   Batch: TToolBatch;
   Workers: array of TToolCallWorker;
-  Steering, BatchSteering, HistSystem: string;
+  Steering, BatchSteering, HistSystem, LastProviderErrText: string;
 begin
   Loop.Content    := '';
   Loop.Iterations := 0;
@@ -524,7 +529,16 @@ begin
       the OnError hook entirely. Now any raised exception turns
       into a synthetic -1 response — the fallback walk continues
       and the post-walk HooksOnError check fires with the
-      exception text in Resp.Content. (Codex P2 on PR #113.) }
+      diagnostic text out-of-band. (Codex P2 on PR #113.)
+
+      Diagnostic text goes into LastProviderErrText (local),
+      NOT into Resp.Content. If we stashed exception text in
+      Resp.Content, the outer "no tool calls, exit cleanly" path
+      would surface it as Loop.Content — i.e. as the assistant's
+      reply to the user, leaking internal parser / socket / TLS
+      details through to the caller. Hook embedders that want the
+      diagnostic still get it via OnError. (Codex P2 on PR #114.) }
+    LastProviderErrText := '';
     try
       Resp := Cfg.Provider.Chat(Hist, Tools, Cfg.Model, LiveOptions);
     except
@@ -533,7 +547,8 @@ begin
         LogWarn('provider Chat raised: %s: %s', [E.ClassName, E.Message]);
         Resp := Default(TLLMResponse);
         Resp.StatusCode := -1;
-        Resp.Content := E.ClassName + ': ' + E.Message;
+        LastProviderErrText := Cfg.Provider.GetName + ': '
+                               + E.ClassName + ': ' + E.Message;
       end;
     end;
     { Provider fallback. Retryable conditions: HTTP 408 / 429 / 5xx,
@@ -563,6 +578,9 @@ begin
                  [fbi, Cfg.Fallbacks[fbi].GetName, FallbackModel]);
         try
           Resp := Cfg.Fallbacks[fbi].Chat(Hist, Tools, FallbackModel, LiveOptions);
+          { Successful call clears the diagnostic — only the LAST failed
+            attempt's text should surface to hooks. }
+          LastProviderErrText := '';
         except
           on E: Exception do
           begin
@@ -570,7 +588,8 @@ begin
                     [Cfg.Fallbacks[fbi].GetName, E.ClassName, E.Message]);
             Resp := Default(TLLMResponse);
             Resp.StatusCode := -1;
-            Resp.Content := E.ClassName + ': ' + E.Message;
+            LastProviderErrText := Cfg.Fallbacks[fbi].GetName + ': '
+                                   + E.ClassName + ': ' + E.Message;
           end;
         end;
         if not IsRetryableStatus(Resp.StatusCode) then
@@ -594,13 +613,22 @@ begin
     if (Length(Cfg.Hooks) > 0) and
        ((Resp.StatusCode < 200) or (Resp.StatusCode >= 300)) then
     begin
-      { Include Resp.Content when populated — for raised exceptions
-        (the try/except blocks above stash "EClass: message" there)
-        this gives the hook the actual exception text instead of
-        just "status=-1". For non-2xx HTTP responses Resp.Content
-        is typically the provider's error JSON, which is also
-        useful telemetry. }
-      if Resp.Content <> '' then
+      { Diagnostic preference order:
+          1. LastProviderErrText  — exception text we caught above.
+                                    Highest priority because we know
+                                    it's our own structured failure
+                                    and won't leak into Loop.Content.
+          2. Resp.Content         — typically the provider's error
+                                    JSON body on a non-2xx HTTP
+                                    response. Useful telemetry; we
+                                    don't filter it because the
+                                    provider returned it deliberately.
+          3. Just status=%d       — nothing else available. }
+      if LastProviderErrText <> '' then
+        HooksOnError(Cfg.Hooks, hsProviderCall,
+                      Format('provider returned status=%d: %s',
+                             [Resp.StatusCode, LastProviderErrText]))
+      else if Resp.Content <> '' then
         HooksOnError(Cfg.Hooks, hsProviderCall,
                       Format('provider returned status=%d: %s',
                              [Resp.StatusCode, Resp.Content]))
@@ -762,22 +790,34 @@ begin
           they can reset SystemPrompt in BeforeTurn. }
       if BatchSteering <> '' then
       begin
-        { Drain any mrSystem messages from Hist into the SystemPrompt
-          slot before appending the steering text. Provider builders
-          drop in-history mrSystem when SystemPrompt is non-empty, so
-          a direct-RunToolLoop embedder who supplied policy via
-          mrSystem (leaving Cfg.Options.SystemPrompt empty) would
-          otherwise see their policy disappear the first time
-          steering fires. (Codex P2 on PR #113.) Idempotent — once
-          drained, subsequent passes find no mrSystem to fold. }
-        HistSystem := DrainHistorySystem(Hist);
-        if HistSystem <> '' then
+        { Copy any mrSystem messages from Hist into SystemPrompt
+          when (and only when) SystemPrompt is currently empty.
+          Reasoning:
+
+            * SystemPrompt empty + mrSystem in Hist: provider
+              builders ship the mrSystem entries as the system
+              prompt. We want our steering to ride along with the
+              policy, so we copy the policy text into SystemPrompt
+              first, then append steering. After this call,
+              SystemPrompt is non-empty and the provider builders
+              drop in-history mrSystem on the next round (using
+              SystemPrompt instead). The Hist mrSystem entries
+              stay PUT — non-destructive copy — so if a BeforeTurn
+              hook later resets SystemPrompt to '' for the
+              ephemeral-steering pattern, the policy is still
+              available in Hist and ships again via the in-history
+              channel. (Codex P2 on PR #114.)
+
+            * SystemPrompt non-empty: it already contains the
+              policy (folded on the first pass) plus prior steering.
+              Just append the new steering. Re-reading Hist here
+              would duplicate the policy text on every fold.
+
+          Either way the policy reaches the model. }
+        if (LiveOptions.SystemPrompt = '') then
         begin
-          if LiveOptions.SystemPrompt <> '' then
-            LiveOptions.SystemPrompt := LiveOptions.SystemPrompt
-                                        + sLineBreak + sLineBreak
-                                        + HistSystem
-          else
+          HistSystem := CopyHistorySystem(Hist);
+          if HistSystem <> '' then
             LiveOptions.SystemPrompt := HistSystem;
         end;
         if LiveOptions.SystemPrompt <> '' then
