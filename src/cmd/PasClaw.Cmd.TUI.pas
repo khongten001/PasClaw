@@ -37,6 +37,7 @@ type
     Model:       string;
     Provider:    string;
     Session:     string;
+    Theme:       string;
     NoMCP:       Boolean;
     NoTools:     Boolean;
     NoHashline:  Boolean;
@@ -47,7 +48,7 @@ var
   i: Integer;
 begin
   Result := True;
-  A.Model := ''; A.Provider := ''; A.Session := '';
+  A.Model := ''; A.Provider := ''; A.Session := ''; A.Theme := '';
   A.NoMCP := False; A.NoTools := False; A.NoHashline := False;
   i := 0;
   while i <= High(Argv) do
@@ -55,6 +56,7 @@ begin
     if Argv[i] = '--model'        then begin if i = High(Argv) then Exit(False); A.Model    := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--provider'     then begin if i = High(Argv) then Exit(False); A.Provider := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--session'      then begin if i = High(Argv) then Exit(False); A.Session  := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--theme'        then begin if i = High(Argv) then Exit(False); A.Theme    := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--no-mcp'       then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin A.NoHashline := True; Inc(i); Continue; end;
@@ -106,6 +108,7 @@ begin
     TUIInst.PromptCacheEnabled := Cfg.PromptCache.Enabled;
     TUIInst.PromptCacheTTL     := Cfg.PromptCache.TTL;
     TUIInst.SessionId          := A.Session;
+    TUIInst.ThemeName          := A.Theme;
     try
       TUIInst.Run;
     finally

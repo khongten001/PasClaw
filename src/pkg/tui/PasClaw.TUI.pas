@@ -73,14 +73,22 @@ type
                                          loop is running, the result must land
                                          in the ORIGINATING session, never in
                                          whatever FSession now points at }
+    FMenuOpen:          Boolean;       { theme picker overlay active }
+    FMenuSelIdx:        Integer;       { highlighted theme in the menu }
+    FMenuOrigTheme:     string;        { theme name to revert to on Escape }
+    FCurrentTheme:      string;        { last-applied theme name (committed) }
     procedure DrawFrame;
     procedure DrawHeaderBar(W: Integer);
     procedure DrawSessionPane(X, Y, W, H: Integer);
     procedure DrawChatPane(X, Y, W, H: Integer);
     procedure DrawFooterBar(Y, W: Integer);
+    procedure DrawThemeMenu;
     procedure HandleKey(Key: Integer);
     procedure HandleSessionKey(Key: Integer);
     procedure HandleChatKey(Key: Integer);
+    procedure HandleMenuKey(Key: Integer);
+    procedure OpenThemeMenu;
+    procedure ApplyTheme(const Name: string; ForcePreview: Boolean);
     procedure SubmitInput;
     procedure StartTurn(const UserText: string);
     procedure PollLoopWorker;
@@ -109,6 +117,14 @@ type
        branch only; FPC branch ignores it). Cmd_TUI_Run forwards
        --session here, mirroring `pasclaw agent --session <id>`. *)
     SessionId:          string;
+    (* Initial colour theme. One of:
+         'navy' (default) | 'matrix' | 'sunset' | 'ocean' |
+         'midnight' | 'classic' | 'default'
+       Unknown names fall back silently to navy. Cmd_TUI_Run forwards
+       --theme here. Live switching via the in-TUI menu (/theme) does
+       NOT persist back — this PR is the picker UX only; durable
+       per-user theme config is a follow-up. FPC branch ignores. *)
+    ThemeName:          string;
     constructor Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
     {$IFNDEF FPC}destructor Destroy; override;{$ENDIF}
     procedure Run;
@@ -252,6 +268,61 @@ procedure TTUI.Flash(const Msg: string);
 begin
   FStatusFlash := Msg;
   FStatusFlashUntil := IncSecond(Now, 3);
+end;
+
+{ The seven themes vendored DMVCFramework ships in
+  src/pkg/vendor/dmvcframework/MVCFramework.Console.pas. Order here is
+  the menu's display order; 'navy' first since it's the default. }
+const
+  THEME_NAMES: array[0..6] of string = (
+    'navy', 'matrix', 'sunset', 'ocean', 'midnight', 'classic', 'default'
+  );
+
+function ResolveTheme(const Name: string): TConsoleColorStyle;
+begin
+  if      SameText(Name, 'matrix')   then Result := ConsoleThemeMatrix
+  else if SameText(Name, 'sunset')   then Result := ConsoleThemeSunset
+  else if SameText(Name, 'ocean')    then Result := ConsoleThemeOcean
+  else if SameText(Name, 'midnight') then Result := ConsoleThemeMidnight
+  else if SameText(Name, 'classic')  then Result := ConsoleThemeClassic
+  else if SameText(Name, 'default')  then Result := ConsoleThemeDefault
+  else                                    Result := ConsoleThemeNavy;
+end;
+
+function CanonicalThemeName(const Name: string): string;
+var
+  i: Integer;
+begin
+  for i := 0 to High(THEME_NAMES) do
+    if SameText(Name, THEME_NAMES[i]) then Exit(THEME_NAMES[i]);
+  Result := 'navy';
+end;
+
+procedure TTUI.ApplyTheme(const Name: string; ForcePreview: Boolean);
+begin
+  SetConsoleTheme(ResolveTheme(Name));
+  { Force a full repaint — old theme's background fill might leave
+    ink in cells the new theme doesn't overwrite. Same trick as the
+    resize path. The ForcePreview flag is purely documentation —
+    every call needs the repaint, but separating "commit" vs
+    "preview" callers makes the intent clearer at the call site. }
+  ClrScr;
+  FLastResizeW := -1;
+end;
+
+procedure TTUI.OpenThemeMenu;
+var
+  i: Integer;
+begin
+  FMenuOrigTheme := FCurrentTheme;
+  FMenuSelIdx := 0;
+  for i := 0 to High(THEME_NAMES) do
+    if SameText(THEME_NAMES[i], FCurrentTheme) then
+    begin
+      FMenuSelIdx := i;
+      Break;
+    end;
+  FMenuOpen := True;
 end;
 
 function TTUI.CurrentSpinnerChar: Char;
@@ -539,9 +610,11 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap pane | N new | D del | Q quit')
+      Flash('keys: Tab swap pane | N new | D del | Q quit | /theme')
     else if (Text = '/tools') and (FRegistry <> nil) then
       Flash(Format('registered tools: %d', [FRegistry.Count]))
+    else if Text = '/theme' then
+      OpenThemeMenu
     else
       Flash('unknown: ' + Text);
     FInputBuf := '';
@@ -660,10 +733,51 @@ begin
   end;
 end;
 
+procedure TTUI.HandleMenuKey(Key: Integer);
+begin
+  case Key of
+    KEY_UP:
+      if FMenuSelIdx > 0 then
+      begin
+        Dec(FMenuSelIdx);
+        { Live preview — apply the highlighted theme as the user
+          arrows through. Esc reverts to FMenuOrigTheme; Enter
+          commits whatever's currently applied. }
+        ApplyTheme(THEME_NAMES[FMenuSelIdx], True);
+      end;
+    KEY_DOWN:
+      if FMenuSelIdx < High(THEME_NAMES) then
+      begin
+        Inc(FMenuSelIdx);
+        ApplyTheme(THEME_NAMES[FMenuSelIdx], True);
+      end;
+    KEY_ENTER:
+      begin
+        FCurrentTheme := THEME_NAMES[FMenuSelIdx];
+        FMenuOpen := False;
+        Flash('theme: ' + FCurrentTheme);
+      end;
+    KEY_ESCAPE:
+      begin
+        ApplyTheme(FMenuOrigTheme, False);
+        FCurrentTheme := FMenuOrigTheme;
+        FMenuOpen := False;
+      end;
+  end;
+end;
+
 procedure TTUI.HandleKey(Key: Integer);
 const
   KEY_TAB = 9;
 begin
+  { Menu intercepts first — Esc cancels the menu (reverts theme)
+    instead of quitting the TUI, Up/Down navigates with live
+    preview, Enter commits the selection. }
+  if FMenuOpen then
+  begin
+    HandleMenuKey(Key);
+    Exit;
+  end;
   { Escape is the only global quit — Q/q reach the focused pane so
     the chat input can include the letter (typing "question" used
     to immediately quit the TUI). Codex P1 on PR #122. }
@@ -988,6 +1102,63 @@ begin
 
   DrawChatPane(ChatX, 1, ChatW, PaneH);
   DrawFooterBar(H - 2, W);
+
+  { Modal overlay drawn last so it sits on top of both panes. }
+  if FMenuOpen then DrawThemeMenu;
+end;
+
+procedure TTUI.DrawThemeMenu;
+const
+  BoxW = 32;
+var
+  Size: TMVCConsoleSize;
+  W, H, BoxX, BoxY, i, Row, BoxH: Integer;
+  Label_, Top, Bottom, Side, EmptyLine: string;
+begin
+  Size := GetConsoleSize;
+  W := Integer(Size.Columns);
+  H := Integer(Size.Rows);
+  BoxH := Length(THEME_NAMES) + 4;   { title + sep + rows + footer }
+  BoxX := (W - BoxW) div 2;
+  BoxY := (H - BoxH) div 2;
+  if BoxX < 0 then BoxX := 0;
+  if BoxY < 0 then BoxY := 0;
+
+  Top    := '+' + StringOfChar('-', BoxW - 2) + '+';
+  Bottom := Top;
+  Side   := '|';
+  EmptyLine := '|' + StringOfChar(' ', BoxW - 2) + '|';
+
+  GotoXY(BoxX, BoxY);
+  WriteAnsiText(ConsoleTheme.HighlightText, Top);
+
+  { Title row. }
+  GotoXY(BoxX, BoxY + 1);
+  Label_ := ' theme — Up/Dn  Enter to apply  Esc to cancel ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  WriteAnsiText(ConsoleTheme.HighlightText, Side + Label_ + Side);
+
+  { Separator row. }
+  GotoXY(BoxX, BoxY + 2);
+  WriteAnsiText(ConsoleTheme.HighlightText,
+                Side + StringOfChar('-', BoxW - 2) + Side);
+
+  for i := 0 to High(THEME_NAMES) do
+  begin
+    Row := BoxY + 3 + i;
+    if Row >= H - 1 then Break;
+    GotoXY(BoxX, Row);
+    Label_ := '   ' + THEME_NAMES[i];
+    while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+    if i = FMenuSelIdx then
+      WriteAnsiText(ConsoleTheme.Highlight, Side + Label_ + Side)
+    else
+      WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+  end;
+
+  GotoXY(BoxX, BoxY + BoxH - 1);
+  WriteAnsiText(ConsoleTheme.HighlightText, Bottom);
 end;
 
 procedure TTUI.Run;
@@ -996,7 +1167,8 @@ var
 begin
   EnableUTF8Console;
   EnableANSIColorConsole;
-  SetConsoleTheme(ConsoleThemeNavy);
+  FCurrentTheme := CanonicalThemeName(ThemeName);
+  SetConsoleTheme(ResolveTheme(FCurrentTheme));
   HideCursor;
   ClrScr;
 
@@ -1006,6 +1178,8 @@ begin
   FChatScroll := 0;
   FConfirmDelete := False;
   FStatusFlash := '';
+  FMenuOpen := False;
+  FMenuSelIdx := 0;
   FLastResizeW := -1; FLastResizeH := -1;
 
   { Always allocate a session (PR #117 default-persist semantics).
