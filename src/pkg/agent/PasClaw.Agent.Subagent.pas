@@ -47,7 +47,9 @@ uses
   PasClaw.Tools.Obj;
 
 type
-  TSubagentSpecArray = array of TSubagentSpec;
+  { TSubagentSpecArray now lives in PasClaw.Config alongside
+    TSubagentSpec — see comment there for the dcc64 named-type
+    rationale. The use clause above pulls it in. }
 
   { Everything the spawn tool needs from its parent — captured at
     registration time so the tool handler can run a child loop
