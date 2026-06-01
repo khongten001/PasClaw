@@ -90,7 +90,6 @@ begin
   ErrMsg := '';
   Result := False;
 
-  Root := nil;
   try
     Root := TJsonObject.Parse(JSONBody);
   except

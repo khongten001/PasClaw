@@ -98,7 +98,6 @@ begin
     Exit;
   end;
 
-  Root := nil;
   try
     Root := TJsonObject.Parse(Resp.Body);
   except

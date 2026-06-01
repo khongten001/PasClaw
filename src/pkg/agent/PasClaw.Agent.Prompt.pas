@@ -254,7 +254,12 @@ begin
     Result := Lines.Text;
     { Strip trailing newline TStringList.Text adds, so the SectionSep
       below doesn't end up with an extra blank line. }
-    while (Result <> '') and (Result[Length(Result)] in [#10, #13]) do
+    { CharInSet (vs the `in` shorthand) — under Delphi 12 dcc64 the
+      string is UnicodeString so Result[i] is WideChar; `in [#10,#13]`
+      coerces it back to AnsiChar and emits W1050. CharInSet keeps
+      the WideChar without the truncation warning; FPC's SysUtils
+      ships the same helper so no per-compiler gate is needed. }
+    while (Result <> '') and CharInSet(Result[Length(Result)], [#10, #13]) do
       SetLength(Result, Length(Result) - 1);
   finally
     Lines.Free;

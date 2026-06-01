@@ -161,6 +161,15 @@ type
     Model:         string;
     MaxIter:       Integer;
   end;
+  { Named-type alias for dcc64 strict-array compatibility — assigning
+    Cfg.Subagents into a `TSubagentSpecArray` parameter (which
+    PasClaw.Agent.Subagent.RegisterSpawnTool / TSpawnTool.Create take)
+    used to E2010 because TConfig.Subagents was declared as an inline
+    `array of TSubagentSpec`. Same pattern as TLLMProviderArray
+    (PR #104) and TStringArray / TUInt32Array (PR #106). Owning the
+    alias here means callers in higher layers pick it up by importing
+    PasClaw.Config — they don't have to re-declare. }
+  TSubagentSpecArray = array of TSubagentSpec;
 
   (* TWebSearchConfig - web_search tool provider selection.
        Provider:   'duckduckgo' (default, no key) | 'brave' | 'tavily' |
@@ -195,7 +204,7 @@ type
     MCPServers: array of TMCPServer;
     Crons:      array of TCronEntry;
     Skills:     array of TSkillEntry;
-    Subagents:  array of TSubagentSpec;
+    Subagents:  TSubagentSpecArray;  { see comment on the type alias }
     WebSearch:  TWebSearchConfig;
     constructor Create;
     function  ToJSON: string;
