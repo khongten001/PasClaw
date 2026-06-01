@@ -554,22 +554,40 @@ begin
 
     { Mid-loop steering: drain any user follow-ups that arrived
       while we were busy (CLI `pasclaw steer <id> "..."`, channels
-      with concurrent polling) and fold each into history as a
-      bracketed mrSystem note. The next provider call sees them as
-      part of the conversation context — pivot or abort behaviour
-      is up to the model. Cap at MaxSteeringPerTurn so a runaway
-      pusher can't grow Hist unbounded; the cap matches nanobot's
-      _MAX_INJECTIONS_PER_TURN sanity bound. }
+      with concurrent polling) and fold each into LiveOptions.
+      SystemPrompt as a "[user steering received mid-turn]" addendum
+      so the next provider call's `system` field carries them.
+
+      We CANNOT append mrSystem to Hist here — the OpenAI builder
+      (PasClaw.Providers.OpenAI.pas:148-151) and Anthropic
+      (PasClaw.Providers.Anthropic.pas:170-172) and Gemini all skip
+      in-history mrSystem entries when Options.SystemPrompt is
+      already populated (which it is on the CLI path,
+      BuildLoopConfig always sets it). The drain would then
+      permanently consume the queue without the model ever seeing
+      the correction. Folding into SystemPrompt is the same channel
+      compaction uses for the same reason. (Codex P1 on PR #120.)
+
+      Cap at MaxSteeringPerTurn so a runaway pusher can't grow the
+      system prompt unbounded; the cap matches nanobot's
+      _MAX_INJECTIONS_PER_TURN sanity bound. Cache breakpoint
+      invalidates for the steering turn — acceptable cost. }
     if Cfg.SteeringKey <> '' then
     begin
       Steers := DrainSteering(Cfg.SteeringKey, MaxSteeringPerTurn);
-      for sti := 0 to High(Steers) do
+      if Length(Steers) > 0 then
       begin
-        LogDebug('steering[%s] injecting: %s',
-                 [Cfg.SteeringKey, Copy(Steers[sti].Text, 1, 80)]);
-        SetLength(Hist, Length(Hist) + 1);
-        Hist[High(Hist)] := MakeMessage(mrSystem,
-          '[user steering] ' + Steers[sti].Text);
+        if LiveOptions.SystemPrompt <> '' then
+          LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + sLineBreak + sLineBreak;
+        LiveOptions.SystemPrompt := LiveOptions.SystemPrompt +
+          '[user steering received mid-turn]';
+        for sti := 0 to High(Steers) do
+        begin
+          LogDebug('steering[%s] injecting: %s',
+                   [Cfg.SteeringKey, Copy(Steers[sti].Text, 1, 80)]);
+          LiveOptions.SystemPrompt := LiveOptions.SystemPrompt +
+            sLineBreak + '- ' + Steers[sti].Text;
+        end;
       end;
     end;
 

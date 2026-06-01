@@ -18,12 +18,15 @@
   chat id, Slack channel, etc.) when they wire concurrent polling
   (currently CLI-only — see README for the per-channel follow-up).
 
-  Concurrency model: pushes are atomic per-line POSIX appends (a
-  PIPE_BUF-sized write to an O_APPEND fd is atomic). Drains rename
-  the queue file to <key>.jsonl.draining, then read and delete — so
-  a concurrent push during drain lands in a freshly-created
+  Concurrency model: every push AND drain acquires a directory-
+  based mutex first (mkdir of <key>.jsonl.lock — atomic on both
+  POSIX and Windows). A stale lock from a crashed process is auto-
+  recovered after STALE_LOCK_SECS. Inside the mutex a drain renames
+  the queue file to <key>.jsonl.draining, then reads and deletes,
+  so a push that beat the drain to the lock is in the renamed
+  inode and gets returned; one that arrives later opens a fresh
   <key>.jsonl that the NEXT drain picks up. No message lost, no
-  message returned twice.
+  message returned twice, no torn writes.
 
   Cap: caller decides via MaxPerTurn (RunToolLoop passes a small
   fixed cap so a runaway pusher can't grow Hist unbounded). Drained
@@ -101,6 +104,61 @@ begin
   Result := DateTimeToUnix(Now, False);
 end;
 
+const
+  { A process that crashed mid-push leaves the lock dir behind. After
+    this many seconds we treat it as orphaned and reclaim — small
+    enough that an interrupted user CLI doesn't permanently wedge
+    the queue, large enough that a normal push/drain (millisecond
+    scale) never trips it. }
+  STALE_LOCK_SECS  = 30;
+  LOCK_SPIN_MS     = 25;
+  LOCK_MAX_WAIT_MS = 2000;
+
+{ Directory-based mutex. mkdir is atomic on both POSIX and Windows
+  (POSIX: O_CREAT|O_EXCL semantics; Windows: CreateDirectory is
+  atomic against concurrent calls). One process creates, others see
+  EEXIST and spin. Returns True when acquired; False on timeout.
+  Stale locks older than STALE_LOCK_SECS are reclaimed. }
+function AcquireLock(const LockDir: string): Boolean;
+var
+  Waited: Integer;
+  Age: Int64;
+  Info: TSearchRec;
+begin
+  Waited := 0;
+  while Waited < LOCK_MAX_WAIT_MS do
+  begin
+    if CreateDir(LockDir) then Exit(True);
+    { Already exists — check whether it's stale. FindFirst on the
+      directory itself gives us its mtime via SR.Time. }
+    if FindFirst(LockDir, faDirectory, Info) = 0 then
+    try
+      Age := DateTimeToUnix(Now, False) - DateTimeToUnix(FileDateToDateTime(Info.Time), False);
+      if Age > STALE_LOCK_SECS then
+      begin
+        LogWarn('steering: reclaiming stale lock %s (age=%ds)', [LockDir, Age]);
+        RemoveDir(LockDir);
+        Continue;
+      end;
+    finally
+      FindClose(Info);
+    end;
+    Sleep(LOCK_SPIN_MS);
+    Inc(Waited, LOCK_SPIN_MS);
+  end;
+  Result := False;
+end;
+
+procedure ReleaseLock(const LockDir: string);
+begin
+  RemoveDir(LockDir);
+end;
+
+function LockPath(const SessionKey: string): string;
+begin
+  Result := JoinPath(SteeringDir, SessionKey + '.jsonl.lock');
+end;
+
 function EncodeLine(PostedAt: Int64; const Text: string): string;
 var
   Obj: TJsonObject;
@@ -134,7 +192,7 @@ end;
 
 function PushSteering(const SessionKey, Text: string): Boolean;
 var
-  Path: string;
+  Path, Lock: string;
   Stream: TFileStream;
   Line: UTF8String;
   TrimmedText: string;
@@ -144,79 +202,133 @@ begin
   if TrimmedText = '' then Exit;
   Path := SteeringPath(SessionKey);
   if Path = '' then Exit;
-  EnsureSteeringDir;
-  if FileExists(Path) then
-    Stream := TFileStream.Create(Path, fmOpenWrite or fmShareDenyNone)
-  else
-    Stream := TFileStream.Create(Path, fmCreate);
+
+  { Wrap directory creation, lock acquisition, and the write in
+    try/except so a read-only $PASCLAW_HOME, a permissions denial,
+    or a vanishing disk yields the documented False return instead
+    of an exception propagating out of the CLI. (Codex P2 on PR #120.) }
   try
-    Stream.Seek(0, soEnd);
-    Line := UTF8String(EncodeLine(NowUnix, TrimmedText) + #10);
-    Stream.WriteBuffer(Pointer(Line)^, Length(Line));
-    Result := True;
+    EnsureSteeringDir;
+  except
+    on E: Exception do
+    begin
+      LogWarn('steering: cannot create %s: %s', [SteeringDir, E.Message]);
+      Exit;
+    end;
+  end;
+
+  Lock := LockPath(SessionKey);
+  if not AcquireLock(Lock) then
+  begin
+    LogWarn('steering: lock acquisition timed out for %s', [SessionKey]);
+    Exit;
+  end;
+  try
+    try
+      if FileExists(Path) then
+        Stream := TFileStream.Create(Path, fmOpenWrite or fmShareDenyWrite)
+      else
+        Stream := TFileStream.Create(Path, fmCreate);
+    except
+      on E: Exception do
+      begin
+        LogWarn('steering: cannot open %s for append: %s', [Path, E.Message]);
+        Exit;
+      end;
+    end;
+    try
+      try
+        Stream.Seek(0, soEnd);
+        Line := UTF8String(EncodeLine(NowUnix, TrimmedText) + #10);
+        Stream.WriteBuffer(Pointer(Line)^, Length(Line));
+        Result := True;
+      except
+        on E: Exception do
+          LogWarn('steering: write to %s failed: %s', [Path, E.Message]);
+      end;
+    finally
+      Stream.Free;
+    end;
   finally
-    Stream.Free;
+    ReleaseLock(Lock);
   end;
 end;
 
 function DrainSteering(const SessionKey: string; MaxMessages: Integer): TSteeringMessageArray;
 var
-  Path, DrainPath: string;
+  Path, DrainPath, Lock: string;
   S: TStringList;
   i, Kept: Integer;
   Msg: TSteeringMessage;
 begin
   SetLength(Result, 0);
   Path := SteeringPath(SessionKey);
-  if (Path = '') or (not FileExists(Path)) then Exit;
-  DrainPath := Path + '.draining';
-  { Rename first so a concurrent push lands in a fresh file. Any
-    push between the rename and the read is preserved; any push
-    after the rename targets a new <key>.jsonl which the NEXT
-    drain handles. }
-  if FileExists(DrainPath) then SysUtils.DeleteFile(DrainPath);
-  if not RenameFile(Path, DrainPath) then Exit;
-  S := TStringList.Create;
+  if Path = '' then Exit;
+
+  Lock := LockPath(SessionKey);
+  if not AcquireLock(Lock) then
+  begin
+    LogWarn('steering: drain lock timeout for %s', [SessionKey]);
+    Exit;
+  end;
   try
+    if not FileExists(Path) then Exit;
+    DrainPath := Path + '.draining';
+    { Inside the lock the rename is uncontended — but keep the
+      rename anyway so a stale-lock reclaim mid-drain doesn't
+      surprise a concurrent reader with mid-read deletion. }
+    if FileExists(DrainPath) then SysUtils.DeleteFile(DrainPath);
+    if not RenameFile(Path, DrainPath) then Exit;
+    S := TStringList.Create;
     try
-      S.LoadFromFile(DrainPath);
-    except
-      on E: Exception do
-      begin
-        LogWarn('steering: drain read failed (%s); discarding queue', [E.Message]);
-        SysUtils.DeleteFile(DrainPath);
-        Exit;
+      try
+        S.LoadFromFile(DrainPath);
+      except
+        on E: Exception do
+        begin
+          LogWarn('steering: drain read failed (%s); discarding queue', [E.Message]);
+          SysUtils.DeleteFile(DrainPath);
+          Exit;
+        end;
       end;
-    end;
-    Kept := 0;
-    for i := 0 to S.Count - 1 do
-    begin
-      if Kept >= MaxMessages then
+      Kept := 0;
+      for i := 0 to S.Count - 1 do
       begin
-        LogWarn('steering[%s]: %d pending exceeded cap of %d — dropping rest',
-                [SessionKey, S.Count - Kept, MaxMessages]);
-        Break;
+        if Kept >= MaxMessages then
+        begin
+          LogWarn('steering[%s]: %d pending exceeded cap of %d — dropping rest',
+                  [SessionKey, S.Count - Kept, MaxMessages]);
+          Break;
+        end;
+        if DecodeLine(S[i], Msg) then
+        begin
+          SetLength(Result, Length(Result) + 1);
+          Result[High(Result)] := Msg;
+          Inc(Kept);
+        end;
       end;
-      if DecodeLine(S[i], Msg) then
-      begin
-        SetLength(Result, Length(Result) + 1);
-        Result[High(Result)] := Msg;
-        Inc(Kept);
-      end;
+    finally
+      S.Free;
+      SysUtils.DeleteFile(DrainPath);
     end;
   finally
-    S.Free;
-    SysUtils.DeleteFile(DrainPath);
+    ReleaseLock(Lock);
   end;
 end;
 
 procedure ClearSteering(const SessionKey: string);
 var
-  Path: string;
+  Path, Lock: string;
 begin
   Path := SteeringPath(SessionKey);
-  if (Path = '') or (not FileExists(Path)) then Exit;
-  SysUtils.DeleteFile(Path);
+  if Path = '' then Exit;
+  Lock := LockPath(SessionKey);
+  if not AcquireLock(Lock) then Exit;   { best-effort — no log spam }
+  try
+    if FileExists(Path) then SysUtils.DeleteFile(Path);
+  finally
+    ReleaseLock(Lock);
+  end;
 end;
 
 function PendingSteeringCount(const SessionKey: string): Integer;
