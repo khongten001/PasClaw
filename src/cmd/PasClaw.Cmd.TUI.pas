@@ -36,6 +36,7 @@ type
   TTUIArgs = record
     Model:       string;
     Provider:    string;
+    Session:     string;
     NoMCP:       Boolean;
     NoTools:     Boolean;
     NoHashline:  Boolean;
@@ -46,12 +47,14 @@ var
   i: Integer;
 begin
   Result := True;
-  A.Model := ''; A.Provider := ''; A.NoMCP := False; A.NoTools := False; A.NoHashline := False;
+  A.Model := ''; A.Provider := ''; A.Session := '';
+  A.NoMCP := False; A.NoTools := False; A.NoHashline := False;
   i := 0;
   while i <= High(Argv) do
   begin
     if Argv[i] = '--model'        then begin if i = High(Argv) then Exit(False); A.Model    := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--provider'     then begin if i = High(Argv) then Exit(False); A.Provider := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--session'      then begin if i = High(Argv) then Exit(False); A.Session  := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--no-mcp'       then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin A.NoHashline := True; Inc(i); Continue; end;
@@ -102,6 +105,7 @@ begin
     TUIInst := TTUI.Create(Provider, Reg, Model);
     TUIInst.PromptCacheEnabled := Cfg.PromptCache.Enabled;
     TUIInst.PromptCacheTTL     := Cfg.PromptCache.TTL;
+    TUIInst.SessionId          := A.Session;
     try
       TUIInst.Run;
     finally
