@@ -7,7 +7,7 @@
                    MVCFramework.Console (vendored in
                    src/pkg/vendor/dmvcframework/, Apache-2.0). Two
                    panes — session list on the left, chat scrollback +
-                   input on the right — themed via ConsoleThemeNavy.
+                   input on the right — themed via ConsoleThemeDefault.
                    Per-frame redraw (~30 fps), KeyPressed/GetKey loop,
                    background TRunToolLoopThread for the LLM call so
                    the chat pane stays responsive (spinner + steering
@@ -118,12 +118,13 @@ type
        --session here, mirroring `pasclaw agent --session <id>`. *)
     SessionId:          string;
     (* Initial colour theme. One of:
-         'navy' (default) | 'matrix' | 'sunset' | 'ocean' |
-         'midnight' | 'classic' | 'default'
-       Unknown names fall back silently to navy. Cmd_TUI_Run forwards
-       --theme here. Live switching via the in-TUI menu (/theme) does
-       NOT persist back — this PR is the picker UX only; durable
-       per-user theme config is a follow-up. FPC branch ignores. *)
+         'default' (default) | 'navy' | 'matrix' | 'sunset' | 'ocean' |
+         'midnight' | 'classic'
+       Unknown names fall back silently to 'default'. Cmd_TUI_Run
+       forwards --theme here. Live switching via the in-TUI menu
+       (/theme) does NOT persist back — this PR is the picker UX
+       only; durable per-user theme config is a follow-up. FPC branch
+       ignores. *)
     ThemeName:          string;
     constructor Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
     {$IFNDEF FPC}destructor Destroy; override;{$ENDIF}
@@ -272,21 +273,21 @@ end;
 
 { The seven themes vendored DMVCFramework ships in
   src/pkg/vendor/dmvcframework/MVCFramework.Console.pas. Order here is
-  the menu's display order; 'navy' first since it's the default. }
+  the menu's display order; 'default' first since it's the default. }
 const
   THEME_NAMES: array[0..6] of string = (
-    'navy', 'matrix', 'sunset', 'ocean', 'midnight', 'classic', 'default'
+    'default', 'navy', 'matrix', 'sunset', 'ocean', 'midnight', 'classic'
   );
 
 function ResolveTheme(const Name: string): TConsoleColorStyle;
 begin
-  if      SameText(Name, 'matrix')   then Result := ConsoleThemeMatrix
+  if      SameText(Name, 'navy')     then Result := ConsoleThemeNavy
+  else if SameText(Name, 'matrix')   then Result := ConsoleThemeMatrix
   else if SameText(Name, 'sunset')   then Result := ConsoleThemeSunset
   else if SameText(Name, 'ocean')    then Result := ConsoleThemeOcean
   else if SameText(Name, 'midnight') then Result := ConsoleThemeMidnight
   else if SameText(Name, 'classic')  then Result := ConsoleThemeClassic
-  else if SameText(Name, 'default')  then Result := ConsoleThemeDefault
-  else                                    Result := ConsoleThemeNavy;
+  else                                    Result := ConsoleThemeDefault;
 end;
 
 function CanonicalThemeName(const Name: string): string;
@@ -295,7 +296,7 @@ var
 begin
   for i := 0 to High(THEME_NAMES) do
     if SameText(Name, THEME_NAMES[i]) then Exit(THEME_NAMES[i]);
-  Result := 'navy';
+  Result := 'default';
 end;
 
 procedure TTUI.ApplyTheme(const Name: string; ForcePreview: Boolean);
