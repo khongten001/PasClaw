@@ -61,7 +61,17 @@ uses
 function HostPlatformSuffix: string;
 begin
   {$IF DEFINED(MSWINDOWS) OR DEFINED(WINDOWS)}
-    {$IF DEFINED(CPUX86_64) OR DEFINED(CPU_X64) OR DEFINED(CPU64)}
+    { Delphi 13's Windows-on-ARM target (when it ships) defines
+      CPUARM64; FPC's Windows-aarch64 cross-build defines
+      CPUAARCH64. Check both so the right suffix lands regardless
+      of compiler. For the 64-bit Windows-x64 case, Delphi defines
+      CPU64BITS (the Embarcadero canonical name for "running on a
+      64-bit CPU") and FPC defines CPUX86_64; the older CPU_X64 /
+      CPU64 spellings we used to check aren't standard on either
+      compiler. (Codex P2 on PR #115.) }
+    {$IF DEFINED(CPUARM64) OR DEFINED(CPUAARCH64)}
+      Result := 'windows_arm64.exe';
+    {$ELSEIF DEFINED(CPUX86_64) OR DEFINED(CPU64BITS)}
       Result := 'windows_amd64.exe';
     {$ELSE}
       Result := 'windows_386.exe';
