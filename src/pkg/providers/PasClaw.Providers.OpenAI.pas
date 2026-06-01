@@ -57,6 +57,15 @@ type
     function SupportsStreaming: Boolean;
   end;
 
+{ Exposed for tests + audit / logging embedders that want to see the
+  wire body without hitting the network. Pure; same code path Chat
+  executes. }
+function BuildOAIRequest(const Messages: array of TMessage;
+                         const Tools:    array of TToolDefinition;
+                         const Model:    string;
+                         const Options:  TChatOptions): string;
+procedure ParseOAIResponse(const Body: string; var Resp: TLLMResponse);
+
 implementation
 
 uses
@@ -133,6 +142,14 @@ begin
     Root.PutStr('model', Model);
     if Options.MaxTokens > 0 then Root.PutInt('max_tokens', Options.MaxTokens);
     if Options.Temperature > 0 then Root.PutFloat('temperature', Options.Temperature);
+    { Prompt cache anchor. OpenAI's automatic prefix cache buckets
+      by `prompt_cache_key` so two threads with similar prefixes
+      don't accidentally share state and one thread's cache survives
+      load-balancer reshuffles. Empty key (e.g. the one-shot path
+      that doesn't have a session) falls back to OpenAI's content-
+      hash bucketing — slightly less stable but still functional. }
+    if Options.CacheEnabled and (Options.CacheKey <> '') then
+      Root.PutStr('prompt_cache_key', Options.CacheKey);
 
     Sys := Options.SystemPrompt;
 
@@ -218,7 +235,7 @@ end;
 
 procedure ParseOAIResponse(const Body: string; var Resp: TLLMResponse);
 var
-  Obj, Choice, Msg, FObj, TCObj, Usage: TJsonObject;
+  Obj, Choice, Msg, FObj, TCObj, Usage, PromptDetails: TJsonObject;
   Choices, TCArr: TJsonArray;
   i: Integer;
   TC: TToolCall;
@@ -285,6 +302,20 @@ begin
     try
       Resp.Usage.InputTokens  := Usage.GetInt('prompt_tokens',     0);
       Resp.Usage.OutputTokens := Usage.GetInt('completion_tokens', 0);
+      { OpenAI's automatic cache hits surface as `cached_tokens`
+        inside `prompt_tokens_details`. The number is already
+        included in `prompt_tokens` (cached tokens are billed
+        at 50% rather than excluded), so we report it as cache
+        reads but do NOT subtract from InputTokens — the agent UI
+        is then free to compute "uncached prompt = input - read"
+        and show savings. }
+      PromptDetails := Usage.ChildObject('prompt_tokens_details');
+      if PromptDetails <> nil then
+      try
+        Resp.Usage.CacheReadTokens := PromptDetails.GetInt('cached_tokens', 0);
+      finally
+        PromptDetails.Free;
+      end;
     finally
       Usage.Free;
     end;

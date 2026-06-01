@@ -74,6 +74,14 @@ type
     Content:     string;
     Iterations:  Integer;
     LastResp:    TLLMResponse;
+    (* Aggregate usage across every provider call this loop made.
+       LastResp only carries the final iteration's usage; a multi-tool
+       turn that runs 4 provider calls would otherwise hide the cache
+       reads / writes / token counts from the first 3 calls. Callers
+       surfacing per-turn metrics (CLI /status, gateway response usage
+       block) should read TotalUsage, not LastResp.Usage. Codex P2 on
+       PR #118. *)
+    TotalUsage:  TUsageInfo;
     (* The final history at the moment RunToolLoop returns, with all
        in-flight compactions applied. Interactive callers (Cmd.Agent's
        RunInteractive, the TUI) read this back into their own message
@@ -470,6 +478,7 @@ var
 begin
   Loop.Content    := '';
   Loop.Iterations := 0;
+  Loop.TotalUsage := Default(TUsageInfo);
 
   if Cfg.Provider = nil then Exit(False);
 
@@ -601,6 +610,15 @@ begin
       end;
     end;
     Loop.LastResp := Resp;
+    { Roll up usage across every provider call in this loop (incl.
+      successful fallbacks). Per-iteration cache writes and reads
+      from intermediate tool-using turns would otherwise be lost
+      when /status / FormatTokenLine read only LastResp. Codex P2
+      on PR #118. }
+    Inc(Loop.TotalUsage.InputTokens,        Resp.Usage.InputTokens);
+    Inc(Loop.TotalUsage.OutputTokens,       Resp.Usage.OutputTokens);
+    Inc(Loop.TotalUsage.CacheReadTokens,    Resp.Usage.CacheReadTokens);
+    Inc(Loop.TotalUsage.CacheCreatedTokens, Resp.Usage.CacheCreatedTokens);
 
     { Provider failure surfaces to hooks. After the fallback walk
       above, fire OnError(hsProviderCall) whenever the final status

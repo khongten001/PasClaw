@@ -221,6 +221,7 @@ begin
   LoopCfg.MaxIterations := 6;
   LoopCfg.Parallel := True;
   LoopCfg.Options       := DefaultChatOptions;
+  ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
   LoopCfg.OnText        := nil;
   LoopCfg.OnToolCall    := nil;
   LoopCfg.OnToolResult  := nil;

@@ -400,6 +400,7 @@ begin
             LoopCfg.Parallel      := True;
             LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
             LoopCfg.Options       := DefaultChatOptions;
+            ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
             LoopCfg.OnText        := nil;
             LoopCfg.OnToolCall    := nil;
             LoopCfg.OnToolResult  := nil;

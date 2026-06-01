@@ -96,6 +96,20 @@ type
                                function by name) is not currently supported by
                                this field — when a client sends one the
                                gateway logs and drops it. }
+    (* Prompt caching. When CacheEnabled, the Anthropic builder tags
+       the system prompt and the trailing tools-array entry with an
+       ephemeral cache_control breakpoint; the OpenAI builder emits
+       prompt_cache_key so the back-end keys its automatic cache on
+       a stable session id. Defaults: enabled, default TTL, empty
+       key (no key = no OpenAI cache anchor, falls back to automatic
+       prefix matching). CacheTTL accepts "" / "5m" / "1h" — "1h"
+       passes through as the Anthropic extended-TTL hint; other
+       values are emitted verbatim. CacheKey should be stable across
+       turns of the same conversation (e.g. the session id) so the
+       cache prefix lines up. *)
+    CacheEnabled:  Boolean;
+    CacheTTL:      string;
+    CacheKey:      string;
     Extra:         string;   { provider-specific JSON object }
   end;
 
@@ -149,6 +163,14 @@ begin
   Result.SystemPrompt  := '';
   Result.ThinkingLevel := '';
   Result.ToolChoice    := '';
+  { Prompt caching on by default — Anthropic and OpenAI both no-op
+    silently when the prefix is too short to be worth caching, so
+    flipping this on costs nothing for short prompts and saves ~10x
+    on long ones. Disable per-call via TPromptCacheConfig.Enabled
+    (config.json) when you want to A/B without it. }
+  Result.CacheEnabled  := True;
+  Result.CacheTTL      := '';
+  Result.CacheKey      := '';
   Result.Extra         := '';
 end;
 
