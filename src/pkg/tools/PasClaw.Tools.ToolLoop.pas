@@ -18,6 +18,7 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Agent.Compact,
   PasClaw.Agent.Hooks,
+  PasClaw.Agent.Steering,
   PasClaw.Identity;
 
 type
@@ -81,6 +82,17 @@ type
        dispatching so hook subclasses can read `Self.Identity` to
        gate per-tool / per-turn behaviour. *)
     Identity:       TIdentity;
+    (* Mid-loop steering: the queue key for PasClaw.Agent.Steering.
+       When non-empty, RunToolLoop drains the queue at iteration top
+       and folds pending messages into history as mrSystem turns
+       ("[user steering]: ..."), so the LLM's next round-trip sees
+       the user's course-correction without aborting the loop or
+       discarding tool results so far. Empty key = steering disabled
+       (CLI / cron one-shot paths don't bother).
+       Cmd.Agent sets this to Session.Meta.Id (always present since
+       PR #117); channels can set their own per-conversation key
+       when wiring concurrent polling. *)
+    SteeringKey:    string;
   end;
 
   TToolLoopResult = record
@@ -476,8 +488,13 @@ end;
 function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
+const
+  { Per-iteration steering cap. Picoclaw and nanobot both bound this
+    around 4-5 to keep a runaway pusher from growing Hist unbounded.
+    Drained messages beyond the cap are logged + dropped. }
+  MaxSteeringPerTurn = 4;
 var
-  Iter, i, bi, j, fbi: Integer;
+  Iter, i, bi, j, fbi, sti: Integer;
   Tools: TToolDefinitionArray;
   FallbackModel: string;
   Resp: TLLMResponse;
@@ -488,6 +505,7 @@ var
   Batch: TToolBatch;
   Workers: array of TToolCallWorker;
   Steering, BatchSteering, HistSystem, LastProviderErrText: string;
+  Steers: TSteeringMessageArray;
 begin
   Loop.Content    := '';
   Loop.Iterations := 0;
@@ -533,6 +551,27 @@ begin
   begin
     Inc(Iter);
     LogDebug('toolloop iteration %d / %d', [Iter, Cfg.MaxIterations]);
+
+    { Mid-loop steering: drain any user follow-ups that arrived
+      while we were busy (CLI `pasclaw steer <id> "..."`, channels
+      with concurrent polling) and fold each into history as a
+      bracketed mrSystem note. The next provider call sees them as
+      part of the conversation context — pivot or abort behaviour
+      is up to the model. Cap at MaxSteeringPerTurn so a runaway
+      pusher can't grow Hist unbounded; the cap matches nanobot's
+      _MAX_INJECTIONS_PER_TURN sanity bound. }
+    if Cfg.SteeringKey <> '' then
+    begin
+      Steers := DrainSteering(Cfg.SteeringKey, MaxSteeringPerTurn);
+      for sti := 0 to High(Steers) do
+      begin
+        LogDebug('steering[%s] injecting: %s',
+                 [Cfg.SteeringKey, Copy(Steers[sti].Text, 1, 80)]);
+        SetLength(Hist, Length(Hist) + 1);
+        Hist[High(Hist)] := MakeMessage(mrSystem,
+          '[user steering] ' + Steers[sti].Text);
+      end;
+    end;
 
     { Pre-call compaction. NeedsCompact is a cheap token estimate;
       only when it trips do we pay for a summariser round.
