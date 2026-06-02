@@ -171,7 +171,9 @@ Environment variables:
 Useful config commands:
 
 ```sh
-pasclaw onboard       # create/update home, workspace directories, and provider config
+pasclaw onboard       # create/update home + workspace dirs, pick a provider + model + API key,
+                      # then optionally enable any of the 5 built-in MCP servers inline
+                      # (replicate, digitalocean-apps, digitalocean-databases, runpod-docs, huggingface)
 pasclaw config        # print current JSON config
 pasclaw config path   # print resolved config path
 pasclaw config reset  # write a default config
@@ -265,7 +267,7 @@ MCP entries are stored in the config as `mcp_servers`. A command starting with `
 
 | name | env var | provider |
 |---|---|---|
-| `replicate` | `REPLICATE_API_TOKEN` | Run AI models on Replicate. |
+| `replicate` | `REPLICATE_API_TOKEN` | Run AI models (text/image/video/audio) on Replicate — 5000+ models. |
 | `digitalocean-apps` | `DIGITALOCEAN_TOKEN` | Manage DigitalOcean App Platform. |
 | `digitalocean-databases` | `DIGITALOCEAN_TOKEN` | Manage DigitalOcean Managed Databases. |
 | `runpod-docs` | _(none)_ | Search RunPod documentation. |
