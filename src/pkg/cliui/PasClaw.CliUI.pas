@@ -33,12 +33,24 @@ function  FormatCLIError(const Msg, CommandPath: string): string;
 function  RenderCommandHelp(const Use, Short, Long, Example: string;
                             const Subcommands, Flags: array of string): string;
 
+(* Prompt for a line of input WITHOUT echoing keystrokes to the
+   terminal — for API keys, MCP auth tokens, and any other secret
+   credential the user pastes during onboarding. Echo is restored
+   before return regardless of exception. Falls back to a plain
+   ReadLn (with echo) when the terminal mode can't be queried
+   (e.g. stdin is a pipe, as in scripted tests) so non-interactive
+   automation still works. Codex P2 on PR #126. *)
+function ReadSecretLine(const Prompt: string): string;
+
 implementation
 
 uses
   PasClaw.Utils
   {$IFDEF MSWINDOWS}
   , {$IFDEF FPC}Windows{$ELSE}Winapi.Windows{$ENDIF}
+  {$ENDIF}
+  {$IFDEF UNIX}
+  , BaseUnix, TermIO
   {$ENDIF}
   ;
 
@@ -273,6 +285,66 @@ begin
     Lines.Free;
   end;
 end;
+
+function ReadSecretLine(const Prompt: string): string;
+{$IFDEF UNIX}
+var
+  Old, New_: TermIOS;
+  HaveTerm: Boolean;
+begin
+  Write(Prompt);
+  Flush(Output);
+  HaveTerm := tcgetattr(0, Old) = 0;
+  if HaveTerm then
+  begin
+    New_ := Old;
+    { Clear ECHO so the typed/pasted token doesn't appear on screen or
+      land in the terminal scrollback. Leave ICANON on so the user can
+      still backspace and the line is delivered on Enter. }
+    New_.c_lflag := New_.c_lflag and not ECHO;
+    tcsetattr(0, TCSANOW, New_);
+  end;
+  try
+    ReadLn(Result);
+  finally
+    if HaveTerm then tcsetattr(0, TCSANOW, Old);
+  end;
+  { ReadLn consumed the newline silently when echo was off — emit one
+    so the next prompt starts on a fresh line. }
+  if HaveTerm then WriteLn;
+end;
+{$ENDIF}
+{$IFDEF MSWINDOWS}
+var
+  H: THandle;
+  OldMode, NewMode: DWORD;
+  HaveMode: Boolean;
+begin
+  Write(Prompt);
+  Flush(Output);
+  H := GetStdHandle(STD_INPUT_HANDLE);
+  HaveMode := (H <> INVALID_HANDLE_VALUE) and GetConsoleMode(H, OldMode);
+  if HaveMode then
+  begin
+    NewMode := OldMode and not DWORD(ENABLE_ECHO_INPUT);
+    SetConsoleMode(H, NewMode);
+  end;
+  try
+    ReadLn(Result);
+  finally
+    if HaveMode then SetConsoleMode(H, OldMode);
+  end;
+  if HaveMode then WriteLn;
+end;
+{$ENDIF}
+{$IF NOT DEFINED(UNIX) AND NOT DEFINED(MSWINDOWS)}
+begin
+  { Unknown platform — fall through to plain echoing read so the
+    program still runs. }
+  Write(Prompt);
+  ReadLn(Result);
+end;
+{$IFEND}
 
 initialization
   SetAnsi(False);

@@ -211,7 +211,10 @@ begin
     end
     else
     begin
-      Token := Trim(ReadLineEcho('  ' + Entry.EnvVar + ' (paste, or blank to skip auth): '));
+      { No-echo input — pasted tokens stay out of terminal scrollback
+        and any screen recordings / shared sessions. Codex P2 on
+        PR #126. }
+      Token := Trim(ReadSecretLine('  ' + Entry.EnvVar + ' (paste, or blank to skip auth): '));
       HeaderVal := FormatAuthHeaderFromToken(Entry, Token);
       if HeaderVal = '' then
         WriteLn('  ', Ansi.Yellow, '!', Ansi.Reset,
@@ -280,7 +283,11 @@ begin
       asNone:
         Key := '';
     else
-      Key := ReadLineEcho(Spec.DisplayName + ' API key (leave blank to skip): ');
+      { No-echo for the same reason as the MCP token path below —
+        Codex P2 on PR #126 was scoped to MCP but the provider-key
+        prompt has the identical exposure (pasted credential lands
+        in terminal scrollback / screen recordings). }
+      Key := ReadSecretLine(Spec.DisplayName + ' API key (leave blank to skip): ');
     end;
 
     Cfg.DefaultProvider := Spec.Kind;
