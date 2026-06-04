@@ -30,6 +30,7 @@ uses
   PasClaw.Tools.Memory,
   PasClaw.Tools.WebSearch,
   PasClaw.Tools.WebFetch,
+  PasClaw.Tools.Vault,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
   PasClaw.MCP.Bridge,
@@ -144,7 +145,8 @@ begin
   Result := NewProviderFromConfig(Cfg, Name, Provider, Err);
 end;
 
-function NewBuiltinRegistry(UseHashline: Boolean = True): TToolRegistry;
+function NewBuiltinRegistry(UseHashline: Boolean = True;
+                            EnableVault: Boolean = False): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -154,6 +156,11 @@ begin
   RegisterMemoryTools(Result);
   RegisterWebSearchTool(Result);
   RegisterWebFetchTool(Result);
+  { Vault tools register only when explicitly enabled — callers pass
+    Cfg.VaultToolsEnabled. Off-by-default per the onboarding opt-in
+    flow; flipping the config flag (or re-running `pasclaw onboard`)
+    is the way to turn it on. }
+  if EnableVault then RegisterVaultTools(Result);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(Result, Skills);
 end;
@@ -293,7 +300,7 @@ begin
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
 
   Reg := nil;
-  if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline);
+  if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
@@ -368,7 +375,7 @@ begin
 
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
   Reg := nil;
-  if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline);
+  if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;

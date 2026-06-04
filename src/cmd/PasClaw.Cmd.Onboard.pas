@@ -146,6 +146,38 @@ begin
   end;
 end;
 
+procedure PromptVaultTools(Cfg: TConfig);
+{ Opt-in toggle for the agent-callable vault_search / vault_get
+  tools. Default YES because pressing Enter through onboarding
+  should land a useful agent, and the vault tools are read-only
+  HTTP GETs against a curated registry — no execution path. User
+  can flip back later by editing config.json or re-running
+  onboard. }
+var
+  Choice: string;
+begin
+  WriteLn;
+  WriteLn(Ansi.Bold, 'Code Vault tools', Ansi.Reset);
+  WriteLn(Ansi.Dim,
+    'vault_search / vault_get let the agent discover Object Pascal source code',
+    Ansi.Reset);
+  WriteLn(Ansi.Dim,
+    '(samples, components, libraries) on pasclaw.dev — read-only HTTP GETs.',
+    Ansi.Reset);
+  WriteLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable vault tools for the agent [Y/n]: ')));
+  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.VaultToolsEnabled := True;
+    WriteLn('  ', Ansi.Green, '✓', Ansi.Reset, ' vault_search / vault_get enabled');
+  end
+  else
+  begin
+    Cfg.VaultToolsEnabled := False;
+    WriteLn('  ', Ansi.Dim, '(skipped — flip vault_tools_enabled in config.json to enable later)', Ansi.Reset);
+  end;
+end;
+
 procedure PromptMCPInstalls(Cfg: TConfig);
 var
   Entries: TMCPCatalogEntryArray;
@@ -303,6 +335,7 @@ begin
       header value (same shape pasclaw mcp install writes when an
       env var is set). }
     PromptMCPInstalls(Cfg);
+    PromptVaultTools(Cfg);
 
     SaveConfig(Cfg);
     WriteLn;

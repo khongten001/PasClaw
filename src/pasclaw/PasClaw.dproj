@@ -126,6 +126,7 @@
         <DCCReference Include="..\cmd\PasClaw.Cmd.MCP.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Migrate.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Skills.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Vault.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Session.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Steer.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Model.pas"/>
@@ -174,6 +175,7 @@
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Memory.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebSearch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebFetch.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.Vault.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.ToolLoop.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Obj.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.pas"/>
@@ -233,6 +235,7 @@
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.GitHub.pas"/>
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.ClawHub.pas"/>
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.PasClawHub.pas"/>
+        <DCCReference Include="..\pkg\skills\PasClaw.Vault.Client.pas"/>
 
         <!-- pkg/session -->
         <DCCReference Include="..\pkg\session\PasClaw.Session.Store.pas"/>

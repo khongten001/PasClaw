@@ -19,6 +19,7 @@ The main program lives at `src/pasclaw/PasClaw.dpr`. It initializes terminal col
 | `web_search` | DuckDuckGo / Brave / Tavily / SearXNG / Perplexity / Gemini-grounding — 6 providers |
 | `web_fetch` | HTTP GET → readable plain text (HTML stripped, entities decoded), SSRF-guarded |
 | `memory_search` | SQLite FTS5 BM25 over `workspace/memory/*.md` and `MEMORY.md` |
+| `vault_search` / `vault_get` | search + read pasclaw.dev Code Vault entries (Object Pascal samples + components); opt-in via `vault_tools_enabled` |
 | `skill_<name>` | Pascal-side tools registered from `kind: shell` / `kind: prompt` skills |
 | MCP-bridged | every tool a configured MCP server exports — see below |
 
@@ -27,6 +28,8 @@ The main program lives at `src/pasclaw/PasClaw.dpr`. It initializes terminal col
 **MCP** — both transports. Stdio MCP via spawned subprocess + JSON-RPC over pipes, and Streamable HTTP MCP (handles SSE-framed responses, Bearer-token auth). Catalog of public servers — `pasclaw mcp install replicate` / `digitalocean-apps` / `digitalocean-databases` / `runpod-docs` / `huggingface` — reads the right env var, writes the right Authorization header, never preloaded.
 
 **Skills** — markdown manifests under `$PASCLAW_HOME/workspace/skills/` advertised in the system prompt; the model loads the body via `fs_read` on demand. Install from GitHub (`pasclaw skills install owner/repo[/path][@ref]` — codeload zip, FPC's `Zipper.TUnZipper` or Delphi's `System.Zip.TZipFile`); from the pasclaw.dev hub (`pasclaw skills install hub:<slug>[@<version>]`, or just `pasclaw skills install <slug>` which tries pasclaw.dev first then falls back to ClawHub); or from ClawHub directly (`pasclaw skills install clawhub:<slug>[@<version>]`). `pasclaw skills search <q>` queries both hubs and aggregates the results (pasclaw.dev first, ClawHub deduped). Malware-flagged skills refused; suspicious-flagged install with a warning.
+
+**Code Vault** — the pasclaw.dev Code Vault hosts Object Pascal source code (sample programs, reusable components, libraries) as GitHub-backed entries. `pasclaw vault search <q>` and `pasclaw vault show <slug>` discover; `pasclaw vault install <slug> [<dest>]` `git clone`s the entry's `repoUrl` into `$PASCLAW_HOME/workspace/vault/<slug>` (or a path you pass). The agent gets two **opt-in** tools — `vault_search` and `vault_get` — registered only when `vault_tools_enabled: true` in config.json; `pasclaw onboard` asks during setup with a default-yes prompt. Both tools are read-only HTTP GETs against the vault registry; obtaining the code itself is a separate `shell_exec git clone` call the model makes after `vault_get` returns the `repoUrl`.
 
 **HTTP gateway** — `pasclaw gateway` and `pasclaw serve`. OpenAI-compatible `/v1/chat/completions` (streaming + non-streaming) and `/v1/responses` (tool-passthrough so Codex CLI can drive its own tools). Embedded web UI (vanilla ES2020, single HTML file, no JS toolchain) with 8 tabs: **Chat** (SSE-streamed, tool activity surfaced inline), **Memory**, **Files**, **MCP**, **Cron**, **Skills**, **Logs** (live tail via SSE from the in-process ring buffer), **Settings**. Read-only inspection endpoints (`/v1/mcp`, `/v1/cron`, `/v1/skills`, `/v1/memory`, `/v1/fs`, `/v1/config`, `/v1/logs`) backed by the gateway's sandbox + secret-masking.
 
