@@ -167,7 +167,10 @@ begin
     Args.Add('--');
     Args.Add(RepoURL);
     Args.Add(DestDir);
-    if not P.Spawn('git', Args) then
+    { git writes progress and most fatal messages to stderr — merge it
+      into stdout so users see clone progress and so a chatty failure
+      can't block the child on a full stderr pipe. }
+    if not P.Spawn('git', Args, {MergeStderr=}True) then
     begin
       ErrMsg := 'git clone failed to start (is `git` installed and on PATH?)';
       Exit;
