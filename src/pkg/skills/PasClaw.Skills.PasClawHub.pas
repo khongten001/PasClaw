@@ -328,39 +328,39 @@ begin
 end;
 
 function DownloadZip(const URL, DestPath: string; out ErrMsg: string): Boolean;
+{ Streams the response straight into a TFileStream. The signed URL
+  returns the actual zip bytes — routing it through GetJSONURL
+  would decode the body as UTF-8 and corrupt arbitrary binary, so
+  use the dedicated GetURLToStream path (same approach ClawHub
+  takes for its raw-bytes /download endpoint). Codex P1 on PR #129. }
 var
+  Strm: TFileStream;
   Headers: array of THeaderPair;
   Resp: THTTPResult;
-  F: TFileStream;
 begin
   Result := False;
   ErrMsg := '';
   SetLength(Headers, 0);
-  Resp := GetJSONURL(URL, Headers, RequestTimeoutSec);
-  if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
-  begin
-    if Resp.ErrorMsg <> '' then ErrMsg := Format('http %d: %s', [Resp.StatusCode, Resp.ErrorMsg])
-    else ErrMsg := Format('http %d', [Resp.StatusCode]);
-    Exit;
-  end;
-  if Length(Resp.Body) > MaxZipBytes then
-  begin
-    ErrMsg := Format('archive too large (%d bytes; cap %d)',
-                     [Length(Resp.Body), MaxZipBytes]);
-    Exit;
-  end;
+  Strm := TFileStream.Create(DestPath, fmCreate);
   try
-    F := TFileStream.Create(DestPath, fmCreate);
-    try
-      if Length(Resp.Body) > 0 then
-        F.WriteBuffer(Pointer(Resp.Body)^, Length(Resp.Body));
-    finally
-      F.Free;
+    Resp := GetURLToStream(URL, Strm, Headers, 60);
+    if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
+    begin
+      if Resp.StatusCode = 404 then ErrMsg := 'not found'
+      else if Resp.ErrorMsg <> '' then ErrMsg := Format('http %d: %s', [Resp.StatusCode, Resp.ErrorMsg])
+      else ErrMsg := Format('http %d', [Resp.StatusCode]);
+      Exit;
     end;
+    if Strm.Size > MaxZipBytes then
+    begin
+      ErrMsg := Format('archive too large (%d bytes; cap %d)',
+                       [Strm.Size, MaxZipBytes]);
+      Exit;
+    end;
+    if Strm.Size = 0 then begin ErrMsg := 'empty archive'; Exit; end;
     Result := True;
-  except
-    on E: Exception do
-      ErrMsg := 'cannot write archive: ' + E.Message;
+  finally
+    Strm.Free;
   end;
 end;
 
