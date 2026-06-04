@@ -61,8 +61,18 @@ type
     destructor  Destroy; override;
 
     { Spawn Cmd with each entry of Args as a separate argv element. Returns
-      True on successful spawn, False on failure (errno-style; check log). }
-    function Spawn(const Cmd: string; Args: TStrings): Boolean;
+      True on successful spawn, False on failure (errno-style; check log).
+
+      When MergeStderr is True the child's stderr is redirected into the
+      same pipe as stdout, so ReadAvailable surfaces both streams. This
+      is what shell-style "capture combined output" callers want — git
+      clone (progress + fatals on stderr) and RunOneShot rely on it.
+      The default (False) leaves stderr inheriting from the parent
+      process so a long-lived child's log lines reach the user's
+      terminal instead of polluting the JSON-RPC stream on stdout —
+      the contract MCP stdio servers expect. }
+    function Spawn(const Cmd: string; Args: TStrings;
+                    MergeStderr: Boolean = False): Boolean;
 
     { Send Buf to child stdin. Returns the byte count written. }
     function WriteBytes(const Buf; Count: Integer): Integer;
@@ -122,7 +132,8 @@ begin
   inherited Destroy;
 end;
 
-function TStdioProcess.Spawn(const Cmd: string; Args: TStrings): Boolean;
+function TStdioProcess.Spawn(const Cmd: string; Args: TStrings;
+                              MergeStderr: Boolean): Boolean;
 var
   P: TInternalProcess;
   i: Integer;
@@ -131,7 +142,10 @@ begin
   P := TInternalProcess.Create(nil);
   P.Executable := Cmd;
   for i := 0 to Args.Count - 1 do P.Parameters.Add(Args[i]);
-  P.Options := [poUsePipes];
+  if MergeStderr then
+    P.Options := [poUsePipes, poStderrToOutPut]
+  else
+    P.Options := [poUsePipes];
   try
     P.Execute;
   except
@@ -277,7 +291,8 @@ begin
     Result := S;
 end;
 
-function TStdioProcess.Spawn(const Cmd: string; Args: TStrings): Boolean;
+function TStdioProcess.Spawn(const Cmd: string; Args: TStrings;
+                              MergeStderr: Boolean): Boolean;
 var
   SA: TSecurityAttributes;
   SI: TStartupInfoW;
@@ -308,7 +323,14 @@ begin
   SI.wShowWindow := SW_HIDE;
   SI.hStdInput  := ChildStdinRead;
   SI.hStdOutput := ChildStdoutWrite;
-  SI.hStdError  := ChildStdoutWrite;
+  { stderr: merge into stdout pipe iff caller asked. Otherwise let it
+    inherit from the parent process so the child's diagnostics reach
+    the user's terminal instead of mixing with stdout (the contract
+    MCP stdio servers expect for their JSON-RPC frames). }
+  if MergeStderr then
+    SI.hStdError := ChildStdoutWrite
+  else
+    SI.hStdError := GetStdHandle(STD_ERROR_HANDLE);
 
   CmdLine := QuoteArg(Cmd);
   for i := 0 to Args.Count - 1 do CmdLine := CmdLine + ' ' + QuoteArg(Args[i]);
@@ -428,7 +450,7 @@ begin
       try ChDir(WorkingDir); Restored := True; except end;
     end;
     Args.Add('/C'); Args.Add(Cmd);
-    if not P.Spawn('cmd.exe', Args) then Exit;
+    if not P.Spawn('cmd.exe', Args, {MergeStderr=}True) then Exit;
     Total := 0;
     while P.Running or True do
     begin
@@ -494,7 +516,8 @@ begin
   inherited Destroy;
 end;
 
-function TStdioProcess.Spawn(const Cmd: string; Args: TStrings): Boolean;
+function TStdioProcess.Spawn(const Cmd: string; Args: TStrings;
+                              MergeStderr: Boolean): Boolean;
 var
   StdinPipe, StdoutPipe: TPipeFDs;
   Pid: pid_t;
@@ -515,7 +538,12 @@ begin
     { child }
     dup2(StdinPipe[0],  STDIN_FILENO);
     dup2(StdoutPipe[1], STDOUT_FILENO);
-    dup2(StdoutPipe[1], STDERR_FILENO);
+    { stderr: merge into stdout pipe iff caller asked. Otherwise leave
+      it pointing at whatever the parent's stderr is (terminal, log
+      file, etc.) so child diagnostics don't pollute the stdout
+      JSON-RPC stream MCP stdio servers write. }
+    if MergeStderr then
+      dup2(StdoutPipe[1], STDERR_FILENO);
     __close(StdinPipe[0]);  __close(StdinPipe[1]);
     __close(StdoutPipe[0]); __close(StdoutPipe[1]);
 
@@ -632,7 +660,7 @@ begin
       try ChDir(WorkingDir); Restored := True; except end;
     end;
     Args.Add('-c'); Args.Add(Cmd);
-    if not P.Spawn('/bin/sh', Args) then Exit;
+    if not P.Spawn('/bin/sh', Args, {MergeStderr=}True) then Exit;
     Total := 0;
     while P.Running or True do
     begin
