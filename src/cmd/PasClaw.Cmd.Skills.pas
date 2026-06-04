@@ -36,10 +36,11 @@ function Cmd_Skills_Run(const Argv: array of string): Integer;
 implementation
 
 uses
-  SysUtils, PasClaw.Config, PasClaw.CliUI, PasClaw.Utils, PasClaw.Logger,
+  SysUtils, Classes, PasClaw.Config, PasClaw.CliUI, PasClaw.Utils, PasClaw.Logger,
   PasClaw.Skills.Loader,
   PasClaw.Skills.GitHub,
-  PasClaw.Skills.ClawHub;
+  PasClaw.Skills.ClawHub,
+  PasClaw.Skills.PasClawHub;
 
 procedure Help;
 begin
@@ -47,10 +48,11 @@ begin
   WriteLn;
   WriteLn('  list                                List installed skills.');
   WriteLn('  install owner/repo[/path][@ref]     Install a SKILL.md from GitHub.');
+  WriteLn('  install hub:<slug>[@<version>]      Install from pasclaw.dev (forced).');
   WriteLn('  install clawhub:<slug>[@<version>]  Install from ClawHub (https://clawhub.ai).');
-  WriteLn('  install <name>                      Legacy: record a name in config.json.');
+  WriteLn('  install <slug>                      Try pasclaw.dev first, then ClawHub.');
   WriteLn('  remove <name>                       Remove from config.json + workspace.');
-  WriteLn('  search <query>                      Search ClawHub for skills.');
+  WriteLn('  search <query>                      Search pasclaw.dev + ClawHub for skills.');
 end;
 
 function IsGitHubTarget(const Target: string): Boolean;
@@ -107,6 +109,59 @@ begin
              (C = '-') or (C = '_') ) then Exit;
   end;
   Slug := Rest;   { hand the full "<slug>[@version]" back to caller }
+  Result := True;
+end;
+
+const
+  HubPrefix = 'hub:';
+
+function IsPasClawHubTarget(const Target: string; out Slug: string): Boolean;
+{ Parallel to IsClawHubTarget — `hub:<slug>[@version]` forces routing
+  through the pasclaw.dev hub. Same slug constraints (lowercase
+  alphanumeric + dash + underscore, ≤128 chars). Used to bypass the
+  bare-slug hub-then-clawhub fallback when the caller explicitly
+  wants pasclaw.dev only. }
+var
+  i, AtPos: Integer;
+  Rest: string;
+  C: Char;
+begin
+  Result := False;
+  Slug := '';
+  if Length(Target) <= Length(HubPrefix) then Exit;
+  if Copy(Target, 1, Length(HubPrefix)) <> HubPrefix then Exit;
+  Rest := Copy(Target, Length(HubPrefix) + 1, MaxInt);
+  if (Rest = '') or (Length(Rest) > 128) then Exit;
+  AtPos := Pos('@', Rest);
+  if AtPos > 0 then Slug := Copy(Rest, 1, AtPos - 1)
+              else Slug := Rest;
+  if Slug = '' then Exit;
+  for i := 1 to Length(Slug) do
+  begin
+    C := Slug[i];
+    if not ( ((C >= 'a') and (C <= 'z')) or
+             ((C >= '0') and (C <= '9')) or
+             (C = '-') or (C = '_') ) then Exit;
+  end;
+  Slug := Rest;   { hand "<slug>[@version]" back to caller }
+  Result := True;
+end;
+
+function IsBareSlug(const Target: string): Boolean;
+{ A target with no slash, no leading dot, no drive letter, and no
+  ':' prefix is a candidate for the bare-slug install path
+  (pasclaw.dev → ClawHub → legacy fallback). Slug character set is
+  enforced by the hub clients themselves; this is just the
+  "looks-like-a-slug" sniff. }
+var
+  i: Integer;
+begin
+  Result := False;
+  if Target = '' then Exit;
+  if (Target[1] = '/') or (Target[1] = '\') or (Target[1] = '.') then Exit;
+  if (Length(Target) >= 2) and (Target[2] = ':') then Exit;
+  for i := 1 to Length(Target) do
+    if (Target[i] = '/') or (Target[i] = ':') then Exit;
   Result := True;
 end;
 
@@ -220,31 +275,149 @@ begin
   Result := 0;
 end;
 
+function DoInstallPasClawHub(const Target: string): Integer;
+{ Parallel to DoInstallClawHub but targets the pasclaw.dev hub. Used
+  by the explicit `hub:<slug>` prefix and by the bare-slug fallback
+  chain (which tries this first, then ClawHub on a not-found / network
+  error). }
+var
+  Slug, Version, DestRoot, Installed, ErrMsg: string;
+begin
+  SplitSlugAtVersion(Target, Slug, Version);
+  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  if Version <> '' then
+    WriteLn('Fetching pasclaw.dev: ', Slug, ' @', Version, ' …')
+  else
+    WriteLn('Fetching pasclaw.dev: ', Slug, ' …');
+  if not InstallFromPasClawHub(Slug, Version, DestRoot, Installed, ErrMsg) then
+  begin
+    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'install failed: ', ErrMsg);
+    Exit(1);
+  end;
+  WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'installed as ',
+          JoinPath(DestRoot, Installed));
+  WriteLn('  Run ', Ansi.Bold, 'pasclaw skills list', Ansi.Reset,
+          ' to confirm; next ', Ansi.Bold, 'pasclaw agent', Ansi.Reset,
+          ' invocation will pick it up.');
+  Result := 0;
+end;
+
+function TryInstallFromHub(const Slug, Version, DestRoot: string;
+                            out InstalledName, ErrMsg: string;
+                            out NotFound: Boolean): Boolean;
+{ Thin wrapper around InstallFromPasClawHub that splits "not found"
+  (the hub doesn't carry this slug) from other failures (network /
+  TLS / parse error). Only `not found` lets the bare-slug dispatcher
+  fall through to ClawHub — a network blip pinned on pasclaw.dev
+  should surface as an error rather than silently retrying against
+  a different hub the user may not have intended. }
+begin
+  NotFound := False;
+  Result := InstallFromPasClawHub(Slug, Version, DestRoot, InstalledName, ErrMsg);
+  if Result then Exit;
+  NotFound := SameText(ErrMsg, 'not found');
+end;
+
+function DoInstallBareSlug(const Argv: array of string): Integer;
+{ Bare-slug install: try pasclaw.dev first, fall back to ClawHub on
+  'not found', fall back to the legacy "just record in config.json"
+  path only when BOTH hubs report not-found. Network errors on the
+  first hop surface as failures rather than silently demoting to
+  ClawHub — that way an unreachable pasclaw.dev (cached DNS, mid-
+  flight TLS rotation, etc.) is visible to the operator instead of
+  being papered over. }
+var
+  Slug, Version, DestRoot, Installed, ErrMsg: string;
+  HubNotFound, ClawNotFound: Boolean;
+begin
+  SplitSlugAtVersion(Argv[1], Slug, Version);
+  DestRoot := JoinPath(GetHome, 'workspace/skills');
+
+  if Version <> '' then
+    WriteLn('Fetching pasclaw.dev: ', Slug, ' @', Version, ' …')
+  else
+    WriteLn('Fetching pasclaw.dev: ', Slug, ' …');
+  if TryInstallFromHub(Slug, Version, DestRoot, Installed, ErrMsg, HubNotFound) then
+  begin
+    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'installed as ',
+            JoinPath(DestRoot, Installed));
+    WriteLn('  Run ', Ansi.Bold, 'pasclaw skills list', Ansi.Reset,
+            ' to confirm; next ', Ansi.Bold, 'pasclaw agent', Ansi.Reset,
+            ' invocation will pick it up.');
+    Exit(0);
+  end;
+  if not HubNotFound then
+  begin
+    { Real error, not a miss — surface and stop. }
+    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'pasclaw.dev install failed: ', ErrMsg);
+    WriteLn(Ansi.Dim, '  retry with ', Ansi.Reset, '`pasclaw skills install clawhub:', Slug, '`',
+            Ansi.Dim, ' to force ClawHub.', Ansi.Reset);
+    Exit(1);
+  end;
+
+  WriteLn(Ansi.Dim, '  not on pasclaw.dev — trying ClawHub …', Ansi.Reset);
+  ClawNotFound := False;
+  if InstallFromClawHub(Slug, Version, DestRoot, Installed, ErrMsg) then
+  begin
+    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'installed as ',
+            JoinPath(DestRoot, Installed), Ansi.Dim, ' (from ClawHub)', Ansi.Reset);
+    WriteLn('  Run ', Ansi.Bold, 'pasclaw skills list', Ansi.Reset,
+            ' to confirm; next ', Ansi.Bold, 'pasclaw agent', Ansi.Reset,
+            ' invocation will pick it up.');
+    Exit(0);
+  end;
+  ClawNotFound := SameText(ErrMsg, 'not found');
+  if not ClawNotFound then
+  begin
+    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'ClawHub install failed: ', ErrMsg);
+    Exit(1);
+  end;
+
+  { Both hubs say "not found". Fall through to legacy record-only
+    behaviour so existing user scripts that did
+    `pasclaw skills install my-local-name` keep working — with a
+    note that nothing was downloaded. }
+  WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
+          'no hub entry for "', Slug, '" — recording in config.json only.');
+  Result := DoInstallLegacy(Argv);
+end;
+
 function DoInstall(const Argv: array of string): Integer;
 var
-  ClawHubSlug: string;
+  HubSlug, ClawHubSlug: string;
 begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
-  { Check the explicit `clawhub:` prefix before the GitHub
-    owner/repo sniff so a (theoretical) target like
-    `clawhub:owner/repo` routes to the ClawHub validator, which
-    rejects the slash and falls through to legacy. With the old
-    order GitHub's IsGitHubTarget would have eaten the slash and
-    tried to fetch `clawhub:owner/repo`. }
-  if IsClawHubTarget(Argv[1], ClawHubSlug) then
+  { Explicit hub prefixes are checked first so an out-of-shape target
+    like `hub:owner/repo` routes to the validator, which rejects the
+    slash and falls through to legacy. Same hardening as the original
+    ClawHub prefix; mirrored for `hub:` so the GitHub sniff doesn't
+    eat the slash on a malformed prefix. Bare slugs (no slash, no
+    leading dot/drive letter, no colon) take the new hub-then-clawhub
+    fallback chain; anything left over (paths, malformed targets)
+    drops to the legacy record-in-config path. }
+  if IsPasClawHubTarget(Argv[1], HubSlug) then
+    Result := DoInstallPasClawHub(HubSlug)
+  else if IsClawHubTarget(Argv[1], ClawHubSlug) then
     Result := DoInstallClawHub(ClawHubSlug)
   else if IsGitHubTarget(Argv[1]) then
     Result := DoInstallGitHub(Argv[1])
+  else if IsBareSlug(Argv[1]) then
+    Result := DoInstallBareSlug(Argv)
   else
     Result := DoInstallLegacy(Argv);
 end;
 
 function DoSearch(const Argv: array of string): Integer;
 var
-  Query, ErrMsg: string;
-  Results: TClawHubResultArray;
+  Query, HubErr, ClawErr: string;
+  HubResults: TPasClawHubResultArray;
+  ClawResults: TClawHubResultArray;
   i: Integer;
-  Summary: string;
+  Summary, Source: string;
+  HubOk, ClawOk: Boolean;
+  Slug: string;
+  SeenSlugs: TStringList;
+  TotalShown: Integer;
 begin
   if Length(Argv) < 2 then
   begin
@@ -252,28 +425,80 @@ begin
     Exit(1);
   end;
   Query := Argv[1];
-  WriteLn('Searching clawhub: ', Query, ' …');
-  if not SearchClawHub(Query, 20, Results, ErrMsg) then
+
+  { Query both hubs. pasclaw.dev results render first; ClawHub
+    results follow, with slugs already seen on pasclaw.dev dropped
+    (the local hub wins the dedup). Either hub being unreachable
+    is recoverable — we degrade to whatever did respond. }
+  WriteLn('Searching pasclaw.dev + ClawHub: ', Query, ' …');
+  HubOk := SearchPasClawHub(Query, 20, HubResults, HubErr);
+  ClawOk := SearchClawHub(Query, 20, ClawResults, ClawErr);
+  if (not HubOk) and (not ClawOk) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'search failed: ', ErrMsg);
+    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'both hubs failed:');
+    WriteLn('  pasclaw.dev: ', HubErr);
+    WriteLn('  clawhub:     ', ClawErr);
     Exit(1);
   end;
-  if Length(Results) = 0 then
+  if not HubOk then
+    WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
+            'pasclaw.dev unreachable (', HubErr, ') — showing ClawHub only');
+  if not ClawOk then
+    WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
+            'clawhub unreachable (', ClawErr, ') — showing pasclaw.dev only');
+
+  if (Length(HubResults) = 0) and (Length(ClawResults) = 0) then
   begin
     WriteLn('(no matches)');
     Exit(0);
   end;
-  WriteLn(Ansi.Bold, 'slug', Ansi.Reset, '                       version    name');
-  for i := 0 to High(Results) do
-  begin
-    WriteLn(Results[i].Slug:26, '  ', Results[i].Version:9, '  ', Results[i].DisplayName);
-    Summary := Trim(Results[i].Summary);
-    if Summary <> '' then
-      WriteLn('                            ', Ansi.Dim, Summary, Ansi.Reset);
+
+  WriteLn(Ansi.Bold, 'src   slug', Ansi.Reset,
+          '                       version    name');
+  TotalShown := 0;
+  SeenSlugs := TStringList.Create;
+  try
+    SeenSlugs.CaseSensitive := False;
+    for i := 0 to High(HubResults) do
+    begin
+      Slug := HubResults[i].Slug;
+      if SeenSlugs.IndexOf(Slug) >= 0 then Continue;
+      SeenSlugs.Add(Slug);
+      Source := Ansi.Bold + 'hub' + Ansi.Reset;
+      WriteLn(Source, '   ', Slug:24, '  ', HubResults[i].Version:9, '  ',
+              HubResults[i].DisplayName);
+      Summary := Trim(HubResults[i].Summary);
+      if Summary <> '' then
+        WriteLn('                                  ', Ansi.Dim, Summary, Ansi.Reset);
+      Inc(TotalShown);
+    end;
+    for i := 0 to High(ClawResults) do
+    begin
+      Slug := ClawResults[i].Slug;
+      if SeenSlugs.IndexOf(Slug) >= 0 then Continue;
+      SeenSlugs.Add(Slug);
+      Source := Ansi.Dim + 'claw' + Ansi.Reset;
+      WriteLn(Source, '  ', Slug:24, '  ', ClawResults[i].Version:9, '  ',
+              ClawResults[i].DisplayName);
+      Summary := Trim(ClawResults[i].Summary);
+      if Summary <> '' then
+        WriteLn('                                  ', Ansi.Dim, Summary, Ansi.Reset);
+      Inc(TotalShown);
+    end;
+  finally
+    SeenSlugs.Free;
   end;
+
+  if TotalShown = 0 then
+  begin
+    WriteLn('(no matches)');
+    Exit(0);
+  end;
+
   WriteLn;
   WriteLn(Ansi.Dim, 'Install with: ', Ansi.Reset,
-          Ansi.Bold, 'pasclaw skills install <slug>', Ansi.Reset);
+          Ansi.Bold, 'pasclaw skills install <slug>', Ansi.Reset,
+          Ansi.Dim, ' (tries pasclaw.dev first, then ClawHub).', Ansi.Reset);
   Result := 0;
 end;
 
