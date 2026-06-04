@@ -31,7 +31,7 @@ implementation
 
 uses
   SysUtils, Classes,
-  Process,
+  PasClaw.Platform,
   PasClaw.Config,
   PasClaw.Utils,
   PasClaw.CliUI,
@@ -144,64 +144,53 @@ begin
 end;
 
 function RunGitClone(const RepoURL, DestDir: string; out ErrMsg: string): Boolean;
-{ Shells out to `git clone <repoUrl> <destDir>`. Inherits whatever
-  git auth the user already has (SSH keys, credential helper, etc.)
-  — we don't try to handle private-repo auth ourselves. Output is
-  captured and surfaced on failure; success prints git's own
-  progress as it runs. }
+{ Shells out to `git clone <repoUrl> <destDir>` via PasClaw.Platform's
+  TStdioProcess (fcl-process on FPC; CreateProcess / fork+execvp on
+  Delphi) so both compilers can drain output the same way. Inherits
+  whatever git auth the user already has (SSH keys, credential
+  helper, etc.) — we don't handle private-repo auth ourselves.
+  Output is streamed to stdout so the user sees clone progress in
+  real time. }
 var
-  P: TProcess;
-  ExitCode: Integer;
-  OutLines: TStringList;
+  P: TStdioProcess;
+  Args: TStringList;
+  Buf: array[0..4095] of Byte;
+  Bytes: TBytes;
+  N: Integer;
 begin
   Result := False;
   ErrMsg := '';
-  P := TProcess.Create(nil);
-  OutLines := TStringList.Create;
+  P    := TStdioProcess.Create;
+  Args := TStringList.Create;
   try
-    P.Executable := 'git';
-    P.Parameters.Add('clone');
-    P.Parameters.Add('--');
-    P.Parameters.Add(RepoURL);
-    P.Parameters.Add(DestDir);
-    P.Options := [poUsePipes, poStderrToOutPut];
-    try
-      P.Execute;
-    except
-      on E: Exception do
+    Args.Add('clone');
+    Args.Add('--');
+    Args.Add(RepoURL);
+    Args.Add(DestDir);
+    if not P.Spawn('git', Args) then
+    begin
+      ErrMsg := 'git clone failed to start (is `git` installed and on PATH?)';
+      Exit;
+    end;
+    repeat
+      N := P.ReadAvailable(Buf, SizeOf(Buf));
+      if N > 0 then
       begin
-        ErrMsg := 'git clone failed to start: ' + E.Message +
-                  ' (is `git` installed and on PATH?)';
-        Exit;
+        SetLength(Bytes, N);
+        Move(Buf[0], Bytes[0], N);
+        Write(TEncoding.UTF8.GetString(Bytes));
       end;
-    end;
-    { Drain stdout while the process runs so the user sees clone
-      progress in real time rather than waiting for a final blob. }
-    while P.Running do
+    until (N = 0) and (not P.Running);
+    { latch ExitCode via the side-effect on Running }
+    P.Running;
+    if P.ExitCode <> 0 then
     begin
-      if P.Output.NumBytesAvailable > 0 then
-      begin
-        OutLines.LoadFromStream(P.Output);
-        Write(OutLines.Text);
-        OutLines.Clear;
-      end
-      else
-        Sleep(50);
-    end;
-    if P.Output.NumBytesAvailable > 0 then
-    begin
-      OutLines.LoadFromStream(P.Output);
-      Write(OutLines.Text);
-    end;
-    ExitCode := P.ExitStatus;
-    if ExitCode <> 0 then
-    begin
-      ErrMsg := Format('git clone exited %d', [ExitCode]);
+      ErrMsg := Format('git clone exited %d', [P.ExitCode]);
       Exit;
     end;
     Result := True;
   finally
-    OutLines.Free;
+    Args.Free;
     P.Free;
   end;
 end;
