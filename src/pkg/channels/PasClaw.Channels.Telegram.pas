@@ -1,7 +1,7 @@
 (*
   PasClaw.Channels.Telegram - long-polling Telegram bot adapter.
 
-  Uses TIdHTTP to call the Bot API. No webhook needed - getUpdates with a
+  Uses PasClaw.Providers.HTTP to call the Bot API. No webhook needed - getUpdates with a
   long poll keeps things firewall-friendly. Each incoming text message is
   fed to the agent loop and the reply is sent back via sendMessage.
 

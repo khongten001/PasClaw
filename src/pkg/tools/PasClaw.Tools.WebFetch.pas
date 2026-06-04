@@ -44,48 +44,46 @@ implementation
 
 uses
   Classes,
-  IdHTTP, IdSSLOpenSSL,
   PasClaw.JSON,
   PasClaw.Logger,
+  PasClaw.Providers.HTTP,
   PasClaw.Search.HTMLText,
   PasClaw.Net.SSRF,
   PasClaw.Tools.Sandbox;
 
 type
-  (* Indy's OnRedirect callback is `of object`; this tiny holder gives
-     us the method to assign without leaking helper state outside. The
-     redirect handler runs URLIsLocal on every 3xx target so a
-     public→private redirect can't smuggle a request past the
-     pre-check. Raising aborts the redirect chain — the outer
-     try/except in Tool_WebFetch turns it into the same "SSRF
-     blocked" surface as a direct hit. *)
+  (* Redirect guard hooked into PasClaw.Providers.HTTP. Runs URLIsLocal
+     on every 3xx target so a public→private redirect can't smuggle a
+     request past the pre-check. Setting Allow := False aborts the
+     redirect chain — the wrapper raises with Reason, and the outer
+     try/except in Tool_WebFetch surfaces it as the same "SSRF
+     blocked" string a direct hit would produce. *)
   TWebFetchRedirectGuard = class
-    procedure OnRedirect(Sender: TObject; var Dest: string;
-                          var NumRedirect: Integer;
-                          var Handled: Boolean;
-                          var VMethod: TIdHTTPMethod);
+    procedure OnRedirect(var Dest: string;
+                          var Allow: Boolean;
+                          var Reason: string);
   end;
 
 function IsAbsoluteHttpURL(const S: string): Boolean;
 { True iff S has an http:// or https:// scheme. Anything else is
   either path-relative ("/login", "next.html") or protocol-relative
-  ("//cdn.example.com/a"). Indy hands TIdHTTP.OnRedirect whatever
-  the server's Location header said — which is frequently a bare
-  path, NOT a full URL. Codex PR #85 P2 caught that we were
-  rejecting "/login" as malformed. }
+  ("//cdn.example.com/a"). The wrapper hands OnRedirect whatever the
+  server's Location header said — which is frequently a bare path,
+  NOT a full URL. Codex PR #85 P2 caught that we were rejecting
+  "/login" as malformed. }
 begin
   Result := (Length(S) >= 7) and
             (SameText(Copy(S, 1, 7),  'http://')  or
              (Length(S) >= 8) and SameText(Copy(S, 1, 8), 'https://'));
 end;
 
-procedure TWebFetchRedirectGuard.OnRedirect(Sender: TObject; var Dest: string;
-                                              var NumRedirect: Integer;
-                                              var Handled: Boolean;
-                                              var VMethod: TIdHTTPMethod);
+procedure TWebFetchRedirectGuard.OnRedirect(var Dest: string;
+                                              var Allow: Boolean;
+                                              var Reason: string);
 var
-  Reason: string;
+  Why: string;
 begin
+  Allow := True;
   if not NetworkBlockingActive then Exit;
 
   { Same-origin redirects retain the host that already passed the
@@ -101,24 +99,30 @@ begin
     if (Length(Dest) >= 2) and (Dest[1] = '/') and (Dest[2] = '/') then
     begin
       { Protocol-relative. Synthesise an http:// prefix purely for
-        the parse — Indy itself will re-prefix with the current
-        URL's scheme before connecting. }
-      if URLIsLocal('http:' + Dest, Reason) then
-        raise Exception.CreateFmt(
+        the parse — the underlying client will re-prefix with the
+        current URL's scheme before connecting. }
+      if URLIsLocal('http:' + Dest, Why) then
+      begin
+        Allow := False;
+        Reason := Format(
           'SSRF: protocol-relative redirect to %s refused (%s; ' +
           'flip sandbox.block_private_networks=false in config.json to allow)',
-          [Dest, Reason]);
+          [Dest, Why]);
+      end;
       Exit;
     end;
     { Path-relative — same host as the request that just passed
-      the check. Let Indy proceed. }
+      the check. Let the request proceed. }
     Exit;
   end;
 
-  if URLIsLocal(Dest, Reason) then
-    raise Exception.CreateFmt('SSRF: redirect to %s refused (%s; ' +
+  if URLIsLocal(Dest, Why) then
+  begin
+    Allow := False;
+    Reason := Format('SSRF: redirect to %s refused (%s; ' +
       'flip sandbox.block_private_networks=false in config.json to allow)',
-      [Dest, Reason]);
+      [Dest, Why]);
+  end;
 end;
 
 const
@@ -175,14 +179,13 @@ function Tool_WebFetch(const ArgsJSON: string; out ErrMsg: string): string;
 var
   URL: string;
   MaxChars: Integer;
-  HTTP: TIdHTTP;
-  SSLHandler: TIdSSLIOHandlerSocketOpenSSL;
   RedirectGuard: TWebFetchRedirectGuard;
-  Body: string;
-  ContentType: string;
+  Resp: THTTPResult;
+  Headers: array of THeaderPair;
 begin
   ErrMsg := '';
   Result := '';
+  SetLength(Headers, 0);
 
   if not ParseStringArg(ArgsJSON, 'url', URL) then
   begin
@@ -199,7 +202,7 @@ begin
   if MaxChars < 100           then MaxChars := 100;
   if MaxChars > HARD_MAX_CHARS then MaxChars := HARD_MAX_CHARS;
 
-  { SSRF pre-check on the initial URL. The redirect handler covers
+  { SSRF pre-check on the initial URL. The redirect guard covers
     subsequent hops; both layers must pass for the request to land. }
   if NetworkBlockingActive then
   begin
@@ -212,59 +215,40 @@ begin
     ErrMsg := '';
   end;
 
-  HTTP := TIdHTTP.Create(nil);
   RedirectGuard := TWebFetchRedirectGuard.Create;
-  SSLHandler := nil;
   try
-    HTTP.HandleRedirects   := True;
-    HTTP.RedirectMaximum   := 5;
-    HTTP.ConnectTimeout    := 20000;
-    HTTP.ReadTimeout       := 30000;
-    HTTP.Request.UserAgent := 'Mozilla/5.0 (PasClaw web_fetch)';
-    HTTP.Request.Accept    := 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5';
-    HTTP.OnRedirect        := RedirectGuard.OnRedirect;
-
-    if LowerStartsWith(URL, 'https://') then
-    begin
-      SSLHandler := TIdSSLIOHandlerSocketOpenSSL.Create(nil);
-      SSLHandler.SSLOptions.SSLVersions := [sslvTLSv1_2];
-      HTTP.IOHandler := SSLHandler;
-    end;
-
-    try
-      Body := HTTP.Get(URL);
-    except
-      on E: Exception do
-      begin
-        ErrMsg := 'web_fetch: HTTP error: ' + E.Message;
-        Exit;
-      end;
-    end;
-
-    ContentType := LowerCase(HTTP.Response.ContentType);
-    if (Pos('text/html',             ContentType) > 0) or
-       (Pos('application/xhtml+xml', ContentType) > 0) or
-       (ContentType = '') then
-      Result := HTMLToText(Body, MaxChars)
-    else if Pos('text/', ContentType) = 1 then
-    begin
-      Result := Body;
-      if Length(Result) > MaxChars then
-        Result := Copy(Result, 1, MaxChars) + #10 + '…(truncated)';
-    end
-    else
-    begin
-      ErrMsg := Format('web_fetch: unsupported content-type %s', [ContentType]);
-      Exit;
-    end;
+    Resp := GetURL(URL, Headers, 30,
+                   'Mozilla/5.0 (PasClaw web_fetch)',
+                   'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5',
+                   RedirectGuard.OnRedirect);
   finally
-    HTTP.Free;
     RedirectGuard.Free;
-    if SSLHandler <> nil then SSLHandler.Free;
+  end;
+
+  if Resp.ErrorMsg <> '' then
+  begin
+    ErrMsg := 'web_fetch: HTTP error: ' + Resp.ErrorMsg;
+    Exit;
+  end;
+
+  if (Pos('text/html',             Resp.ContentType) > 0) or
+     (Pos('application/xhtml+xml', Resp.ContentType) > 0) or
+     (Resp.ContentType = '') then
+    Result := HTMLToText(Resp.Body, MaxChars)
+  else if Pos('text/', Resp.ContentType) = 1 then
+  begin
+    Result := Resp.Body;
+    if Length(Result) > MaxChars then
+      Result := Copy(Result, 1, MaxChars) + #10 + '…(truncated)';
+  end
+  else
+  begin
+    ErrMsg := Format('web_fetch: unsupported content-type %s', [Resp.ContentType]);
+    Exit;
   end;
 
   LogDebug('web_fetch url=%s bytes_in=%d chars_out=%d',
-           [URL, Length(Body), Length(Result)]);
+           [URL, Length(Resp.Body), Length(Result)]);
 end;
 
 procedure RegisterWebFetchTool(R: TToolRegistry);

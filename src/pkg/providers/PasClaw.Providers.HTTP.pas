@@ -25,14 +25,27 @@ uses
 
 type
   THTTPResult = record
-    StatusCode: Integer;
-    Body:       string;
-    ErrorMsg:   string;
+    StatusCode:  Integer;
+    Body:        string;
+    { Lower-cased Content-Type returned by the server, with charset
+      etc. preserved (e.g. "text/html; charset=utf-8"). Empty on error
+      or for endpoints that do not set one. }
+    ContentType: string;
+    ErrorMsg:    string;
   end;
 
   THeaderPair = record
     Name, Value: string;
   end;
+
+  { Redirect guard invoked before following each 3xx response. Set
+    Allow := False to abort the request; the wrapper raises with
+    Reason, which propagates back as ErrorMsg on the THTTPResult.
+    DestURL is mutable for callers that want to rewrite redirects;
+    leaving it untouched preserves the server's Location header. }
+  THTTPRedirectGuard = procedure(var DestURL: string;
+                                  var Allow: Boolean;
+                                  var Reason: string) of object;
 
 function PostJSON(const URL, JSON: string;
                   const Headers: array of THeaderPair;
@@ -43,6 +56,45 @@ function PutJSON(const URL, JSON: string;
 function GetJSONURL(const URL: string;
                     const Headers: array of THeaderPair;
                     TimeoutSeconds: Integer): THTTPResult;
+
+{ GET with optional User-Agent / Accept overrides and a redirect
+  guard. Pass '' for UserAgent/Accept to keep the wrapper's defaults
+  ('PasClaw/0.1 ...' and '*/*'); nil for OnRedirect to follow
+  redirects without inspection.
+
+  Used by web_fetch (SSRF guard on each hop, browser-ish UA, HTML
+  Accept) and by search providers that need a custom UA. }
+function GetURL(const URL: string;
+                const Headers: array of THeaderPair;
+                TimeoutSeconds: Integer;
+                const UserAgent: string;
+                const Accept: string;
+                OnRedirect: THTTPRedirectGuard): THTTPResult;
+
+{ POST with caller-supplied content type and a UTF-8 encoded body.
+  For form-encoded posts (application/x-www-form-urlencoded) and any
+  other non-JSON payload. UserAgent/Accept follow the same '' = default
+  convention as GetURL. }
+function PostRaw(const URL, ContentType, Body: string;
+                 const Headers: array of THeaderPair;
+                 TimeoutSeconds: Integer;
+                 const UserAgent: string;
+                 const Accept: string): THTTPResult;
+
+{ POST JSON and write the response body into RespStream instead of
+  returning it as a string. The SSE provider uses this — it asks for
+  text/event-stream and parses the buffered response after the call
+  completes. Returns False on transport error with ErrMsg populated;
+  StatusCode is always set to what Indy saw (0 if the request never
+  reached a status line). }
+function PostJSONToStream(const URL, JSON: string;
+                          RespStream: TStream;
+                          const Headers: array of THeaderPair;
+                          TimeoutSeconds: Integer;
+                          const UserAgent: string;
+                          const Accept: string;
+                          out StatusCode: Integer;
+                          out ErrMsg: string): Boolean;
 
 { Binary HTTP GET into a caller-owned stream. Use this for zip
   downloads, embedding fetches, etc. — anything where TStringStream's
@@ -91,6 +143,7 @@ var
 begin
   Result.StatusCode := 0;
   Result.Body := '';
+  Result.ContentType := '';
   Result.ErrorMsg := '';
   { Force UTF-8 on the response stream. Under Delphi modern, TStringStream
     defaults to TEncoding.Default (the system codepage), which mangles
@@ -105,17 +158,20 @@ begin
         Http.Get(URL, Resp);
       Result.StatusCode := Http.ResponseCode;
       Result.Body := Resp.DataString;
+      Result.ContentType := LowerCase(Http.Response.ContentType);
     except
       on E: EIdHTTPProtocolException do
       begin
         Result.StatusCode := E.ErrorCode;
         Result.Body       := E.ErrorMessage;
+        Result.ContentType := LowerCase(Http.Response.ContentType);
         Result.ErrorMsg   := E.Message;
       end;
       on E: Exception do
       begin
         Result.StatusCode := Http.ResponseCode;
         Result.Body       := Resp.DataString;
+        Result.ContentType := LowerCase(Http.Response.ContentType);
         Result.ErrorMsg   := E.Message;
       end;
     end;
@@ -299,6 +355,172 @@ begin
   end;
 end;
 
+type
+  { Bridges the public THTTPRedirectGuard signature to Indy's
+    TIdHTTP.OnRedirect. One-shot helper: created per request, freed
+    in the same try/finally. }
+  TRedirectAdapter = class
+  private
+    FGuard: THTTPRedirectGuard;
+  public
+    constructor Create(AGuard: THTTPRedirectGuard);
+    procedure OnRedirect(Sender: TObject; var Dest: string;
+                          var NumRedirect: Integer;
+                          var Handled: Boolean;
+                          var VMethod: TIdHTTPMethod);
+  end;
+
+constructor TRedirectAdapter.Create(AGuard: THTTPRedirectGuard);
+begin
+  inherited Create;
+  FGuard := AGuard;
+end;
+
+procedure TRedirectAdapter.OnRedirect(Sender: TObject; var Dest: string;
+                                       var NumRedirect: Integer;
+                                       var Handled: Boolean;
+                                       var VMethod: TIdHTTPMethod);
+var
+  Allow: Boolean;
+  Reason: string;
+begin
+  if not Assigned(FGuard) then Exit;
+  Allow := True;
+  Reason := '';
+  FGuard(Dest, Allow, Reason);
+  if not Allow then
+    raise Exception.Create(Reason);
+end;
+
+function GetURL(const URL: string;
+                const Headers: array of THeaderPair;
+                TimeoutSeconds: Integer;
+                const UserAgent: string;
+                const Accept: string;
+                OnRedirect: THTTPRedirectGuard): THTTPResult;
+var
+  Http: TIdHTTP;
+  SSLErr: string;
+  Adapter: TRedirectAdapter;
+begin
+  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  if SSLErr <> '' then
+  begin
+    Result.StatusCode  := -1;
+    Result.Body        := '';
+    Result.ContentType := '';
+    Result.ErrorMsg    := SSLErr;
+    Http.Free;
+    Exit;
+  end;
+  Adapter := nil;
+  try
+    if UserAgent <> '' then Http.Request.UserAgent := UserAgent;
+    if Accept    <> '' then Http.Request.Accept    := Accept
+    else                    Http.Request.Accept    := '*/*';
+    if Assigned(OnRedirect) then
+    begin
+      Adapter := TRedirectAdapter.Create(OnRedirect);
+      Http.OnRedirect := Adapter.OnRedirect;
+    end;
+    ApplyHeaders(Http, Headers);
+    Result := DoRequest(Http, URL, nil, False);
+  finally
+    Adapter.Free;
+    Http.Free;
+  end;
+end;
+
+function PostRaw(const URL, ContentType, Body: string;
+                 const Headers: array of THeaderPair;
+                 TimeoutSeconds: Integer;
+                 const UserAgent: string;
+                 const Accept: string): THTTPResult;
+var
+  Http: TIdHTTP;
+  Req: TStringStream;
+  SSLErr: string;
+begin
+  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  if SSLErr <> '' then
+  begin
+    Result.StatusCode  := -1;
+    Result.Body        := '';
+    Result.ContentType := '';
+    Result.ErrorMsg    := SSLErr;
+    Http.Free;
+    Exit;
+  end;
+  Req := TStringStream.Create(Body, TEncoding.UTF8);
+  try
+    if UserAgent <> '' then Http.Request.UserAgent := UserAgent;
+    Http.Request.ContentType     := ContentType;
+    Http.Request.ContentEncoding := 'utf-8';
+    if Accept <> '' then Http.Request.Accept := Accept
+    else                 Http.Request.Accept := '*/*';
+    ApplyHeaders(Http, Headers);
+    Result := DoRequest(Http, URL, Req, True);
+  finally
+    Req.Free;
+    Http.Free;
+  end;
+end;
+
+function PostJSONToStream(const URL, JSON: string;
+                          RespStream: TStream;
+                          const Headers: array of THeaderPair;
+                          TimeoutSeconds: Integer;
+                          const UserAgent: string;
+                          const Accept: string;
+                          out StatusCode: Integer;
+                          out ErrMsg: string): Boolean;
+var
+  Http: TIdHTTP;
+  Req: TStringStream;
+  SSLErr: string;
+begin
+  Result := False;
+  StatusCode := 0;
+  ErrMsg := '';
+  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  if SSLErr <> '' then
+  begin
+    StatusCode := -1;
+    ErrMsg := SSLErr;
+    Http.Free;
+    Exit;
+  end;
+  Req := TStringStream.Create(JSON, TEncoding.UTF8);
+  try
+    if UserAgent <> '' then Http.Request.UserAgent := UserAgent;
+    Http.Request.ContentType     := 'application/json';
+    Http.Request.ContentEncoding := 'utf-8';
+    if Accept <> '' then Http.Request.Accept := Accept
+    else                 Http.Request.Accept := 'application/json';
+    ApplyHeaders(Http, Headers);
+    try
+      Http.Post(URL, Req, RespStream);
+      StatusCode := Http.ResponseCode;
+    except
+      on E: EIdHTTPProtocolException do
+      begin
+        StatusCode := E.ErrorCode;
+        ErrMsg     := E.Message;
+        { fall through — caller may still want to parse what we got }
+      end;
+      on E: Exception do
+      begin
+        StatusCode := Http.ResponseCode;
+        ErrMsg     := E.Message;
+      end;
+    end;
+    Result := (StatusCode >= 200) and (StatusCode < 300);
+  finally
+    Req.Free;
+    Http.Free;
+  end;
+end;
+
 function GetURLToStream(const URL: string; Stream: TStream;
                         const Headers: array of THeaderPair;
                         TimeoutSeconds: Integer): THTTPResult;
@@ -306,9 +528,10 @@ var
   Http: TIdHTTP;
   SSLErr: string;
 begin
-  Result.StatusCode := 0;
-  Result.Body       := '';
-  Result.ErrorMsg   := '';
+  Result.StatusCode  := 0;
+  Result.Body        := '';
+  Result.ContentType := '';
+  Result.ErrorMsg    := '';
   Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
   if SSLErr <> '' then
   begin

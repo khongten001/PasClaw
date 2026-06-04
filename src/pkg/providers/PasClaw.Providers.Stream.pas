@@ -9,10 +9,11 @@
     event: <name>\n  <- optional, present in Anthropic stream
     ...
 
-  We don't use TIdEventStream because we need fine-grained per-chunk callbacks
-  and the Indy version of EventStream is not present in older Indy builds.
-  Instead we POST with stream=true and read the response off TIdHTTP.IOHandler
-  line by line.
+  The HTTP POST is delegated to PasClaw.Providers.HTTP.PostJSONToStream
+  so this unit doesn't need its own Indy plumbing or SSL setup. We
+  parse the buffered response (Indy doesn't expose true real-time
+  streaming for the protocols we care about) and drive per-event
+  callbacks from that.
 *)
 unit PasClaw.Providers.Stream;
 
@@ -23,7 +24,6 @@ interface
 
 uses
   SysUtils, Classes,
-  IdHTTP, IdSSLOpenSSL, IdGlobal, IdExceptionCore,
   PasClaw.Providers.Types,
   PasClaw.Providers.HTTP;
 
@@ -47,9 +47,6 @@ function PostStreaming(const URL, JSON: string;
                        out StatusCode: Integer;
                        out ErrMsg: string): Boolean;
 var
-  Http: TIdHTTP;
-  SSL:  TIdSSLIOHandlerSocketOpenSSL;
-  Req:  TStringStream;
   Resp: TStringStream;
   Body: TStringList;
   i: Integer;
@@ -67,50 +64,14 @@ var
 
 begin
   Result := False;
-  ErrMsg := '';
-  StatusCode := 0;
-
-  Http := TIdHTTP.Create(nil);
-  { Explicit UTF-8 — Delphi's TStringStream defaults to ANSI which would
-    mangle the SSE response body and the JSON request body. }
-  Req  := TStringStream.Create(JSON, TEncoding.UTF8);
+  { Explicit UTF-8 — Delphi's TStringStream defaults to ANSI which
+    would mangle the SSE response body. }
   Resp := TStringStream.Create('', TEncoding.UTF8);
-  SSL  := nil;
   try
-    Http.ConnectTimeout := TimeoutSeconds * 1000;
-    Http.ReadTimeout    := TimeoutSeconds * 1000;
-    Http.Request.UserAgent   := 'PasClaw/0.1';
-    Http.Request.ContentType := 'application/json';
-    Http.Request.Accept      := 'text/event-stream';
-    for i := 0 to High(Headers) do
-      Http.Request.CustomHeaders.AddValue(Headers[i].Name, Headers[i].Value);
-    if (Length(URL) >= 8) and SameText(Copy(URL, 1, 8), 'https://') then
-    begin
-      if not EnsureOpenSSL(ErrMsg) then
-      begin
-        StatusCode := -1;
-        Exit;
-      end;
-      SSL := TIdSSLIOHandlerSocketOpenSSL.Create(Http);
-      SSL.SSLOptions.Method := sslvTLSv1_2;
-      SSL.SSLOptions.SSLVersions := [sslvTLSv1_2];
-      Http.IOHandler := SSL;
-    end;
-    try
-      Http.Post(URL, Req, Resp);
-      StatusCode := Http.ResponseCode;
-    except
-      on E: Exception do
-      begin
-        StatusCode := Http.ResponseCode;
-        ErrMsg     := E.Message;
-        { fall through and try to parse what we got }
-      end;
-    end;
+    PostJSONToStream(URL, JSON, Resp, Headers, TimeoutSeconds,
+                     'PasClaw/0.1', 'text/event-stream',
+                     StatusCode, ErrMsg);
 
-    { Indy's TIdHTTP buffers the full response into Resp. For true real-time
-      streaming the caller can switch to a custom IOHandler hook; here we
-      parse the buffered body, which still drives per-event callbacks. }
     Body := TStringList.Create;
     try
       Body.Text := Resp.DataString;
@@ -140,8 +101,6 @@ begin
     Result := (StatusCode >= 200) and (StatusCode < 300);
   finally
     Resp.Free;
-    Req.Free;
-    Http.Free;
   end;
 end;
 
