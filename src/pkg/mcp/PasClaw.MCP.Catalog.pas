@@ -67,6 +67,17 @@ function ResolveAuthHeader(const Entry: TMCPCatalogEntry;
                             out HeaderValue: string;
                             out EnvWasSet: Boolean): Boolean;
 
+(* Format the literal Authorization header for an entry given a
+   token the caller has already obtained (e.g. interactively from
+   `pasclaw onboard`). Sibling to ResolveAuthHeader, which sources
+   the token from the env var — this one takes it as an argument
+   so the onboarding flow can prompt the user and persist the
+   resulting header into config.json without requiring the env var
+   to be set. Empty Token returns '' (caller installs with no
+   auth, same as pasclaw mcp install when the env var is missing). *)
+function FormatAuthHeaderFromToken(const Entry: TMCPCatalogEntry;
+                                    const Token: string): string;
+
 implementation
 
 uses
@@ -80,7 +91,7 @@ begin
   Result[0].URL     := 'https://mcp.replicate.com/mcp';
   Result[0].EnvVar  := 'REPLICATE_API_TOKEN';
   Result[0].AuthFmt := 'Bearer %s';
-  Result[0].Desc    := 'Run AI models (text, image, video, audio) on Replicate.';
+  Result[0].Desc    := 'Run AI models (text/image/video/audio) on Replicate — 5000+ models.';
   Result[0].Docs    := 'https://replicate.com/docs/reference/mcp';
 
   Result[1].Name    := 'digitalocean-apps';
@@ -154,6 +165,15 @@ begin
 
   HeaderValue := Format(Entry.AuthFmt, [Tok]);
   Result := True;
+end;
+
+function FormatAuthHeaderFromToken(const Entry: TMCPCatalogEntry;
+                                    const Token: string): string;
+begin
+  if (Entry.AuthFmt = '') or (Token = '') then
+    Result := ''
+  else
+    Result := Format(Entry.AuthFmt, [Token]);
 end;
 
 end.
