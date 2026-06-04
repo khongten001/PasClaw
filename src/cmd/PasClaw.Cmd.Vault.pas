@@ -208,7 +208,7 @@ end;
 
 function DoInstall(const Argv: array of string): Integer;
 var
-  Slug, DestDir, ErrMsg: string;
+  Slug, DestDir, ParentDir, ErrMsg: string;
   Detail: TVaultDetail;
 begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
@@ -248,7 +248,9 @@ begin
     Exit(1);
   end;
 
-  ForceDirectories(ExtractFileDir(DestDir));
+  ParentDir := ExtractFileDir(DestDir);
+  if ParentDir <> '' then
+    ForceDirectories(ParentDir);
   WriteLn('Cloning ', Detail.RepoURL, ' …');
   if not RunGitClone(Detail.RepoURL, DestDir, ErrMsg) then
   begin
