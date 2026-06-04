@@ -234,6 +234,9 @@
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.ClawHub.pas"/>
         <DCCReference Include="..\pkg\skills\PasClaw.Skills.PasClawHub.pas"/>
 
+        <!-- pkg/mcp -->
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Hub.pas"/>
+
         <!-- pkg/session -->
         <DCCReference Include="..\pkg\session\PasClaw.Session.Store.pas"/>
 

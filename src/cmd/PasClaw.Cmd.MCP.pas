@@ -15,20 +15,22 @@ uses
   PasClaw.MCP.Types,
   PasClaw.MCP.StdioClient,
   PasClaw.MCP.HttpClient,
-  PasClaw.MCP.Catalog;
+  PasClaw.MCP.Catalog,
+  PasClaw.MCP.Hub;
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw mcp <list|add|remove|test|edit|show|catalog|install> [args]');
+  WriteLn('Usage: pasclaw mcp <list|add|remove|test|edit|show|catalog|search|install> [args]');
   WriteLn('  add <name> <cmd> [args]   register a new MCP server');
   WriteLn('  remove <name>             delete an MCP server entry');
   WriteLn('  list                      list configured servers');
   WriteLn('  show <name>               show one server in detail');
   WriteLn('  test <name>               probe a server: initialize + tools/list');
   WriteLn('  edit                      open config in $EDITOR');
-  WriteLn('  catalog                   list public MCP servers PasClaw knows about');
-  WriteLn('  install <name>            add a server from the catalog (reads auth');
-  WriteLn('                            from the env var the catalog entry names)');
+  WriteLn('  catalog                   list public MCP servers (pasclaw.dev hub,');
+  WriteLn('                            falls back to built-in 5 when offline)');
+  WriteLn('  search <query>            search pasclaw.dev MCP registry');
+  WriteLn('  install <name>            add from hub or catalog (reads auth from env)');
 end;
 
 function DoList: Integer;
@@ -202,10 +204,31 @@ end;
 function DoCatalog: Integer;
 var
   Entries: TMCPCatalogEntryArray;
-  i: Integer;
-  Auth: string;
+  i, Skipped: Integer;
+  Auth, Source, HubErr: string;
 begin
-  Entries := KnownMCPServers;
+  if not ResolveMCPCatalog(Entries, Source, Skipped, HubErr) then
+  begin
+    { ResolveMCPCatalog always returns True today — it falls back to
+      KnownMCPServers on hub failure. Defensive branch for the
+      future case where it might fail outright. }
+    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'catalog unavailable: ', HubErr);
+    Exit(1);
+  end;
+  if Source = 'hub' then
+    WriteLn(Ansi.Dim, '(showing ', Length(Entries),
+            ' from pasclaw.dev hub)', Ansi.Reset)
+  else if HubErr <> '' then
+    WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
+            'hub unreachable (', HubErr,
+            ') — showing built-in ', Length(Entries), ' entries')
+  else
+    WriteLn(Ansi.Dim, '(showing built-in ', Length(Entries), ' entries)', Ansi.Reset);
+  if Skipped > 0 then
+    WriteLn(Ansi.Dim, '  (', Skipped,
+            ' hub entry/entries skipped — non-HTTP transports not supported yet)',
+            Ansi.Reset);
+  WriteLn;
   if Length(Entries) = 0 then
   begin
     WriteLn('(catalog empty)');
@@ -226,21 +249,71 @@ begin
   Result := 0;
 end;
 
+function DoSearch(const Argv: array of string): Integer;
+var
+  Results: TMCPHubResultArray;
+  ErrMsg, Summary: string;
+  i: Integer;
+begin
+  if Length(Argv) < 2 then begin Help; Exit(1); end;
+  WriteLn('Searching pasclaw.dev MCP registry: ', Argv[1], ' …');
+  if not SearchMCPHub(Argv[1], 25, Results, ErrMsg) then
+  begin
+    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'search failed: ', ErrMsg);
+    Exit(1);
+  end;
+  if Length(Results) = 0 then
+  begin
+    WriteLn('(no matches)');
+    Exit(0);
+  end;
+  WriteLn(Ansi.Bold, 'slug', Ansi.Reset,
+          '                       transport  name');
+  for i := 0 to High(Results) do
+  begin
+    WriteLn(Results[i].Slug:26, '  ', Results[i].Transport:9, '  ',
+            Results[i].DisplayName);
+    Summary := Trim(Results[i].Summary);
+    if Summary <> '' then
+      WriteLn('                            ', Ansi.Dim, Summary, Ansi.Reset);
+  end;
+  WriteLn;
+  WriteLn(Ansi.Dim, 'Install with: ', Ansi.Reset,
+          Ansi.Bold, 'pasclaw mcp install <slug>', Ansi.Reset);
+  Result := 0;
+end;
+
 function DoInstall(const Argv: array of string): Integer;
 var
   Cfg: TConfig;
   Entry: TMCPCatalogEntry;
-  HeaderVal: string;
-  EnvSet, AuthOk: Boolean;
+  HeaderVal, HubErr: string;
+  EnvSet, AuthOk, HubFound: Boolean;
   i, n: Integer;
 begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
-  if not FindCatalogEntry(Argv[1], Entry) then
+  { Try the pasclaw.dev hub first so any registered server is
+    installable, not just the bundled 5. Fall back to the built-in
+    catalog when the hub returns not-found OR is unreachable —
+    network errors don't deny a built-in install that would
+    otherwise work. }
+  HubFound := GetMCPHubEntry(Argv[1], Entry, HubErr);
+  if not HubFound then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'no catalog entry named "', Argv[1],
-            '". Try: ', Ansi.Bold, 'pasclaw mcp catalog', Ansi.Reset);
-    Exit(1);
-  end;
+    if not FindCatalogEntry(Argv[1], Entry) then
+    begin
+      WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'no entry named "', Argv[1], '"');
+      if HubErr <> '' then
+        WriteLn(Ansi.Dim, '  pasclaw.dev hub: ', HubErr, Ansi.Reset);
+      WriteLn(Ansi.Dim, '  try: ', Ansi.Reset,
+              Ansi.Bold, 'pasclaw mcp catalog', Ansi.Reset,
+              Ansi.Dim, ' or ', Ansi.Reset,
+              Ansi.Bold, 'pasclaw mcp search <query>', Ansi.Reset);
+      Exit(1);
+    end;
+  end
+  else
+    WriteLn(Ansi.Dim, '  resolved from pasclaw.dev hub', Ansi.Reset);
 
   AuthOk := ResolveAuthHeader(Entry, HeaderVal, EnvSet);
   if (Entry.EnvVar <> '') and (not EnvSet) then
@@ -300,6 +373,7 @@ begin
   else if Sub = 'test'    then Result := DoTest(Argv)
   else if Sub = 'edit'    then Result := DoEdit(Argv)
   else if Sub = 'catalog' then Result := DoCatalog
+  else if Sub = 'search'  then Result := DoSearch(Argv)
   else if Sub = 'install' then Result := DoInstall(Argv)
   else begin Help; Result := 1; end;
 end;
