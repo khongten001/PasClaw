@@ -229,6 +229,12 @@ type
        picoclaw's pkg/channels/base.go IsAllowedSender semantics).
        Configure via "allow_senders": [...] in config.json. *)
     AllowSenders: array of string;
+    (* Off-by-default: when True, Cmd.Agent.NewBuiltinRegistry
+       registers vault_search and vault_get for the model. The
+       onboarding flow asks the user to opt in (default yes).
+       Operators who skip onboarding can flip this directly in
+       config.json or re-run `pasclaw onboard`. *)
+    VaultToolsEnabled: Boolean;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -290,6 +296,7 @@ begin
   WebSearch.MaxResults := 5;
   PromptCache.Enabled  := True;  { default-on; see TPromptCacheConfig comment }
   PromptCache.TTL      := '';    { default 5m via empty }
+  VaultToolsEnabled    := False; { off by default; onboarding asks to opt in }
 end;
 
 function ProviderToJSON(const P: TProviderConfig): TJsonObject;
@@ -420,6 +427,10 @@ begin
       for i := 0 to High(AllowSenders) do Arr.AddStr(AllowSenders[i]);
       Root.PutArray('allow_senders', Arr);
     end;
+
+    { Off-by-default — only serialise when True so stock configs stay tidy. }
+    if VaultToolsEnabled then
+      Root.PutBool('vault_tools_enabled', True);
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Providers) do
@@ -569,6 +580,8 @@ begin
     finally
       Arr.Free;
     end;
+
+    VaultToolsEnabled := Root.GetBool('vault_tools_enabled', VaultToolsEnabled);
 
     Arr := Root.ChildArray('providers');
     if Arr <> nil then

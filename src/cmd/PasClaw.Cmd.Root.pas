@@ -39,6 +39,7 @@ uses
   PasClaw.Cmd.MCP,
   PasClaw.Cmd.Migrate,
   PasClaw.Cmd.Skills,
+  PasClaw.Cmd.Vault,
   PasClaw.Cmd.Session,
   PasClaw.Cmd.Steer,
   PasClaw.Cmd.Model,
@@ -100,7 +101,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 20);
+  SetLength(Sub, 21);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -113,14 +114,15 @@ begin
   Sub[9]  := 'mcp          Manage MCP servers';
   Sub[10] := 'migrate      Migrate data from older versions';
   Sub[11] := 'skills       Manage skill extensions';
-  Sub[12] := 'model        View or switch the default model';
-  Sub[13] := 'post         Send a one-shot message to a channel';
-  Sub[14] := 'membench     Benchmark the memory log subsystem';
-  Sub[15] := 'session      List/show/delete/export saved sessions';
-  Sub[16] := 'resume       Resume a saved session (alias for agent --session)';
-  Sub[17] := 'steer        Push a mid-loop follow-up into a running agent';
-  Sub[18] := 'update       Self-update PasClaw';
-  Sub[19] := 'version      Show version info';
+  Sub[12] := 'vault        Search / fetch pasclaw.dev Code Vault entries';
+  Sub[13] := 'model        View or switch the default model';
+  Sub[14] := 'post         Send a one-shot message to a channel';
+  Sub[15] := 'membench     Benchmark the memory log subsystem';
+  Sub[16] := 'session      List/show/delete/export saved sessions';
+  Sub[17] := 'resume       Resume a saved session (alias for agent --session)';
+  Sub[18] := 'steer        Push a mid-loop follow-up into a running agent';
+  Sub[19] := 'update       Self-update PasClaw';
+  Sub[20] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -144,6 +146,7 @@ begin
   else if Cmd = 'mcp'      then Result := Cmd_MCP_Run(Argv)
   else if Cmd = 'migrate'  then Result := Cmd_Migrate_Run(Argv)
   else if Cmd = 'skills'   then Result := Cmd_Skills_Run(Argv)
+  else if Cmd = 'vault'    then Result := Cmd_Vault_Run(Argv)
   else if Cmd = 'session'  then Result := Cmd_Session_Run(Argv)
   { resume <id> is shorthand for `agent --session <id>` — wire it
     here so `pasclaw resume foo` works as a top-level shortcut. }
