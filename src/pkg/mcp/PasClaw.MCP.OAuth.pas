@@ -634,24 +634,42 @@ end;
 
 { ---------- Browser open ------------------------------------------ }
 
+{$IFDEF MSWINDOWS}
+{ Direct ShellExecuteW import — going through `cmd /C start ...`
+  mangles every percent-encoded character in the authorize URL
+  because cmd interprets `%NAME%` (and even partial `%NN` runs in
+  some parsing modes) as environment-variable expansion. Codex
+  caught this on PR #138 after the original cmd-nesting fix. Using
+  the Windows shell API directly skips cmd entirely. }
+const
+  SW_SHOWNORMAL_ = 1;
+function ShellExecuteW(hwnd: NativeUInt;
+                       lpOperation, lpFile, lpParameters, lpDirectory: PWideChar;
+                       nShowCmd: Integer): NativeUInt; stdcall;
+  external 'shell32.dll' name 'ShellExecuteW';
+{$ENDIF}
+
 procedure OpenBrowser(const URL: string);
+{$IFDEF MSWINDOWS}
+var
+  Rc: NativeUInt;
+  UrlW: UnicodeString;
+begin
+  UrlW := UnicodeString(URL);
+  Rc := ShellExecuteW(0, 'open', PWideChar(UrlW), nil, nil, SW_SHOWNORMAL_);
+  if Rc <= 32 then
+    LogWarn('OAuth: ShellExecuteW failed (rc=%d); paste this URL manually: %s',
+            [Integer(Rc), URL]);
+end;
+{$ELSE}
 var
   Cmd, Discard: string;
 begin
-  {$IFDEF MSWINDOWS}
-  { RunOneShot already wraps the command in `cmd.exe /C ...` on the
-    Delphi/Windows backend, so use the bare `start` builtin — not
-    `cmd /c start ...`. The redundant cmd-wrap chewed the quotes on
-    URLs containing & (every PKCE/state-bearing authorize URL has
-    several) and the user saw the browser launch a path that looked
-    like \\…. The empty-string title is `start`'s convention for
-    "no window title" so the URL doesn't get misparsed as one. }
-  Cmd := 'start "" "' + URL + '"';
-  {$ELSE}{$IFDEF DARWIN}
+  {$IFDEF DARWIN}
   Cmd := 'open ' + '"' + URL + '"';
   {$ELSE}
   Cmd := 'xdg-open ' + '"' + URL + '"';
-  {$ENDIF}{$ENDIF}
+  {$ENDIF}
   try
     RunOneShot(Cmd, Discard);
   except
@@ -660,6 +678,7 @@ begin
               [E.Message, URL]);
   end;
 end;
+{$ENDIF}
 
 { ---------- Token endpoint POST ----------------------------------- }
 
