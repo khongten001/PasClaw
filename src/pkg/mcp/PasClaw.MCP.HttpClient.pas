@@ -45,7 +45,8 @@ implementation
 uses
   PasClaw.JSON,
   PasClaw.Logger,
-  PasClaw.Providers.HTTP;
+  PasClaw.Providers.HTTP,
+  PasClaw.MCP.OAuth;
 
 constructor TMCPHttpClient.Create(const Name, URL, AuthHeader: string);
 begin
@@ -93,12 +94,48 @@ end;
 function TMCPHttpClient.RoundTrip(const Method, ParamsJSON: string;
                                   TimeoutSeconds: Integer;
                                   out RespJSON: string): Boolean;
+
+  function BuildHeaders(const EffectiveAuth: string): TArray<THeaderPair>;
+  begin
+    if EffectiveAuth <> '' then
+    begin
+      SetLength(Result, 2);
+      Result[0] := MakeHeader('Accept', 'application/json, text/event-stream');
+      Result[1] := MakeHeader('Authorization', EffectiveAuth);
+    end
+    else
+    begin
+      SetLength(Result, 1);
+      Result[0] := MakeHeader('Accept', 'application/json, text/event-stream');
+    end;
+  end;
+
+  function ResolveAuth: string;
+  var
+    AccessToken: string;
+  begin
+    if FAuth <> '' then
+    begin
+      Result := FAuth;
+      Exit;
+    end;
+    { Catalog/onboard installs of OAuth servers leave FAuth empty and
+      defer to the on-disk token store under <home>/oauth/<name>.json.
+      A successful `pasclaw mcp auth <name>` populates it; an absent
+      file just means we send no Authorization header and let the
+      server's 401 surface as the usual "auth required" error. }
+    AccessToken := GetAccessToken(FName);
+    if AccessToken = '' then
+      Result := ''
+    else
+      Result := 'Bearer ' + AccessToken;
+  end;
+
 var
   Req: TJsonObject;
-  Body: string;
-  Headers: array of THeaderPair;
+  Body, EffectiveAuth, RefreshErr: string;
+  Headers: TArray<THeaderPair>;
   Resp: THTTPResult;
-  HeaderCount: Integer;
 begin
   RespJSON := '';
   Req := TJsonObject.Create;
@@ -113,14 +150,30 @@ begin
     Req.Free;
   end;
 
-  HeaderCount := 0;
-  if FAuth <> '' then HeaderCount := 1;
-  SetLength(Headers, HeaderCount + 1);
-  Headers[0] := MakeHeader('Accept', 'application/json, text/event-stream');
-  if HeaderCount = 1 then
-    Headers[1] := MakeHeader('Authorization', FAuth);
-
+  EffectiveAuth := ResolveAuth;
+  Headers := BuildHeaders(EffectiveAuth);
   Resp := PostJSON(FURL, Body, Headers, TimeoutSeconds);
+
+  { OAuth refresh-and-retry: a 401 against a server we have stored
+    tokens for usually means the access token expired between our
+    last-checked expiry and now. Try one silent refresh, then retry
+    the request. If refresh fails (or this isn't an OAuth server),
+    surface the original failure. }
+  if (Resp.StatusCode = 401) and (FAuth = '') and HasStoredTokens(FName) then
+  begin
+    if ForceRefresh(FName, RefreshErr) then
+    begin
+      EffectiveAuth := ResolveAuth;
+      if EffectiveAuth <> '' then
+      begin
+        Headers := BuildHeaders(EffectiveAuth);
+        Resp := PostJSON(FURL, Body, Headers, TimeoutSeconds);
+      end;
+    end
+    else
+      LogWarn('mcp-http[%s] 401 + refresh failed: %s', [FName, RefreshErr]);
+  end;
+
   if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
   begin
     LogWarn('mcp-http[%s] status=%d body=%s',
