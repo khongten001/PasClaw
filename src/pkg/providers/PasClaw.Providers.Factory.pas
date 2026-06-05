@@ -75,6 +75,7 @@ var
   Spec: TProviderSpec;
   Base, Model, APIKey: string;
   RequiresKey: Boolean;
+  ServerTools: TAnthropicServerTools;
 begin
   Provider := nil;
   ErrMsg := '';
@@ -109,7 +110,15 @@ begin
 
   case Spec.Family of
     pfAnthropic:
-      Provider := TAnthropicProvider.Create(APIKey, Base, Model);
+      begin
+        { Translate the operator's Anthropic server-tool toggles into
+          the provider's local record. Picked up in BuildRequest. }
+        ServerTools.WebSearch        := Cfg.AnthropicServerTools.WebSearch;
+        ServerTools.WebSearchMaxUses := Cfg.AnthropicServerTools.WebSearchMaxUses;
+        ServerTools.WebFetch         := Cfg.AnthropicServerTools.WebFetch;
+        ServerTools.WebFetchMaxUses  := Cfg.AnthropicServerTools.WebFetchMaxUses;
+        Provider := TAnthropicProvider.Create(APIKey, Base, Model, ServerTools);
+      end;
     pfOpenAI:
       Provider := TOpenAIProvider.Create(APIKey, Base, Model, Kind, Spec.Auth);
     pfGemini:

@@ -202,6 +202,29 @@ type
     TTL:     string;
   end;
 
+  (* Anthropic-only: register Anthropic's server-side web tools
+     (web_search_20260209 / web_fetch_20260209) in the request's
+     tools array. Claude runs the queries / fetches on Anthropic's
+     side and stitches the results into the final response — no
+     round-trip through PasClaw's tool loop, no SearXNG / curl on
+     the operator's box.
+
+     Off by default. Only the Anthropic provider honours these;
+     OpenAI / Gemini / others ignore them. When one of these is on,
+     the Anthropic builder also drops any user-registered tool whose
+     name collides (e.g. the local web_search tool) to avoid a
+     duplicate-name 400 from the Messages API.
+
+     MaxUses bounds how many times Claude may call the tool per turn;
+     0 means "let Anthropic apply its default". See:
+     https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview *)
+  TAnthropicServerToolsConfig = record
+    WebSearch:        Boolean;
+    WebSearchMaxUses: Integer;
+    WebFetch:         Boolean;
+    WebFetchMaxUses:  Integer;
+  end;
+
   TConfig = class
   public
     DefaultProvider: string;
@@ -243,6 +266,7 @@ type
        constrained shells), or where the operator wants the tracked
        web_fetch path with its size cap / save_to convenience. *)
     WebFetchEnabled:   Boolean;
+    AnthropicServerTools: TAnthropicServerToolsConfig;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -306,6 +330,10 @@ begin
   PromptCache.TTL      := '';    { default 5m via empty }
   VaultToolsEnabled    := False; { off by default; onboarding asks to opt in }
   WebFetchEnabled      := False; { off by default; the model uses shell+curl }
+  AnthropicServerTools.WebSearch        := False;
+  AnthropicServerTools.WebSearchMaxUses := 0;
+  AnthropicServerTools.WebFetch         := False;
+  AnthropicServerTools.WebFetchMaxUses  := 0;
 end;
 
 function ProviderToJSON(const P: TProviderConfig): TJsonObject;
@@ -442,6 +470,20 @@ begin
       Root.PutBool('vault_tools_enabled', True);
     if WebFetchEnabled then
       Root.PutBool('web_fetch_enabled', True);
+    if AnthropicServerTools.WebSearch
+       or AnthropicServerTools.WebFetch
+       or (AnthropicServerTools.WebSearchMaxUses > 0)
+       or (AnthropicServerTools.WebFetchMaxUses > 0) then
+    begin
+      Tmp := TJsonObject.Create;
+      if AnthropicServerTools.WebSearch then Tmp.PutBool('web_search', True);
+      if AnthropicServerTools.WebSearchMaxUses > 0 then
+        Tmp.PutInt('web_search_max_uses', AnthropicServerTools.WebSearchMaxUses);
+      if AnthropicServerTools.WebFetch then Tmp.PutBool('web_fetch', True);
+      if AnthropicServerTools.WebFetchMaxUses > 0 then
+        Tmp.PutInt('web_fetch_max_uses', AnthropicServerTools.WebFetchMaxUses);
+      Root.PutObject('anthropic_server_tools', Tmp);
+    end;
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Providers) do
@@ -594,6 +636,21 @@ begin
 
     VaultToolsEnabled := Root.GetBool('vault_tools_enabled', VaultToolsEnabled);
     WebFetchEnabled   := Root.GetBool('web_fetch_enabled',   WebFetchEnabled);
+
+    Obj := Root.ChildObject('anthropic_server_tools');
+    if Obj <> nil then
+    try
+      AnthropicServerTools.WebSearch :=
+        Obj.GetBool('web_search', AnthropicServerTools.WebSearch);
+      AnthropicServerTools.WebSearchMaxUses :=
+        Obj.GetInt('web_search_max_uses', AnthropicServerTools.WebSearchMaxUses);
+      AnthropicServerTools.WebFetch :=
+        Obj.GetBool('web_fetch', AnthropicServerTools.WebFetch);
+      AnthropicServerTools.WebFetchMaxUses :=
+        Obj.GetInt('web_fetch_max_uses', AnthropicServerTools.WebFetchMaxUses);
+    finally
+      Obj.Free;
+    end;
 
     Arr := Root.ChildArray('providers');
     if Arr <> nil then

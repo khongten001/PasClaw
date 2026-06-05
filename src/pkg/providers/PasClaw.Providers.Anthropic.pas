@@ -18,13 +18,28 @@ uses
   PasClaw.Providers.Intf;
 
 type
+  (* Opt-in toggles for Anthropic-side server tools. Mirrors
+     PasClaw.Config.TAnthropicServerToolsConfig — kept in this unit so
+     PasClaw.Providers.Anthropic doesn't have to USE the config unit
+     (the providers/config dependency direction is currently
+     config → providers, and inverting that would pull TConfig into
+     every provider unit test). *)
+  TAnthropicServerTools = record
+    WebSearch:        Boolean;
+    WebSearchMaxUses: Integer;
+    WebFetch:         Boolean;
+    WebFetchMaxUses:  Integer;
+  end;
+
   TAnthropicProvider = class(TInterfacedObject, ILLMProvider)
   private
     FAPIKey:  string;
     FAPIBase: string;
     FDefaultModel: string;
+    FServerTools: TAnthropicServerTools;
   public
-    constructor Create(const APIKey, APIBase, DefaultModel: string);
+    constructor Create(const APIKey, APIBase, DefaultModel: string;
+                       const ServerTools: TAnthropicServerTools);
     function Chat(const Messages: array of TMessage;
                   const Tools:    array of TToolDefinition;
                   const Model:    string;
@@ -41,13 +56,37 @@ type
     function SupportsStreaming: Boolean;
   end;
 
+{ Default-initialised TAnthropicServerTools (everything off). Use in
+  tests / embedders that don't care about the server-tool surface. }
+function NoAnthropicServerTools: TAnthropicServerTools;
+
 { Exposed so tests + embedders can render the wire body without
   hitting the network. Pure function; doesn't depend on the provider
-  instance. Same code path Chat / ChatStream execute. }
+  instance. Same code path Chat / ChatStream execute.
+
+  ServerTools.WebSearch / WebFetch append the corresponding
+  Anthropic server-side tool entries (web_search_20260209 /
+  web_fetch_20260209) to the tools array. When a server tool is
+  active, any caller-supplied tool with a colliding name (web_search,
+  web_fetch) is silently dropped so the request doesn't 400 with
+  "tools[*].name: duplicate". }
 function BuildRequest(const Messages: array of TMessage;
                       const Tools:    array of TToolDefinition;
                       const Model:    string;
-                      const Options:  TChatOptions): string;
+                      const Options:  TChatOptions;
+                      const ServerTools: TAnthropicServerTools): string;
+
+(* Build the follow-up request body for a stop_reason: "pause_turn"
+   continuation. Takes the prior request body and the response body
+   that returned pause_turn, appends a new assistant turn to the
+   request's messages[] carrying the response's content array
+   verbatim, and serialises the result. Anthropic detects the
+   trailing server_tool_use block and resumes the server-side
+   sampling loop where it paused. Returns '' on parse failure.
+
+   Exposed for tests; production callers reach it via Chat() which
+   runs the bounded continuation loop. *)
+function ContinuePausedTurn(const ReqBody, RespBody: string): string;
 
 implementation
 
@@ -57,12 +96,22 @@ uses
   PasClaw.Providers.Stream,
   PasClaw.Logger;
 
-constructor TAnthropicProvider.Create(const APIKey, APIBase, DefaultModel: string);
+function NoAnthropicServerTools: TAnthropicServerTools;
+begin
+  Result.WebSearch        := False;
+  Result.WebSearchMaxUses := 0;
+  Result.WebFetch         := False;
+  Result.WebFetchMaxUses  := 0;
+end;
+
+constructor TAnthropicProvider.Create(const APIKey, APIBase, DefaultModel: string;
+                                      const ServerTools: TAnthropicServerTools);
 begin
   inherited Create;
   FAPIKey := APIKey;
   if APIBase <> '' then FAPIBase := APIBase else FAPIBase := 'https://api.anthropic.com';
   if DefaultModel <> '' then FDefaultModel := DefaultModel else FDefaultModel := 'claude-opus-4-7';
+  FServerTools := ServerTools;
 end;
 
 function TAnthropicProvider.GetDefaultModel: string;
@@ -112,14 +161,43 @@ begin
   if TTL = '1h' then Result.PutStr('ttl', '1h');
 end;
 
+function ServerToolCollides(const Name: string;
+                            const ServerTools: TAnthropicServerTools): Boolean;
+{ True iff Name is one of the user-tool names that would duplicate a
+  server-side tool we're about to emit. Anthropic rejects a tools
+  array with two entries sharing a name; we drop the user entry in
+  favour of the server-side one (Claude runs the latter on its own
+  infrastructure, no round-trip needed). }
+begin
+  Result := (ServerTools.WebSearch and SameText(Name, 'web_search'))
+         or (ServerTools.WebFetch  and SameText(Name, 'web_fetch'));
+end;
+
+function CountEffectiveTools(const Tools: array of TToolDefinition;
+                              const ServerTools: TAnthropicServerTools): Integer;
+{ How many user tools survive the collision filter, plus the server
+  tools that will be appended. Used to pick the last-tool index for
+  the cache_control breakpoint. }
+var
+  i: Integer;
+begin
+  Result := 0;
+  for i := 0 to High(Tools) do
+    if not ServerToolCollides(Tools[i].Name, ServerTools) then
+      Inc(Result);
+  if ServerTools.WebSearch then Inc(Result);
+  if ServerTools.WebFetch  then Inc(Result);
+end;
+
 function BuildRequest(const Messages: array of TMessage;
                       const Tools:    array of TToolDefinition;
                       const Model:    string;
-                      const Options:  TChatOptions): string;
+                      const Options:  TChatOptions;
+                      const ServerTools: TAnthropicServerTools): string;
 var
   Root, Block, ToolObj, Thinking, Msg, EmptyInput, SysBlock, CC: TJsonObject;
   MsgArr, ToolArr, ContentArr, SysArr: TJsonArray;
-  i, j: Integer;
+  i, j, Emitted, LastIdx: Integer;
   Sys: string;
 begin
   Root := TJsonObject.Create;
@@ -218,11 +296,20 @@ begin
     end;
     Root.PutArray('messages', MsgArr);
 
-    if Length(Tools) > 0 then
+    if (Length(Tools) > 0) or ServerTools.WebSearch or ServerTools.WebFetch then
     begin
       ToolArr := TJsonArray.Create;
+      LastIdx := CountEffectiveTools(Tools, ServerTools) - 1;
+      Emitted := 0;
       for i := 0 to High(Tools) do
       begin
+        { When Cfg flips on a server-side equivalent, suppress the
+          user-registered tool with the same name. Two entries called
+          "web_search" in the tools array would 400 with "duplicate
+          tool name"; we keep the server-side one (Claude executes it
+          on Anthropic's infrastructure, no round-trip via PasClaw). }
+        if ServerToolCollides(Tools[i].Name, ServerTools) then Continue;
+
         ToolObj := TJsonObject.Create;
         ToolObj.PutStr('name', Tools[i].Name);
         if Tools[i].Description <> '' then ToolObj.PutStr('description', Tools[i].Description);
@@ -233,20 +320,59 @@ begin
           EmptyInput := TJsonObject.Create;
           ToolObj.PutObject('input_schema', EmptyInput);
         end;
-        { Tag the LAST tool entry with cache_control — Anthropic
-          caches up to and including the tagged block, so a single
-          breakpoint on the trailing tool covers the entire tools
-          array as a stable prefix. Combined with the system-prompt
-          breakpoint above we use 2 of Anthropic's 4-breakpoint
-          budget; the remaining two are reserved for compaction
-          summaries or higher-layer hints later. }
-        if Options.CacheEnabled and (i = High(Tools)) then
+        { Tag the LAST effective tool entry with cache_control —
+          Anthropic caches up to and including the tagged block, so
+          a single breakpoint on the trailing tool covers the entire
+          tools array as a stable prefix. Combined with the
+          system-prompt breakpoint above we use 2 of Anthropic's
+          4-breakpoint budget; the remaining two are reserved for
+          compaction summaries or higher-layer hints later. }
+        if Options.CacheEnabled and (Emitted = LastIdx) then
         begin
           CC := MakeCacheControl(Options.CacheTTL);
           ToolObj.PutObject('cache_control', CC);
         end;
         ToolArr.AddObject(ToolObj);
+        Inc(Emitted);
       end;
+
+      { Server-side tools — Claude executes web_search / web_fetch on
+        Anthropic's infrastructure. The tool entries are versioned
+        type strings, not the user-tool name+input_schema shape; no
+        beta header is required for the _20260209 versions. Dynamic
+        filtering of search results activates automatically.
+        See: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview }
+      if ServerTools.WebSearch then
+      begin
+        ToolObj := TJsonObject.Create;
+        ToolObj.PutStr('type', 'web_search_20260209');
+        ToolObj.PutStr('name', 'web_search');
+        if ServerTools.WebSearchMaxUses > 0 then
+          ToolObj.PutInt('max_uses', ServerTools.WebSearchMaxUses);
+        if Options.CacheEnabled and (Emitted = LastIdx) then
+        begin
+          CC := MakeCacheControl(Options.CacheTTL);
+          ToolObj.PutObject('cache_control', CC);
+        end;
+        ToolArr.AddObject(ToolObj);
+        Inc(Emitted);
+      end;
+      if ServerTools.WebFetch then
+      begin
+        ToolObj := TJsonObject.Create;
+        ToolObj.PutStr('type', 'web_fetch_20260209');
+        ToolObj.PutStr('name', 'web_fetch');
+        if ServerTools.WebFetchMaxUses > 0 then
+          ToolObj.PutInt('max_uses', ServerTools.WebFetchMaxUses);
+        if Options.CacheEnabled and (Emitted = LastIdx) then
+        begin
+          CC := MakeCacheControl(Options.CacheTTL);
+          ToolObj.PutObject('cache_control', CC);
+        end;
+        ToolArr.AddObject(ToolObj);
+        Inc(Emitted);
+      end;
+
       Root.PutArray('tools', ToolArr);
 
       (* tool_choice mapping (Anthropic Messages API):
@@ -363,40 +489,163 @@ begin
   end;
 end;
 
+const
+  { Cap on continuation rounds for stop_reason: "pause_turn". Server-side
+    web tools (web_search_20260209 / web_fetch_20260209) run inside an
+    Anthropic-side sampling loop with a default 10-iteration ceiling;
+    when that ceiling hits, the API returns pause_turn with the partial
+    assistant content and expects the client to re-POST with the prior
+    assistant turn appended verbatim. Five rounds is enough headroom for
+    multi-search agentic queries while still bounding spend if Anthropic
+    ever pause_turn'd unboundedly. }
+  PAUSE_TURN_MAX_CONTINUATIONS = 5;
+
+function SafeParseObject(const S: string): TJsonObject;
+{ TJsonObject.Parse raises EPasClawJSON on malformed input rather than
+  returning nil; ContinuePausedTurn needs nil-on-failure semantics so
+  a bad body short-circuits to "return original" instead of crashing. }
+begin
+  Result := nil;
+  try
+    Result := TJsonObject.Parse(S);
+  except
+    Result := nil;
+  end;
+end;
+
+function ContinuePausedTurn(const ReqBody, RespBody: string): string;
+{ Build the follow-up request body for a pause_turn continuation:
+  take the prior response's content array verbatim and append it to
+  the request's messages[] as a new assistant turn. Anthropic detects
+  the trailing server_tool_use block and resumes the server-side
+  loop from where it paused. Adding any user message in between (or
+  re-rendering the assistant content as text-only) would break the
+  resume detection.
+  Returns the new wire body, or '' on parse failure (caller surfaces
+  the prior response unchanged). }
+var
+  Req, Resp, AssistantMsg: TJsonObject;
+  MsgArr, ContentArr: TJsonArray;
+  ContentRaw: string;
+begin
+  Result := '';
+  Req := SafeParseObject(ReqBody);
+  if Req = nil then Exit;
+  try
+    Resp := SafeParseObject(RespBody);
+    if Resp = nil then Exit;
+    try
+      ContentArr := Resp.ChildArray('content');
+      if ContentArr = nil then Exit;
+      try
+        ContentRaw := ContentArr.ToJSON;
+      finally
+        ContentArr.Free;
+      end;
+      if ContentRaw = '' then Exit;
+
+      MsgArr := Req.ChildArray('messages');
+      if MsgArr = nil then Exit;
+      try
+        AssistantMsg := TJsonObject.Create;
+        AssistantMsg.PutStr('role', 'assistant');
+        AssistantMsg.PutRaw('content', ContentRaw);
+        MsgArr.AddObject(AssistantMsg);
+      finally
+        MsgArr.Free;
+      end;
+
+      Result := Req.ToJSON;
+    finally
+      Resp.Free;
+    end;
+  finally
+    Req.Free;
+  end;
+end;
+
 function TAnthropicProvider.Chat(const Messages: array of TMessage;
                                  const Tools:    array of TToolDefinition;
                                  const Model:    string;
                                  const Options:  TChatOptions): TLLMResponse;
 var
-  Body, URL, UseModel: string;
+  Body, NextBody, URL, UseModel: string;
   Resp: THTTPResult;
   Headers: array of THeaderPair;
+  RoundResp: TLLMResponse;
+  Continuations, i: Integer;
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1/messages';
-  Body := BuildRequest(Messages, Tools, UseModel, Options);
+  Body := BuildRequest(Messages, Tools, UseModel, Options, FServerTools);
 
   SetLength(Headers, 2);
   Headers[0] := MakeHeader('x-api-key',          FAPIKey);
   Headers[1] := MakeHeader('anthropic-version', '2023-06-01');
 
-  LogDebug('anthropic POST %s (model=%s, body=%d bytes)', [URL, UseModel, Length(Body)]);
-  Resp := PostJSON(URL, Body, Headers, 120);
-
   Result.Content := '';
-  Result.StatusCode := Resp.StatusCode;
+  Result.StatusCode := 0;
   SetLength(Result.ToolCalls, 0);
-  if (Resp.StatusCode >= 200) and (Resp.StatusCode < 300) then
-  begin
-    ParseResponse(Resp.Body, Result);
-    Exit;
-  end;
 
-  if Resp.Body <> '' then
-    Result.Content := Format('anthropic error %d: %s', [Resp.StatusCode, Resp.Body])
-  else
-    Result.Content := Format('anthropic error: status=%d msg=%s', [Resp.StatusCode, Resp.ErrorMsg]);
-  Result.FinishReason := 'error';
+  Continuations := 0;
+  while True do
+  begin
+    LogDebug('anthropic POST %s (model=%s, body=%d bytes, continuation=%d)',
+             [URL, UseModel, Length(Body), Continuations]);
+    Resp := PostJSON(URL, Body, Headers, 120);
+    Result.StatusCode := Resp.StatusCode;
+
+    if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
+    begin
+      if Resp.Body <> '' then
+        Result.Content := Format('anthropic error %d: %s', [Resp.StatusCode, Resp.Body])
+      else
+        Result.Content := Format('anthropic error: status=%d msg=%s', [Resp.StatusCode, Resp.ErrorMsg]);
+      Result.FinishReason := 'error';
+      Exit;
+    end;
+
+    Finalize(RoundResp);
+    FillChar(RoundResp, SizeOf(RoundResp), 0);
+    ParseResponse(Resp.Body, RoundResp);
+
+    { Aggregate text across continuation rounds. Tool calls and usage
+      come from the FINAL round (the only round that returns control
+      to PasClaw); intermediate pause_turn rounds carry server-side
+      activity only and have no client ToolCalls to surface. }
+    if RoundResp.Content <> '' then
+    begin
+      if Result.Content <> '' then Result.Content := Result.Content + sLineBreak;
+      Result.Content := Result.Content + RoundResp.Content;
+    end;
+    Result.FinishReason := RoundResp.FinishReason;
+    Result.Model        := RoundResp.Model;
+    Result.Usage.InputTokens        := Result.Usage.InputTokens        + RoundResp.Usage.InputTokens;
+    Result.Usage.OutputTokens       := Result.Usage.OutputTokens       + RoundResp.Usage.OutputTokens;
+    Result.Usage.CacheReadTokens    := Result.Usage.CacheReadTokens    + RoundResp.Usage.CacheReadTokens;
+    Result.Usage.CacheCreatedTokens := Result.Usage.CacheCreatedTokens + RoundResp.Usage.CacheCreatedTokens;
+    SetLength(Result.ToolCalls, Length(RoundResp.ToolCalls));
+    for i := 0 to High(RoundResp.ToolCalls) do
+      Result.ToolCalls[i] := RoundResp.ToolCalls[i];
+
+    if RoundResp.FinishReason <> 'pause_turn' then Exit;
+
+    if Continuations >= PAUSE_TURN_MAX_CONTINUATIONS then
+    begin
+      LogWarn('anthropic pause_turn cap (%d) reached; returning partial answer',
+              [PAUSE_TURN_MAX_CONTINUATIONS]);
+      Exit;
+    end;
+
+    NextBody := ContinuePausedTurn(Body, Resp.Body);
+    if NextBody = '' then
+    begin
+      LogWarn('anthropic pause_turn: continuation body build failed; returning partial answer');
+      Exit;
+    end;
+    Body := NextBody;
+    Inc(Continuations);
+  end;
 end;
 
 var
@@ -556,7 +805,7 @@ begin
   { Force stream:true in the request body. }
   Opts := Options;
   Opts.Stream := True;
-  Body := BuildRequest(Messages, Tools, UseModel, Opts);
+  Body := BuildRequest(Messages, Tools, UseModel, Opts, FServerTools);
   Root := TJsonObject.Parse(Body);
   if Root = nil then
   begin
