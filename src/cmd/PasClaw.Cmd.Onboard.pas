@@ -28,7 +28,7 @@ uses
 
 function ReadLineEcho(const Prompt: string): string;
 begin
-  Write(Prompt);
+  Print(Prompt);
   ReadLn(Result);
 end;
 
@@ -36,9 +36,9 @@ procedure PrintCatalog(const Catalog: TProviderSpecArray);
 var
   i: Integer;
 begin
-  WriteLn(Ansi.Bold, 'Choose a provider:', Ansi.Reset);
+  PrintLn(Ansi.Bold + 'Choose a provider:' + Ansi.Reset);
   for i := 0 to High(Catalog) do
-    WriteLn(Format(' %2d. %-22s %s', [i + 1, Catalog[i].DisplayName, Catalog[i].Notes]));
+    PrintLn(Format(' %2d. %-22s %s', [i + 1, Catalog[i].DisplayName, Catalog[i].Notes]));
 end;
 
 function PickFromCatalog(const Catalog: TProviderSpecArray;
@@ -156,25 +156,25 @@ procedure PromptVaultTools(Cfg: TConfig);
 var
   Choice: string;
 begin
-  WriteLn;
-  WriteLn(Ansi.Bold, 'Code Vault tools', Ansi.Reset);
-  WriteLn(Ansi.Dim,
-    'vault_search / vault_get let the agent discover Object Pascal source code',
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Code Vault tools' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'vault_search / vault_get let the agent discover Object Pascal source code' +
     Ansi.Reset);
-  WriteLn(Ansi.Dim,
-    '(samples, components, libraries) on pasclaw.dev — read-only HTTP GETs.',
+  PrintLn(Ansi.Dim +
+    '(samples, components, libraries) on pasclaw.dev — read-only HTTP GETs.' +
     Ansi.Reset);
-  WriteLn;
+  PrintLn;
   Choice := Trim(LowerCase(ReadLineEcho('  Enable vault tools for the agent [Y/n]: ')));
   if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
   begin
     Cfg.VaultToolsEnabled := True;
-    WriteLn('  ', Ansi.Green, '✓', Ansi.Reset, ' vault_search / vault_get enabled');
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' vault_search / vault_get enabled');
   end
   else
   begin
     Cfg.VaultToolsEnabled := False;
-    WriteLn('  ', Ansi.Dim, '(skipped — flip vault_tools_enabled in config.json to enable later)', Ansi.Reset);
+    PrintLn('  ' + Ansi.Dim + '(skipped — flip vault_tools_enabled in config.json to enable later)' + Ansi.Reset);
   end;
 end;
 
@@ -189,36 +189,36 @@ begin
   Entries := KnownMCPServers;
   if Length(Entries) = 0 then Exit;
 
-  WriteLn;
-  WriteLn(Ansi.Bold, 'Optional: enable built-in MCP servers', Ansi.Reset);
-  WriteLn(Ansi.Dim,
-    'These give the agent extra capabilities via the MCP protocol.',
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Optional: enable built-in MCP servers' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'These give the agent extra capabilities via the MCP protocol.' +
     Ansi.Reset);
-  WriteLn(Ansi.Dim,
-    'Skip what you don''t want — you can install later with ',
-    Ansi.Reset, '`pasclaw mcp install <name>`', Ansi.Dim, '.', Ansi.Reset);
-  WriteLn;
+  PrintLn(Ansi.Dim +
+    'Skip what you don''t want — you can install later with ' +
+    Ansi.Reset + '`pasclaw mcp install <name>`' + Ansi.Dim + '.' + Ansi.Reset);
+  PrintLn;
 
   for i := 0 to High(Entries) do
   begin
     Entry := Entries[i];
     AlreadyInstalled := IsMCPInstalled(Cfg, Entry.Name);
 
-    WriteLn(Ansi.Bold, '  ', Entry.Name, Ansi.Reset);
-    WriteLn('  ', Ansi.Dim, Entry.Desc, Ansi.Reset);
+    PrintLn(Ansi.Bold + '  ' + Entry.Name + Ansi.Reset);
+    PrintLn('  ' + Ansi.Dim + Entry.Desc + Ansi.Reset);
     if Entry.Docs <> '' then
-      WriteLn('  ', Ansi.Dim, Entry.Docs, Ansi.Reset);
+      PrintLn('  ' + Ansi.Dim + Entry.Docs + Ansi.Reset);
     if AlreadyInstalled then
     begin
-      WriteLn('  ', Ansi.Green, '(already installed — skipping)', Ansi.Reset);
-      WriteLn;
+      PrintLn('  ' + Ansi.Green + '(already installed — skipping)' + Ansi.Reset);
+      PrintLn;
       Continue;
     end;
 
     Choice := Trim(LowerCase(ReadLineEcho('  Enable [y/N]: ')));
     if (Choice <> 'y') and (Choice <> 'yes') then
     begin
-      WriteLn;
+      PrintLn;
       Continue;
     end;
 
@@ -226,9 +226,9 @@ begin
     if Entry.EnvVar = '' then
     begin
       UpsertCatalogMCP(Cfg, Entry, '');
-      WriteLn('  ', Ansi.Green, '✓', Ansi.Reset, ' installed ',
-              Entry.Name, ' ', Ansi.Dim, '(no auth)', Ansi.Reset);
-      WriteLn;
+      PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' installed ' +
+              Entry.Name + ' ' + Ansi.Dim + '(no auth)' + Ansi.Reset);
+      PrintLn;
       Continue;
     end;
 
@@ -237,8 +237,8 @@ begin
     EnvTok := GetEnvironmentVariable(Entry.EnvVar);
     if EnvTok <> '' then
     begin
-      WriteLn('  ', Ansi.Dim, 'using ', Entry.EnvVar,
-              ' from environment', Ansi.Reset);
+      PrintLn('  ' + Ansi.Dim + 'using ' + Entry.EnvVar +
+              ' from environment' + Ansi.Reset);
       HeaderVal := FormatAuthHeaderFromToken(Entry, EnvTok);
     end
     else
@@ -249,15 +249,15 @@ begin
       Token := Trim(ReadSecretLine('  ' + Entry.EnvVar + ' (paste, or blank to skip auth): '));
       HeaderVal := FormatAuthHeaderFromToken(Entry, Token);
       if HeaderVal = '' then
-        WriteLn('  ', Ansi.Yellow, '!', Ansi.Reset,
-                ' installing with no auth header — set ', Entry.EnvVar,
-                ' and re-run `pasclaw mcp install ', Entry.Name,
+        PrintLn('  ' + Ansi.Yellow + '!' + Ansi.Reset +
+                ' installing with no auth header — set ' + Entry.EnvVar +
+                ' and re-run `pasclaw mcp install ' + Entry.Name +
                 '` later to refresh.');
     end;
 
     UpsertCatalogMCP(Cfg, Entry, HeaderVal);
-    WriteLn('  ', Ansi.Green, '✓', Ansi.Reset, ' installed ', Entry.Name);
-    WriteLn;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' installed ' + Entry.Name);
+    PrintLn;
   end;
 end;
 
@@ -272,10 +272,10 @@ begin
   Home    := GetHome;
   CfgPath := GetConfigPath;
 
-  WriteLn(Ansi.Bold, 'Onboarding PasClaw', Ansi.Reset);
-  WriteLn('  home:   ', Home);
-  WriteLn('  config: ', CfgPath);
-  WriteLn;
+  PrintLn(Ansi.Bold + 'Onboarding PasClaw' + Ansi.Reset);
+  PrintLn('  home:   ' + Home);
+  PrintLn('  config: ' + CfgPath);
+  PrintLn;
 
   if not EnsureDir(Home) then
   begin
@@ -290,7 +290,7 @@ begin
   if FileExists(CfgPath) then
   begin
     Cfg := LoadConfig;
-    WriteLn('Existing config detected; updating in place.');
+    PrintLn('Existing config detected; updating in place.');
   end
   else
     Cfg := TConfig.Create;
@@ -299,7 +299,7 @@ begin
     Catalog := AllProviderSpecs;
     if not PickFromCatalog(Catalog, 'anthropic', Spec) then
     begin
-      WriteLn(Ansi.Yellow, 'no valid selection — config not changed', Ansi.Reset);
+      PrintLn(Ansi.Yellow + 'no valid selection — config not changed' + Ansi.Reset);
       Exit(1);
     end;
 
@@ -338,9 +338,9 @@ begin
     PromptVaultTools(Cfg);
 
     SaveConfig(Cfg);
-    WriteLn;
-    WriteLn(Ansi.Green, '✓', Ansi.Reset, ' wrote ', CfgPath);
-    WriteLn('Next: ', Ansi.Bold, 'pasclaw agent "hello"', Ansi.Reset);
+    PrintLn;
+    PrintLn(Ansi.Green + '✓' + Ansi.Reset + ' wrote ' + CfgPath);
+    PrintLn('Next: ' + Ansi.Bold + 'pasclaw agent "hello"' + Ansi.Reset);
     Result := 0;
   finally
     Cfg.Free;

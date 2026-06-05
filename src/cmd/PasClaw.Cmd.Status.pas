@@ -28,17 +28,17 @@ begin
   CfgOk  := FileExists(GetConfigPath);
   Cfg    := LoadConfig;
   try
-    WriteLn(Ansi.Bold, 'PasClaw status', Ansi.Reset);
-    WriteLn('  home directory : ', GetHome, '   present: ', YesNo(HomeOk));
-    WriteLn('  config file    : ', GetConfigPath, '   present: ', YesNo(CfgOk));
-    WriteLn('  default provider: ', Cfg.DefaultProvider);
-    WriteLn('  default model   : ', Cfg.DefaultModel);
-    WriteLn('  providers       : ', Length(Cfg.Providers));
-    WriteLn('  mcp servers     : ', Length(Cfg.MCPServers));
-    WriteLn('  cron entries    : ', Length(Cfg.Crons));
-    WriteLn('  skills          : ', Length(Cfg.Skills));
-    WriteLn('  gateway bind    : ', Cfg.Gateway.BindAddr, ':', Cfg.Gateway.Port);
-    WriteLn('  log level       : ', Cfg.Gateway.LogLevel);
+    PrintLn(Ansi.Bold + 'PasClaw status' + Ansi.Reset);
+    PrintLn('  home directory : ' + GetHome + '   present: ' + YesNo(HomeOk));
+    PrintLn('  config file    : ' + GetConfigPath + '   present: ' + YesNo(CfgOk));
+    PrintLn('  default provider: ' + Cfg.DefaultProvider);
+    PrintLn('  default model   : ' + Cfg.DefaultModel);
+    PrintLn(Format('  providers       : %d', [Length(Cfg.Providers)]));
+    PrintLn(Format('  mcp servers     : %d', [Length(Cfg.MCPServers)]));
+    PrintLn(Format('  cron entries    : %d', [Length(Cfg.Crons)]));
+    PrintLn(Format('  skills          : %d', [Length(Cfg.Skills)]));
+    PrintLn(Format('  gateway bind    : %s:%d', [Cfg.Gateway.BindAddr, Cfg.Gateway.Port]));
+    PrintLn('  log level       : ' + Cfg.Gateway.LogLevel);
     Result := 0;
   finally
     Cfg.Free;

@@ -21,19 +21,19 @@ uses
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw mcp <list|add|remove|test|edit|show|catalog|search|install|auth> [args]');
-  WriteLn('  add <name> <cmd> [args]   register a new MCP server');
-  WriteLn('  remove <name>             delete an MCP server entry');
-  WriteLn('  list                      list configured servers');
-  WriteLn('  show <name>               show one server in detail');
-  WriteLn('  test <name>               probe a server: initialize + tools/list');
-  WriteLn('  edit                      open config in $EDITOR');
-  WriteLn('  catalog                   list public MCP servers (pasclaw.dev hub,');
-  WriteLn('                            falls back to built-in 5 when offline)');
-  WriteLn('  search <query>            search pasclaw.dev MCP registry');
-  WriteLn('  install <name>            add from hub or catalog (reads auth from env)');
-  WriteLn('  auth <name>               run the OAuth 2.1 + PKCE flow for an OAuth-only');
-  WriteLn('                            MCP server (opens browser, captures callback)');
+  PrintLn('Usage: pasclaw mcp <list|add|remove|test|edit|show|catalog|search|install|auth> [args]');
+  PrintLn('  add <name> <cmd> [args]   register a new MCP server');
+  PrintLn('  remove <name>             delete an MCP server entry');
+  PrintLn('  list                      list configured servers');
+  PrintLn('  show <name>               show one server in detail');
+  PrintLn('  test <name>               probe a server: initialize + tools/list');
+  PrintLn('  edit                      open config in $EDITOR');
+  PrintLn('  catalog                   list public MCP servers (pasclaw.dev hub,');
+  PrintLn('                            falls back to built-in 5 when offline)');
+  PrintLn('  search <query>            search pasclaw.dev MCP registry');
+  PrintLn('  install <name>            add from hub or catalog (reads auth from env)');
+  PrintLn('  auth <name>               run the OAuth 2.1 + PKCE flow for an OAuth-only');
+  PrintLn('                            MCP server (opens browser, captures callback)');
 end;
 
 function DoList: Integer;
@@ -45,12 +45,12 @@ begin
   try
     if Length(Cfg.MCPServers) = 0 then
     begin
-      WriteLn('(no MCP servers configured)');
+      PrintLn('(no MCP servers configured)');
       Exit(0);
     end;
-    WriteLn(Ansi.Bold, 'name', Ansi.Reset, '            cmd');
+    PrintLn(Ansi.Bold + 'name' + Ansi.Reset + '            cmd');
     for i := 0 to High(Cfg.MCPServers) do
-      WriteLn(Cfg.MCPServers[i].Name:14, '  ', Cfg.MCPServers[i].Cmd, ' ', Cfg.MCPServers[i].Args);
+      PrintLn(Format('%14s  %s %s', [Cfg.MCPServers[i].Name, Cfg.MCPServers[i].Cmd, Cfg.MCPServers[i].Args]));
     Result := 0;
   finally
     Cfg.Free;
@@ -79,7 +79,7 @@ begin
     Cfg.MCPServers[n].Args    := Args;
     Cfg.MCPServers[n].Enabled := True;
     SaveConfig(Cfg);
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'added MCP server ', Argv[1]);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'added MCP server ' + Argv[1]);
     Result := 0;
   finally
     Cfg.Free;
@@ -103,7 +103,7 @@ begin
       end;
     SetLength(Cfg.MCPServers, dst);
     SaveConfig(Cfg);
-    WriteLn('removed ', Argv[1]);
+    PrintLn('removed ' + Argv[1]);
     Result := 0;
   finally
     Cfg.Free;
@@ -121,14 +121,14 @@ begin
     for i := 0 to High(Cfg.MCPServers) do
       if SameText(Cfg.MCPServers[i].Name, Argv[1]) then
       begin
-        WriteLn('name:    ', Cfg.MCPServers[i].Name);
-        WriteLn('cmd:     ', Cfg.MCPServers[i].Cmd);
-        WriteLn('args:    ', Cfg.MCPServers[i].Args);
-        WriteLn('env:     ', Cfg.MCPServers[i].Env);
-        WriteLn('enabled: ', Cfg.MCPServers[i].Enabled);
+        PrintLn('name:    ' + Cfg.MCPServers[i].Name);
+        PrintLn('cmd:     ' + Cfg.MCPServers[i].Cmd);
+        PrintLn('args:    ' + Cfg.MCPServers[i].Args);
+        PrintLn('env:     ' + Cfg.MCPServers[i].Env);
+        PrintLn('enabled: ' + BoolToStr(Cfg.MCPServers[i].Enabled, True));
         Exit(0);
       end;
-    WriteLn('no such MCP server: ', Argv[1]);
+    PrintLn('no such MCP server: ' + Argv[1]);
     Result := 1;
   finally
     Cfg.Free;
@@ -158,14 +158,14 @@ begin
       begin
         if IsHttpUrl(Cfg.MCPServers[i].Cmd) then
         begin
-          WriteLn('Connecting HTTP MCP at ', Cfg.MCPServers[i].Cmd, '...');
+          PrintLn('Connecting HTTP MCP at ' + Cfg.MCPServers[i].Cmd + '...');
           Client := TMCPHttpClient.Create(Cfg.MCPServers[i].Name,
                                           Cfg.MCPServers[i].Cmd,
                                           Cfg.MCPServers[i].Args);
         end
         else
         begin
-          WriteLn('Spawning ', Cfg.MCPServers[i].Cmd, ' ', Cfg.MCPServers[i].Args, '...');
+          PrintLn('Spawning ' + Cfg.MCPServers[i].Cmd + ' ' + Cfg.MCPServers[i].Args + '...');
           Client := TMCPStdioClient.Create(Cfg.MCPServers[i].Name,
                                            Cfg.MCPServers[i].Cmd,
                                            Cfg.MCPServers[i].Args);
@@ -173,25 +173,25 @@ begin
         try
           if not Client.Connect(5000, Err) then
           begin
-            WriteLn(Ansi.Red, '✗ ', Err, Ansi.Reset);
+            PrintLn(Ansi.Red + '✗ ' + Err + Ansi.Reset);
             Exit(1);
           end;
-          WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'initialize OK');
-          WriteLn('  server: ', Client.ServerInfo.Name, ' ', Client.ServerInfo.Version);
+          PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'initialize OK');
+          PrintLn('  server: ' + Client.ServerInfo.Name + ' ' + Client.ServerInfo.Version);
           if Client.ListTools(Tools, Err) then
           begin
-            WriteLn('  tools (', Length(Tools), '):');
+            PrintLn(Format('  tools (%d):', [Length(Tools)]));
             for j := 0 to High(Tools) do
-              WriteLn('    - ', Tools[j].Name, '  ', Tools[j].Description);
+              PrintLn('    - ' + Tools[j].Name + '  ' + Tools[j].Description);
           end
           else
-            WriteLn(Ansi.Yellow, '  tools/list failed: ', Err, Ansi.Reset);
+            PrintLn(Ansi.Yellow + '  tools/list failed: ' + Err + Ansi.Reset);
         finally
           Client.Free;
         end;
         Exit(0);
       end;
-    WriteLn('no such MCP server: ', Argv[1]);
+    PrintLn('no such MCP server: ' + Argv[1]);
     Result := 1;
   finally
     Cfg.Free;
@@ -200,7 +200,7 @@ end;
 
 function DoEdit(const Argv: array of string): Integer;
 begin
-  WriteLn('open ', GetConfigPath, ' in your editor (no shell-out yet).');
+  PrintLn('open ' + GetConfigPath + ' in your editor (no shell-out yet).');
   Result := 0;
 end;
 
@@ -215,40 +215,40 @@ begin
     { ResolveMCPCatalog always returns True today — it falls back to
       KnownMCPServers on hub failure. Defensive branch for the
       future case where it might fail outright. }
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'catalog unavailable: ', HubErr);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'catalog unavailable: ' + HubErr);
     Exit(1);
   end;
   if Source = 'hub' then
-    WriteLn(Ansi.Dim, '(showing ', Length(Entries),
-            ' from pasclaw.dev hub)', Ansi.Reset)
+    PrintLn(Ansi.Dim + '(showing ' + IntToStr(Length(Entries)) +
+            ' from pasclaw.dev hub)' + Ansi.Reset)
   else if HubErr <> '' then
-    WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
-            'hub unreachable (', HubErr,
-            ') — showing built-in ', Length(Entries), ' entries')
+    PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
+            'hub unreachable (' + HubErr +
+            ') — showing built-in ' + IntToStr(Length(Entries)) + ' entries')
   else
-    WriteLn(Ansi.Dim, '(showing built-in ', Length(Entries), ' entries)', Ansi.Reset);
+    PrintLn(Ansi.Dim + '(showing built-in ' + IntToStr(Length(Entries)) + ' entries)' + Ansi.Reset);
   if Skipped > 0 then
-    WriteLn(Ansi.Dim, '  (', Skipped,
-            ' hub entry/entries skipped — non-HTTP transports not supported yet)',
+    PrintLn(Ansi.Dim + '  (' + IntToStr(Skipped) +
+            ' hub entry/entries skipped — non-HTTP transports not supported yet)' +
             Ansi.Reset);
-  WriteLn;
+  PrintLn;
   if Length(Entries) = 0 then
   begin
-    WriteLn('(catalog empty)');
+    PrintLn('(catalog empty)');
     Exit(0);
   end;
-  WriteLn(Ansi.Bold, 'name', Ansi.Reset, '                       env var               status');
+  PrintLn(Ansi.Bold + 'name' + Ansi.Reset + '                       env var               status');
   for i := 0 to High(Entries) do
   begin
     if Entries[i].EnvVar = '' then Auth := '(no auth)'
     else if GetEnvironmentVariable(Entries[i].EnvVar) <> '' then Auth := Ansi.Green + 'set' + Ansi.Reset
     else Auth := Ansi.Yellow + 'unset' + Ansi.Reset;
-    WriteLn(Entries[i].Name:24, '   ', Entries[i].EnvVar:18, '   ', Auth);
+    PrintLn(Format('%24s   %18s   %s', [Entries[i].Name, Entries[i].EnvVar, Auth]));
     if Entries[i].Desc <> '' then
-      WriteLn('                            ', Ansi.Dim, Entries[i].Desc, Ansi.Reset);
+      PrintLn('                            ' + Ansi.Dim + Entries[i].Desc + Ansi.Reset);
   end;
-  WriteLn;
-  WriteLn(Ansi.Dim, 'Install one with: pasclaw mcp install <name>', Ansi.Reset);
+  PrintLn;
+  PrintLn(Ansi.Dim + 'Install one with: pasclaw mcp install <name>' + Ansi.Reset);
   Result := 0;
 end;
 
@@ -259,30 +259,30 @@ var
   i: Integer;
 begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
-  WriteLn('Searching pasclaw.dev MCP registry: ', Argv[1], ' …');
+  PrintLn('Searching pasclaw.dev MCP registry: ' + Argv[1] + ' …');
   if not SearchMCPHub(Argv[1], 25, Results, ErrMsg) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'search failed: ', ErrMsg);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'search failed: ' + ErrMsg);
     Exit(1);
   end;
   if Length(Results) = 0 then
   begin
-    WriteLn('(no matches)');
+    PrintLn('(no matches)');
     Exit(0);
   end;
-  WriteLn(Ansi.Bold, 'slug', Ansi.Reset,
+  PrintLn(Ansi.Bold + 'slug' + Ansi.Reset +
           '                       transport  name');
   for i := 0 to High(Results) do
   begin
-    WriteLn(Results[i].Slug:26, '  ', Results[i].Transport:9, '  ',
-            Results[i].DisplayName);
+    PrintLn(Format('%26s  %9s  %s',
+            [Results[i].Slug, Results[i].Transport, Results[i].DisplayName]));
     Summary := Trim(Results[i].Summary);
     if Summary <> '' then
-      WriteLn('                            ', Ansi.Dim, Summary, Ansi.Reset);
+      PrintLn('                            ' + Ansi.Dim + Summary + Ansi.Reset);
   end;
-  WriteLn;
-  WriteLn(Ansi.Dim, 'Install with: ', Ansi.Reset,
-          Ansi.Bold, 'pasclaw mcp install <slug>', Ansi.Reset);
+  PrintLn;
+  PrintLn(Ansi.Dim + 'Install with: ' + Ansi.Reset +
+          Ansi.Bold + 'pasclaw mcp install <slug>' + Ansi.Reset);
   Result := 0;
 end;
 
@@ -305,18 +305,18 @@ begin
   begin
     if not FindCatalogEntry(Argv[1], Entry) then
     begin
-      WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'no entry named "', Argv[1], '"');
+      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no entry named "' + Argv[1] + '"');
       if HubErr <> '' then
-        WriteLn(Ansi.Dim, '  pasclaw.dev hub: ', HubErr, Ansi.Reset);
-      WriteLn(Ansi.Dim, '  try: ', Ansi.Reset,
-              Ansi.Bold, 'pasclaw mcp catalog', Ansi.Reset,
-              Ansi.Dim, ' or ', Ansi.Reset,
-              Ansi.Bold, 'pasclaw mcp search <query>', Ansi.Reset);
+        PrintLn(Ansi.Dim + '  pasclaw.dev hub: ' + HubErr + Ansi.Reset);
+      PrintLn(Ansi.Dim + '  try: ' + Ansi.Reset +
+              Ansi.Bold + 'pasclaw mcp catalog' + Ansi.Reset +
+              Ansi.Dim + ' or ' + Ansi.Reset +
+              Ansi.Bold + 'pasclaw mcp search <query>' + Ansi.Reset);
       Exit(1);
     end;
   end
   else
-    WriteLn(Ansi.Dim, '  resolved from pasclaw.dev hub', Ansi.Reset);
+    PrintLn(Ansi.Dim + '  resolved from pasclaw.dev hub' + Ansi.Reset);
 
   { OAuth-only servers (Replicate today) install with no header — the
     HTTP client reads the on-disk token store at request time. Prompt
@@ -325,11 +325,11 @@ begin
   begin
     HeaderVal := '';
     if HasStoredTokens(Entry.Name) then
-      WriteLn(Ansi.Dim, '  using existing OAuth tokens at ',
-              OAuthTokenPath(Entry.Name), Ansi.Reset)
+      PrintLn(Ansi.Dim + '  using existing OAuth tokens at ' +
+              OAuthTokenPath(Entry.Name) + Ansi.Reset)
     else
-      WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
-              'OAuth required — run `pasclaw mcp auth ', Entry.Name,
+      PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
+              'OAuth required — run `pasclaw mcp auth ' + Entry.Name +
               '` to authorize.');
   end
   else
@@ -337,15 +337,15 @@ begin
     AuthOk := ResolveAuthHeader(Entry, HeaderVal, EnvSet);
     if (Entry.EnvVar <> '') and (not EnvSet) then
     begin
-      WriteLn(Ansi.Yellow, '! ', Ansi.Reset, 'env var ', Entry.EnvVar,
+      PrintLn(Ansi.Yellow + '! ' + Ansi.Reset + 'env var ' + Entry.EnvVar +
               ' is not set. Installing anyway with an empty Authorization');
-      WriteLn('  header — set ', Entry.EnvVar,
-              ' and re-run `pasclaw mcp install ', Entry.Name, '` to refresh it,');
-      WriteLn('  or run `pasclaw mcp edit` to drop in the token by hand.');
+      PrintLn('  header — set ' + Entry.EnvVar +
+              ' and re-run `pasclaw mcp install ' + Entry.Name + '` to refresh it,');
+      PrintLn('  or run `pasclaw mcp edit` to drop in the token by hand.');
       HeaderVal := '';
     end
     else if AuthOk and (HeaderVal <> '') then
-      WriteLn(Ansi.Dim, '  using ', Entry.EnvVar, ' from environment', Ansi.Reset);
+      PrintLn(Ansi.Dim + '  using ' + Entry.EnvVar + ' from environment' + Ansi.Reset);
   end;
 
   Cfg := LoadConfig;
@@ -360,7 +360,7 @@ begin
         Cfg.MCPServers[i].Args    := HeaderVal;
         Cfg.MCPServers[i].Enabled := True;
         SaveConfig(Cfg);
-        WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'updated MCP server ', Entry.Name);
+        PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'updated MCP server ' + Entry.Name);
         Exit(0);
       end;
 
@@ -371,9 +371,9 @@ begin
     Cfg.MCPServers[n].Args    := HeaderVal;
     Cfg.MCPServers[n].Enabled := True;
     SaveConfig(Cfg);
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'installed MCP server ', Entry.Name);
-    WriteLn('  ', Ansi.Dim, Entry.Desc, Ansi.Reset);
-    WriteLn('  Test with: ', Ansi.Bold, 'pasclaw mcp test ', Entry.Name, Ansi.Reset);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'installed MCP server ' + Entry.Name);
+    PrintLn('  ' + Ansi.Dim + Entry.Desc + Ansi.Reset);
+    PrintLn('  Test with: ' + Ansi.Bold + 'pasclaw mcp test ' + Entry.Name + Ansi.Reset);
     Result := 0;
   finally
     Cfg.Free;
@@ -402,16 +402,16 @@ begin
       end;
     if URL = '' then
     begin
-      WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'no such MCP server: ', Argv[1]);
-      WriteLn(Ansi.Dim, '  install it first with: ', Ansi.Reset,
-              Ansi.Bold, 'pasclaw mcp install ', Argv[1], Ansi.Reset);
+      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no such MCP server: ' + Argv[1]);
+      PrintLn(Ansi.Dim + '  install it first with: ' + Ansi.Reset +
+              Ansi.Bold + 'pasclaw mcp install ' + Argv[1] + Ansi.Reset);
       Exit(1);
     end;
     if not IsHttpUrl(URL) then
     begin
-      WriteLn(Ansi.Red, '✗ ', Ansi.Reset,
-              'OAuth flow only applies to HTTP MCP servers; ', Argv[1],
-              ' is ', URL);
+      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
+              'OAuth flow only applies to HTTP MCP servers; ' + Argv[1] +
+              ' is ' + URL);
       Exit(1);
     end;
   finally
@@ -420,8 +420,8 @@ begin
 
   if RunOAuthFlow(Argv[1], URL, ErrMsg) then
   begin
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'authorized ', Argv[1],
-            ' — tokens written to ', OAuthTokenPath(Argv[1]));
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'authorized ' + Argv[1] +
+            ' — tokens written to ' + OAuthTokenPath(Argv[1]));
     { Clear any pre-existing Args header on the server entry. Pre-OAuth
       installs of the same catalog name (e.g. an old `mcp install
       replicate` that wrote "Bearer r8_…" from REPLICATE_API_TOKEN)
@@ -438,20 +438,20 @@ begin
         begin
           Cfg.MCPServers[i].Args := '';
           SaveConfig(Cfg);
-          WriteLn(Ansi.Dim,
-                  '  cleared stale Authorization header on the server entry',
+          PrintLn(Ansi.Dim +
+                  '  cleared stale Authorization header on the server entry' +
                   Ansi.Reset);
           Break;
         end;
     finally
       Cfg.Free;
     end;
-    WriteLn('  Try it: ', Ansi.Bold, 'pasclaw mcp test ', Argv[1], Ansi.Reset);
+    PrintLn('  Try it: ' + Ansi.Bold + 'pasclaw mcp test ' + Argv[1] + Ansi.Reset);
     Result := 0;
   end
   else
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'OAuth flow failed: ', ErrMsg);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'OAuth flow failed: ' + ErrMsg);
     Result := 1;
   end;
 end;

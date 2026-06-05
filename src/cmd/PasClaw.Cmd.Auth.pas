@@ -14,7 +14,7 @@ uses
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw auth <login|logout|status|weixin> [provider]');
+  PrintLn('Usage: pasclaw auth <login|logout|status|weixin> [provider]');
 end;
 
 function DoStatus: Integer;
@@ -26,12 +26,13 @@ begin
   try
     if Length(Cfg.Providers) = 0 then
     begin
-      WriteLn('(no providers configured — run `pasclaw onboard`)');
+      PrintLn('(no providers configured — run `pasclaw onboard`)');
       Exit(0);
     end;
     for i := 0 to High(Cfg.Providers) do
-      WriteLn(Cfg.Providers[i].Name:14, '  key: ',
-        IfThen(Cfg.Providers[i].APIKey <> '', 'present', 'missing'));
+      PrintLn(Format('%14s  key: %s',
+        [Cfg.Providers[i].Name,
+         IfThen(Cfg.Providers[i].APIKey <> '', 'present', 'missing')]));
     Result := 0;
   finally
     Cfg.Free;
@@ -47,7 +48,7 @@ var
 begin
   Cfg := LoadConfig;
   try
-    Write('API key for ', Provider, ': ');
+    Print('API key for ' + Provider + ': ');
     ReadLn(Key);
     Found := False;
     for i := 0 to High(Cfg.Providers) do
@@ -65,7 +66,7 @@ begin
       Cfg.Providers[High(Cfg.Providers)].APIKey := Key;
     end;
     SaveConfig(Cfg);
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'stored key for ', Provider);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'stored key for ' + Provider);
     Result := 0;
   finally
     Cfg.Free;
@@ -83,7 +84,7 @@ begin
       if SameText(Cfg.Providers[i].Name, Provider) then
         Cfg.Providers[i].APIKey := '';
     SaveConfig(Cfg);
-    WriteLn('cleared key for ', Provider);
+    PrintLn('cleared key for ' + Provider);
     Result := 0;
   finally
     Cfg.Free;
@@ -101,7 +102,7 @@ begin
   else if (Sub = 'logout') and (Length(Argv) >= 2) then Result := DoLogout(Argv[1])
   else if Sub = 'weixin' then
   begin
-    WriteLn('(weixin/WeChat QR linking will land in Phase 5)');
+    PrintLn('(weixin/WeChat QR linking will land in Phase 5)');
     Result := 0;
   end
   else begin Help; Result := 1; end;

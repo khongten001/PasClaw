@@ -34,14 +34,14 @@ uses
 
 procedure PrintHelp;
 begin
-  WriteLn('Usage: pasclaw steer <session-id> <message>');
-  WriteLn('       pasclaw steer <session-id> --list');
-  WriteLn('       pasclaw steer <session-id> --clear');
-  WriteLn;
-  WriteLn('Push a mid-loop steering message to a running agent. The');
-  WriteLn('next iteration of the agent''s tool loop folds it into');
-  WriteLn('history as a "[user steering] ..." system note before the');
-  WriteLn('next LLM call.');
+  PrintLn('Usage: pasclaw steer <session-id> <message>');
+  PrintLn('       pasclaw steer <session-id> --list');
+  PrintLn('       pasclaw steer <session-id> --clear');
+  PrintLn;
+  PrintLn('Push a mid-loop steering message to a running agent. The');
+  PrintLn('next iteration of the agent''s tool loop folds it into');
+  PrintLn('history as a "[user steering] ..." system note before the');
+  PrintLn('next LLM call.');
 end;
 
 function Cmd_Steer_Run(const Argv: array of string): Integer;
@@ -58,7 +58,7 @@ begin
   Id := Argv[0];
   if Length(Argv) < 2 then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'missing message argument');
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'missing message argument');
     PrintHelp;
     Exit(1);
   end;
@@ -67,16 +67,16 @@ begin
   begin
     n := PendingSteeringCount(Id);
     if n = 0 then
-      WriteLn(Ansi.Dim, '(no pending steering for ', Id, ')', Ansi.Reset)
+      PrintLn(Ansi.Dim + '(no pending steering for ' + Id + ')' + Ansi.Reset)
     else
-      WriteLn('  pending steering messages for ', Id, ': ', n);
+      PrintLn('  pending steering messages for ' + Id + ': ' + IntToStr(n));
     Exit(0);
   end;
 
   if Argv[1] = '--clear' then
   begin
     ClearSteering(Id);
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'cleared steering queue for ', Id);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'cleared steering queue for ' + Id);
     Exit(0);
   end;
 
@@ -87,13 +87,13 @@ begin
 
   if PushSteering(Id, Msg) then
   begin
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'queued: "', Copy(Msg, 1, 80), '"');
-    WriteLn(Ansi.Dim, '  the running agent will pick it up at the top of its next iteration', Ansi.Reset);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'queued: "' + Copy(Msg, 1, 80) + '"');
+    PrintLn(Ansi.Dim + '  the running agent will pick it up at the top of its next iteration' + Ansi.Reset);
     Exit(0);
   end
   else
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'push failed — invalid session id "', Id, '" or write error');
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'push failed — invalid session id "' + Id + '" or write error');
     Exit(1);
   end;
 end;

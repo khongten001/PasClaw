@@ -10,7 +10,7 @@ function Cmd_Migrate_Run(const Argv: array of string): Integer;
 implementation
 
 uses
-  SysUtils, PasClaw.Config, PasClaw.Utils;
+  SysUtils, PasClaw.Config, PasClaw.Utils, PasClaw.CliUI;
 
 function Cmd_Migrate_Run(const Argv: array of string): Integer;
 var
@@ -21,10 +21,10 @@ begin
   if FileExists(PicoPath) and not FileExists(NewPath) then
   begin
     WriteFileText(NewPath, ReadFileText(PicoPath));
-    WriteLn('migrated ', PicoPath, ' -> ', NewPath);
+    PrintLn('migrated ' + PicoPath + ' -> ' + NewPath);
     Exit(0);
   end;
-  WriteLn('nothing to migrate (no ~/.picoclaw/config.json, or destination exists)');
+  PrintLn('nothing to migrate (no ~/.picoclaw/config.json, or destination exists)');
   Result := 0;
 end;
 

@@ -42,6 +42,32 @@ function  RenderCommandHelp(const Use, Short, Long, Example: string;
    automation still works. Codex P2 on PR #126. *)
 function ReadSecretLine(const Prompt: string): string;
 
+(* UTF-8-safe console output. Bypasses the RTL's WriteLn path on
+   Windows + Delphi, which transcodes UnicodeString through the
+   Text-file codepage and produces mojibake (é → Ã©, … → â€¦) on
+   default ANSI consoles even when SetConsoleOutputCP(CP_UTF8) has
+   been called. Implementation per surface:
+
+     Windows + Delphi   WriteConsoleW(GetStdHandle(...), PWideChar(S),
+                        Length(S), ...) — UTF-16 straight to the
+                        renderer. Falls back to UTF-8 bytes + WriteFile
+                        when stdout/stderr is redirected to a pipe or
+                        file (WriteConsoleW returns ERROR_INVALID_HANDLE
+                        on non-console handles).
+
+     FPC any-OS, Delphi non-Windows   plain Write/WriteLn. FPC's
+                        runtime emits the AnsiString's UTF-8 bytes
+                        directly; POSIX terminals interpret UTF-8 by
+                        default. No transcode trap to bypass.
+
+   Call sites that used to do  WriteLn('foo: ', x)  with x non-string
+   need to concatenate to a single string first (string concat or
+   Format) since the helpers are not variadic. *)
+procedure Print(const S: string);
+procedure PrintLn(const S: string = '');
+procedure PrintErr(const S: string);
+procedure PrintLnErr(const S: string = '');
+
 implementation
 
 uses
@@ -150,22 +176,22 @@ const
   L5 = '██║     ██║  ██║███████║╚██████╗███████╗██║  ██║╚███╔███╔╝';
   L6 = '╚═╝     ╚═╝  ╚═╝╚══════╝ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ ';
 begin
-  WriteLn;
+  PrintLn;
   if GNoColor then
   begin
-    WriteLn(L1); WriteLn(L2); WriteLn(L3);
-    WriteLn(L4); WriteLn(L5); WriteLn(L6);
+    PrintLn(L1); PrintLn(L2); PrintLn(L3);
+    PrintLn(L4); PrintLn(L5); PrintLn(L6);
   end
   else
   begin
-    WriteLn(Ansi.BoldBlue + L1 + Ansi.Reset);
-    WriteLn(Ansi.BoldBlue + L2 + Ansi.Reset);
-    WriteLn(Ansi.BoldBlue + L3 + Ansi.Reset);
-    WriteLn(Ansi.BoldRed  + L4 + Ansi.Reset);
-    WriteLn(Ansi.BoldRed  + L5 + Ansi.Reset);
-    WriteLn(Ansi.BoldRed  + L6 + Ansi.Reset);
+    PrintLn(Ansi.BoldBlue + L1 + Ansi.Reset);
+    PrintLn(Ansi.BoldBlue + L2 + Ansi.Reset);
+    PrintLn(Ansi.BoldBlue + L3 + Ansi.Reset);
+    PrintLn(Ansi.BoldRed  + L4 + Ansi.Reset);
+    PrintLn(Ansi.BoldRed  + L5 + Ansi.Reset);
+    PrintLn(Ansi.BoldRed  + L6 + Ansi.Reset);
   end;
-  WriteLn;
+  PrintLn;
 end;
 
 procedure ApplyTimezoneFromEnv;
@@ -174,8 +200,8 @@ var
 begin
   Tz := GetEnvironmentVariable('TZ');
   if Tz = '' then Exit;
-  WriteLn('TZ environment: ', Tz);
-  WriteLn('ZONEINFO environment: ', GetEnvironmentVariable('ZONEINFO'));
+  PrintLn('TZ environment: ' + Tz);
+  PrintLn('ZONEINFO environment: ' + GetEnvironmentVariable('ZONEINFO'));
   { FPC honours the TZ environment variable on Unix natively; on Windows we
     simply report it and let the RTL handle conversions. }
 end;
@@ -292,7 +318,7 @@ var
   Old, New_: TermIOS;
   HaveTerm: Boolean;
 begin
-  Write(Prompt);
+  Print(Prompt);
   Flush(Output);
   HaveTerm := tcgetattr(0, Old) = 0;
   if HaveTerm then
@@ -311,7 +337,7 @@ begin
   end;
   { ReadLn consumed the newline silently when echo was off — emit one
     so the next prompt starts on a fresh line. }
-  if HaveTerm then WriteLn;
+  if HaveTerm then PrintLn;
 end;
 {$ENDIF}
 {$IFDEF MSWINDOWS}
@@ -320,7 +346,7 @@ var
   OldMode, NewMode: DWORD;
   HaveMode: Boolean;
 begin
-  Write(Prompt);
+  Print(Prompt);
   Flush(Output);
   H := GetStdHandle(STD_INPUT_HANDLE);
   HaveMode := (H <> INVALID_HANDLE_VALUE) and GetConsoleMode(H, OldMode);
@@ -334,15 +360,83 @@ begin
   finally
     if HaveMode then SetConsoleMode(H, OldMode);
   end;
-  if HaveMode then WriteLn;
+  if HaveMode then PrintLn;
 end;
 {$ENDIF}
 {$IF NOT DEFINED(UNIX) AND NOT DEFINED(MSWINDOWS)}
 begin
   { Unknown platform — fall through to plain echoing read so the
     program still runs. }
-  Write(Prompt);
+  Print(Prompt);
   ReadLn(Result);
+end;
+{$IFEND}
+
+{$IF DEFINED(MSWINDOWS) AND NOT DEFINED(FPC)}
+procedure WriteToHandle(H: THandle; const S: string);
+{ Per the per-surface plan above: WriteConsoleW when H is a real
+  console (UTF-16 → renderer, no codepage conversion); UTF-8 bytes
+  via WriteFile otherwise (pipe / file redirection — WriteConsoleW
+  would return ERROR_INVALID_HANDLE there). Empty S is a no-op. }
+var
+  Mode: DWORD;
+  Written: DWORD;
+  Bytes: TBytes;
+begin
+  if (H = INVALID_HANDLE_VALUE) or (S = '') then Exit;
+  if GetConsoleMode(H, Mode) then
+    WriteConsoleW(H, PWideChar(S), Length(S), Written, nil)
+  else
+  begin
+    Bytes := TEncoding.UTF8.GetBytes(S);
+    if Length(Bytes) > 0 then
+      WriteFile(H, Bytes[0], Length(Bytes), Written, nil);
+  end;
+end;
+
+procedure Print(const S: string);
+begin
+  WriteToHandle(GetStdHandle(STD_OUTPUT_HANDLE), S);
+end;
+
+procedure PrintLn(const S: string);
+begin
+  WriteToHandle(GetStdHandle(STD_OUTPUT_HANDLE), S + sLineBreak);
+end;
+
+procedure PrintErr(const S: string);
+begin
+  WriteToHandle(GetStdHandle(STD_ERROR_HANDLE), S);
+end;
+
+procedure PrintLnErr(const S: string);
+begin
+  WriteToHandle(GetStdHandle(STD_ERROR_HANDLE), S + sLineBreak);
+end;
+{$ELSE}
+{ FPC any-OS + Delphi non-Windows: standard Write/WriteLn already
+  emits the string's bytes directly to stdout/stderr. FPC's RTL
+  carries AnsiString as UTF-8; Delphi on POSIX writes through the
+  C runtime which honours the terminal's UTF-8 expectation. No
+  WriteConsoleW bypass needed. }
+procedure Print(const S: string);
+begin
+  Write(Output, S);
+end;
+
+procedure PrintLn(const S: string);
+begin
+  WriteLn(Output, S);
+end;
+
+procedure PrintErr(const S: string);
+begin
+  Write(ErrOutput, S);
+end;
+
+procedure PrintLnErr(const S: string);
+begin
+  WriteLn(ErrOutput, S);
 end;
 {$IFEND}
 

@@ -128,7 +128,7 @@ begin
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
   Fl[1] := '-h, --help   Show this help';
 
-  Write(RenderCommandHelp(Use, Short, Long, Example, Sub, Fl));
+  Print(RenderCommandHelp(Use, Short, Long, Example, Sub, Fl));
 end;
 
 function DispatchCommand(const Cmd: string; const Argv: array of string): Integer;
@@ -154,7 +154,7 @@ begin
   begin
     if Length(Argv) < 1 then
     begin
-      WriteLn('Usage: pasclaw resume <session-id>');
+      PrintLn('Usage: pasclaw resume <session-id>');
       Result := 1;
     end
     else
@@ -174,7 +174,7 @@ begin
   else if Cmd = 'version'  then Result := Cmd_Version_Run(Argv)
   else
   begin
-    Write(ErrOutput, FormatCLIError('unknown command: ' + Cmd, 'pasclaw'));
+    PrintErr(FormatCLIError('unknown command: ' + Cmd, 'pasclaw'));
     Result := 1;
   end;
 end;

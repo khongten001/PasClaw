@@ -13,8 +13,8 @@ uses
 
 function Cmd_Version_Run(const Argv: array of string): Integer;
 begin
-  WriteLn('PasClaw ', FormatVersion);
-  WriteLn(FormatBuildInfo);
+  PrintLn('PasClaw ' + FormatVersion);
+  PrintLn(FormatBuildInfo);
   Result := 0;
 end;
 

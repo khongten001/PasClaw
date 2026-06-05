@@ -143,7 +143,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools print-version get-indy webui-res
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper print-version get-indy webui-res
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -226,4 +226,10 @@ test-openai-server-tools: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/openai_server_tools_tests.pas -o$(BUILDDIR)/openai_server_tools_tests
 	@$(BUILDDIR)/openai_server_tools_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools
+# PasClaw.CliUI Print/PrintLn helpers — link + UTF-8 byte round-trip.
+test-println-helper: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/println_helper_tests.pas -o$(BUILDDIR)/println_helper_tests
+	@$(BUILDDIR)/println_helper_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper

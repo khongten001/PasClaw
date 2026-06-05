@@ -44,15 +44,15 @@ uses
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw skills <list|install|remove|search> [args]');
-  WriteLn;
-  WriteLn('  list                                List installed skills.');
-  WriteLn('  install owner/repo[/path][@ref]     Install a SKILL.md from GitHub.');
-  WriteLn('  install hub:<slug>[@<version>]      Install from pasclaw.dev (forced).');
-  WriteLn('  install clawhub:<slug>[@<version>]  Install from ClawHub (https://clawhub.ai).');
-  WriteLn('  install <slug>                      Try pasclaw.dev first, then ClawHub.');
-  WriteLn('  remove <name>                       Remove from config.json + workspace.');
-  WriteLn('  search <query>                      Search pasclaw.dev + ClawHub for skills.');
+  PrintLn('Usage: pasclaw skills <list|install|remove|search> [args]');
+  PrintLn;
+  PrintLn('  list                                List installed skills.');
+  PrintLn('  install owner/repo[/path][@ref]     Install a SKILL.md from GitHub.');
+  PrintLn('  install hub:<slug>[@<version>]      Install from pasclaw.dev (forced).');
+  PrintLn('  install clawhub:<slug>[@<version>]  Install from ClawHub (https://clawhub.ai).');
+  PrintLn('  install <slug>                      Try pasclaw.dev first, then ClawHub.');
+  PrintLn('  remove <name>                       Remove from config.json + workspace.');
+  PrintLn('  search <query>                      Search pasclaw.dev + ClawHub for skills.');
 end;
 
 function IsGitHubTarget(const Target: string): Boolean;
@@ -191,11 +191,11 @@ begin
   Specs := LoadSkillManifests(GetHome);
   if Length(Specs) = 0 then
   begin
-    WriteLn('(no skills found at ', JoinPath(GetHome, 'workspace/skills'), ')');
-    WriteLn('Add one: mkdir -p ~/.pasclaw/workspace/skills/<name>; place a SKILL.md inside.');
+    PrintLn('(no skills found at ' + JoinPath(GetHome, 'workspace/skills') + ')');
+    PrintLn('Add one: mkdir -p ~/.pasclaw/workspace/skills/<name>; place a SKILL.md inside.');
     Exit(0);
   end;
-  WriteLn(Ansi.Bold, 'name', Ansi.Reset, '              kind        source');
+  PrintLn(Ansi.Bold + 'name' + Ansi.Reset + '              kind        source');
   for i := 0 to High(Specs) do
   begin
     K := Specs[i].Kind;
@@ -204,9 +204,9 @@ begin
     Src := Specs[i].Source;
     if Pos(GetHome, Src) = 1 then
       Src := '~' + Copy(Src, Length(GetHome) + 1, MaxInt);
-    WriteLn(Specs[i].Name:18, '  ', K:9, '  ', Src);
+    PrintLn(Format('%18s  %9s  %s', [Specs[i].Name, K, Src]));
     if Specs[i].Description <> '' then
-      WriteLn('                    ', Ansi.Dim, Specs[i].Description, Ansi.Reset);
+      PrintLn('                    ' + Ansi.Dim + Specs[i].Description + Ansi.Reset);
   end;
   Result := 0;
 end;
@@ -216,16 +216,16 @@ var
   DestRoot, Installed, ErrMsg: string;
 begin
   DestRoot := JoinPath(GetHome, 'workspace/skills');
-  WriteLn('Fetching ', Target, ' …');
+  PrintLn('Fetching ' + Target + ' …');
   if not InstallFromGitHub(Target, DestRoot, Installed, ErrMsg) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'install failed: ', ErrMsg);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'install failed: ' + ErrMsg);
     Exit(1);
   end;
-  WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'installed as ',
+  PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'installed as ' +
           JoinPath(DestRoot, Installed));
-  WriteLn('  Run ', Ansi.Bold, 'pasclaw skills list', Ansi.Reset,
-          ' to confirm; next ', Ansi.Bold, 'pasclaw agent', Ansi.Reset,
+  PrintLn('  Run ' + Ansi.Bold + 'pasclaw skills list' + Ansi.Reset +
+          ' to confirm; next ' + Ansi.Bold + 'pasclaw agent' + Ansi.Reset +
           ' invocation will pick it up.');
   Result := 0;
 end;
@@ -243,9 +243,9 @@ begin
     Cfg.Skills[n].Source  := Argv[1];
     Cfg.Skills[n].Enabled := True;
     SaveConfig(Cfg);
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'recorded ', Argv[1], ' in config.json');
-    WriteLn(Ansi.Dim, '  (no files downloaded — for a GitHub install use ',
-            'owner/repo syntax)', Ansi.Reset);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'recorded ' + Argv[1] + ' in config.json');
+    PrintLn(Ansi.Dim + '  (no files downloaded — for a GitHub install use ' +
+            'owner/repo syntax)' + Ansi.Reset);
     Result := 0;
   finally
     Cfg.Free;
@@ -259,18 +259,18 @@ begin
   SplitSlugAtVersion(Target, Slug, Version);
   DestRoot := JoinPath(GetHome, 'workspace/skills');
   if Version <> '' then
-    WriteLn('Fetching clawhub:', Slug, ' @', Version, ' …')
+    PrintLn('Fetching clawhub:' + Slug + ' @' + Version + ' …')
   else
-    WriteLn('Fetching clawhub:', Slug, ' …');
+    PrintLn('Fetching clawhub:' + Slug + ' …');
   if not InstallFromClawHub(Slug, Version, DestRoot, Installed, ErrMsg) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'install failed: ', ErrMsg);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'install failed: ' + ErrMsg);
     Exit(1);
   end;
-  WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'installed as ',
+  PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'installed as ' +
           JoinPath(DestRoot, Installed));
-  WriteLn('  Run ', Ansi.Bold, 'pasclaw skills list', Ansi.Reset,
-          ' to confirm; next ', Ansi.Bold, 'pasclaw agent', Ansi.Reset,
+  PrintLn('  Run ' + Ansi.Bold + 'pasclaw skills list' + Ansi.Reset +
+          ' to confirm; next ' + Ansi.Bold + 'pasclaw agent' + Ansi.Reset +
           ' invocation will pick it up.');
   Result := 0;
 end;
@@ -286,18 +286,18 @@ begin
   SplitSlugAtVersion(Target, Slug, Version);
   DestRoot := JoinPath(GetHome, 'workspace/skills');
   if Version <> '' then
-    WriteLn('Fetching pasclaw.dev: ', Slug, ' @', Version, ' …')
+    PrintLn('Fetching pasclaw.dev: ' + Slug + ' @' + Version + ' …')
   else
-    WriteLn('Fetching pasclaw.dev: ', Slug, ' …');
+    PrintLn('Fetching pasclaw.dev: ' + Slug + ' …');
   if not InstallFromPasClawHub(Slug, Version, DestRoot, Installed, ErrMsg) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'install failed: ', ErrMsg);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'install failed: ' + ErrMsg);
     Exit(1);
   end;
-  WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'installed as ',
+  PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'installed as ' +
           JoinPath(DestRoot, Installed));
-  WriteLn('  Run ', Ansi.Bold, 'pasclaw skills list', Ansi.Reset,
-          ' to confirm; next ', Ansi.Bold, 'pasclaw agent', Ansi.Reset,
+  PrintLn('  Run ' + Ansi.Bold + 'pasclaw skills list' + Ansi.Reset +
+          ' to confirm; next ' + Ansi.Bold + 'pasclaw agent' + Ansi.Reset +
           ' invocation will pick it up.');
   Result := 0;
 end;
@@ -334,42 +334,42 @@ begin
   DestRoot := JoinPath(GetHome, 'workspace/skills');
 
   if Version <> '' then
-    WriteLn('Fetching pasclaw.dev: ', Slug, ' @', Version, ' …')
+    PrintLn('Fetching pasclaw.dev: ' + Slug + ' @' + Version + ' …')
   else
-    WriteLn('Fetching pasclaw.dev: ', Slug, ' …');
+    PrintLn('Fetching pasclaw.dev: ' + Slug + ' …');
   if TryInstallFromHub(Slug, Version, DestRoot, Installed, ErrMsg, HubNotFound) then
   begin
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'installed as ',
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'installed as ' +
             JoinPath(DestRoot, Installed));
-    WriteLn('  Run ', Ansi.Bold, 'pasclaw skills list', Ansi.Reset,
-            ' to confirm; next ', Ansi.Bold, 'pasclaw agent', Ansi.Reset,
+    PrintLn('  Run ' + Ansi.Bold + 'pasclaw skills list' + Ansi.Reset +
+            ' to confirm; next ' + Ansi.Bold + 'pasclaw agent' + Ansi.Reset +
             ' invocation will pick it up.');
     Exit(0);
   end;
   if not HubNotFound then
   begin
     { Real error, not a miss — surface and stop. }
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'pasclaw.dev install failed: ', ErrMsg);
-    WriteLn(Ansi.Dim, '  retry with ', Ansi.Reset, '`pasclaw skills install clawhub:', Slug, '`',
-            Ansi.Dim, ' to force ClawHub.', Ansi.Reset);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'pasclaw.dev install failed: ' + ErrMsg);
+    PrintLn(Ansi.Dim + '  retry with ' + Ansi.Reset + '`pasclaw skills install clawhub:' + Slug + '`' +
+            Ansi.Dim + ' to force ClawHub.' + Ansi.Reset);
     Exit(1);
   end;
 
-  WriteLn(Ansi.Dim, '  not on pasclaw.dev — trying ClawHub …', Ansi.Reset);
+  PrintLn(Ansi.Dim + '  not on pasclaw.dev — trying ClawHub …' + Ansi.Reset);
   ClawNotFound := False;
   if InstallFromClawHub(Slug, Version, DestRoot, Installed, ErrMsg) then
   begin
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'installed as ',
-            JoinPath(DestRoot, Installed), Ansi.Dim, ' (from ClawHub)', Ansi.Reset);
-    WriteLn('  Run ', Ansi.Bold, 'pasclaw skills list', Ansi.Reset,
-            ' to confirm; next ', Ansi.Bold, 'pasclaw agent', Ansi.Reset,
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'installed as ' +
+            JoinPath(DestRoot, Installed) + Ansi.Dim + ' (from ClawHub)' + Ansi.Reset);
+    PrintLn('  Run ' + Ansi.Bold + 'pasclaw skills list' + Ansi.Reset +
+            ' to confirm; next ' + Ansi.Bold + 'pasclaw agent' + Ansi.Reset +
             ' invocation will pick it up.');
     Exit(0);
   end;
   ClawNotFound := SameText(ErrMsg, 'not found');
   if not ClawNotFound then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'ClawHub install failed: ', ErrMsg);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'ClawHub install failed: ' + ErrMsg);
     Exit(1);
   end;
 
@@ -377,8 +377,8 @@ begin
     behaviour so existing user scripts that did
     `pasclaw skills install my-local-name` keep working — with a
     note that nothing was downloaded. }
-  WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
-          'no hub entry for "', Slug, '" — recording in config.json only.');
+  PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
+          'no hub entry for "' + Slug + '" — recording in config.json only.');
   Result := DoInstallLegacy(Argv);
 end;
 
@@ -421,7 +421,7 @@ var
 begin
   if Length(Argv) < 2 then
   begin
-    WriteLn('Usage: pasclaw skills search <query>');
+    PrintLn('Usage: pasclaw skills search <query>');
     Exit(1);
   end;
   Query := Argv[1];
@@ -430,30 +430,30 @@ begin
     results follow, with slugs already seen on pasclaw.dev dropped
     (the local hub wins the dedup). Either hub being unreachable
     is recoverable — we degrade to whatever did respond. }
-  WriteLn('Searching pasclaw.dev + ClawHub: ', Query, ' …');
+  PrintLn('Searching pasclaw.dev + ClawHub: ' + Query + ' …');
   HubOk := SearchPasClawHub(Query, 20, HubResults, HubErr);
   ClawOk := SearchClawHub(Query, 20, ClawResults, ClawErr);
   if (not HubOk) and (not ClawOk) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'both hubs failed:');
-    WriteLn('  pasclaw.dev: ', HubErr);
-    WriteLn('  clawhub:     ', ClawErr);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'both hubs failed:');
+    PrintLn('  pasclaw.dev: ' + HubErr);
+    PrintLn('  clawhub:     ' + ClawErr);
     Exit(1);
   end;
   if not HubOk then
-    WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
-            'pasclaw.dev unreachable (', HubErr, ') — showing ClawHub only');
+    PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
+            'pasclaw.dev unreachable (' + HubErr + ') — showing ClawHub only');
   if not ClawOk then
-    WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
-            'clawhub unreachable (', ClawErr, ') — showing pasclaw.dev only');
+    PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
+            'clawhub unreachable (' + ClawErr + ') — showing pasclaw.dev only');
 
   if (Length(HubResults) = 0) and (Length(ClawResults) = 0) then
   begin
-    WriteLn('(no matches)');
+    PrintLn('(no matches)');
     Exit(0);
   end;
 
-  WriteLn(Ansi.Bold, 'src   slug', Ansi.Reset,
+  PrintLn(Ansi.Bold + 'src   slug' + Ansi.Reset +
           '                       version    name');
   TotalShown := 0;
   SeenSlugs := TStringList.Create;
@@ -465,11 +465,11 @@ begin
       if SeenSlugs.IndexOf(Slug) >= 0 then Continue;
       SeenSlugs.Add(Slug);
       Source := Ansi.Bold + 'hub' + Ansi.Reset;
-      WriteLn(Source, '   ', Slug:24, '  ', HubResults[i].Version:9, '  ',
-              HubResults[i].DisplayName);
+      PrintLn(Format('%s   %24s  %9s  %s',
+              [Source, Slug, HubResults[i].Version, HubResults[i].DisplayName]));
       Summary := Trim(HubResults[i].Summary);
       if Summary <> '' then
-        WriteLn('                                  ', Ansi.Dim, Summary, Ansi.Reset);
+        PrintLn('                                  ' + Ansi.Dim + Summary + Ansi.Reset);
       Inc(TotalShown);
     end;
     for i := 0 to High(ClawResults) do
@@ -478,11 +478,11 @@ begin
       if SeenSlugs.IndexOf(Slug) >= 0 then Continue;
       SeenSlugs.Add(Slug);
       Source := Ansi.Dim + 'claw' + Ansi.Reset;
-      WriteLn(Source, '  ', Slug:24, '  ', ClawResults[i].Version:9, '  ',
-              ClawResults[i].DisplayName);
+      PrintLn(Format('%s  %24s  %9s  %s',
+              [Source, Slug, ClawResults[i].Version, ClawResults[i].DisplayName]));
       Summary := Trim(ClawResults[i].Summary);
       if Summary <> '' then
-        WriteLn('                                  ', Ansi.Dim, Summary, Ansi.Reset);
+        PrintLn('                                  ' + Ansi.Dim + Summary + Ansi.Reset);
       Inc(TotalShown);
     end;
   finally
@@ -491,14 +491,14 @@ begin
 
   if TotalShown = 0 then
   begin
-    WriteLn('(no matches)');
+    PrintLn('(no matches)');
     Exit(0);
   end;
 
-  WriteLn;
-  WriteLn(Ansi.Dim, 'Install with: ', Ansi.Reset,
-          Ansi.Bold, 'pasclaw skills install <slug>', Ansi.Reset,
-          Ansi.Dim, ' (tries pasclaw.dev first, then ClawHub).', Ansi.Reset);
+  PrintLn;
+  PrintLn(Ansi.Dim + 'Install with: ' + Ansi.Reset +
+          Ansi.Bold + 'pasclaw skills install <slug>' + Ansi.Reset +
+          Ansi.Dim + ' (tries pasclaw.dev first, then ClawHub).' + Ansi.Reset);
   Result := 0;
 end;
 
@@ -561,8 +561,8 @@ begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
   if not IsSafeSkillName(Argv[1]) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset,
-            'unsafe skill name "', Argv[1], '" — skill names must be a single ',
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
+            'unsafe skill name "' + Argv[1] + '" — skill names must be a single ' +
             'path segment with no /, \, :, or ".." sequence');
     Exit(1);
   end;
@@ -596,10 +596,10 @@ begin
     Cfg.Free;
   end;
   if RemovedFiles then
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'removed ', Argv[1])
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'removed ' + Argv[1])
   else
-    WriteLn(Ansi.Yellow, '(', Argv[1],
-            ' was not found on disk; config entry cleared if present)',
+    PrintLn(Ansi.Yellow + '(' + Argv[1] +
+            ' was not found on disk; config entry cleared if present)' +
             Ansi.Reset);
   Result := 0;
 end;

@@ -14,13 +14,13 @@ uses
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw cron <list|add|disable|enable|remove> [args]');
-  WriteLn('  add <id> "<spec>" <skill> [args] [--channel <kind>:<target>]');
-  WriteLn('                                     register a cron task');
-  WriteLn('                                     channel kinds: discord, slack, teams,');
-  WriteLn('                                                    webhook, line, whatsapp');
-  WriteLn('  disable|enable <id>                toggle a task');
-  WriteLn('  remove <id>                        delete a task');
+  PrintLn('Usage: pasclaw cron <list|add|disable|enable|remove> [args]');
+  PrintLn('  add <id> "<spec>" <skill> [args] [--channel <kind>:<target>]');
+  PrintLn('                                     register a cron task');
+  PrintLn('                                     channel kinds: discord, slack, teams,');
+  PrintLn('                                                    webhook, line, whatsapp');
+  PrintLn('  disable|enable <id>                toggle a task');
+  PrintLn('  remove <id>                        delete a task');
 end;
 
 function DoList: Integer;
@@ -32,15 +32,16 @@ begin
   try
     if Length(Cfg.Crons) = 0 then
     begin
-      WriteLn('(no cron entries)');
+      PrintLn('(no cron entries)');
       Exit(0);
     end;
-    WriteLn(Ansi.Bold, 'id', Ansi.Reset, '              spec              skill         enabled');
+    PrintLn(Ansi.Bold + 'id' + Ansi.Reset + '              spec              skill         enabled');
     for i := 0 to High(Cfg.Crons) do
-      WriteLn(Cfg.Crons[i].Id:14, '  ',
-              Cfg.Crons[i].Spec:14, '  ',
-              Cfg.Crons[i].Skill:12, '  ',
-              BoolToStr(Cfg.Crons[i].Enabled, True));
+      PrintLn(Format('%14s  %14s  %12s  %s',
+              [Cfg.Crons[i].Id,
+               Cfg.Crons[i].Spec,
+               Cfg.Crons[i].Skill,
+               BoolToStr(Cfg.Crons[i].Enabled, True)]));
     Result := 0;
   finally
     Cfg.Free;
@@ -79,7 +80,7 @@ begin
       ColonPos := Pos(':', ChannelSpec);
       if ColonPos <= 1 then
       begin
-        WriteLn(Ansi.Red, '✗ ', Ansi.Reset,
+        PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
                 '--channel must be <kind>:<target>');
         Exit(1);
       end;
@@ -97,7 +98,7 @@ begin
     Cfg.Crons[n].ChannelKind   := Kind;
     Cfg.Crons[n].ChannelTarget := Target;
     SaveConfig(Cfg);
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'added cron ', Argv[1]);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'added cron ' + Argv[1]);
     Result := 0;
   finally
     Cfg.Free;

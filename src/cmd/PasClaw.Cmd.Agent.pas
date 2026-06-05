@@ -73,7 +73,7 @@ type
 
 procedure TLoopHandlers.OnToolCall(const Name, ArgsJSON: string);
 begin
-  WriteLn(Ansi.Magenta, '› tool ', Name, Ansi.Reset, ' ', Copy(ArgsJSON, 1, 200));
+  PrintLn(Ansi.Magenta + '› tool ' + Name + Ansi.Reset + ' ' + Copy(ArgsJSON, 1, 200));
 end;
 
 procedure TLoopHandlers.OnToolResult(const Name, ResultText, Err: string);
@@ -81,12 +81,12 @@ var
   Preview: string;
 begin
   if Err <> '' then
-    WriteLn(Ansi.Red, '  ✗ ', Err, Ansi.Reset)
+    PrintLn(Ansi.Red + '  ✗ ' + Err + Ansi.Reset)
   else
   begin
     Preview := ResultText;
     if Length(Preview) > 200 then Preview := Copy(Preview, 1, 200) + '…';
-    WriteLn(Ansi.Dim, '  ✓ ', Preview, Ansi.Reset);
+    PrintLn(Ansi.Dim + '  ✓ ' + Preview + Ansi.Reset);
   end;
 end;
 
@@ -300,9 +300,9 @@ var
 begin
   if not PickProvider(Cfg, A, Provider, Err) then
   begin
-    WriteLn(Ansi.Yellow, '(offline preview — ', Err, ')', Ansi.Reset);
-    WriteLn('You: ', Prompt);
-    WriteLn('Assistant: <provider not configured; run `pasclaw onboard`>');
+    PrintLn(Ansi.Yellow + '(offline preview — ' + Err + ')' + Ansi.Reset);
+    PrintLn('You: ' + Prompt);
+    PrintLn('Assistant: <provider not configured; run `pasclaw onboard`>');
     Exit;
   end;
 
@@ -328,13 +328,13 @@ begin
 
     LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
 
-    WriteLn(Ansi.Cyan, 'assistant', Ansi.Reset, ' (', Provider.GetName, '/', Model, '):');
+    PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' + Provider.GetName + '/' + Model + '):');
     if RunToolLoop(LoopCfg, Msgs, Loop) then
-      WriteLn(Loop.Content)
+      PrintLn(Loop.Content)
     else
-      WriteLn('(loop failed)');
+      PrintLn('(loop failed)');
     if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
-      WriteLn(Ansi.Dim, FormatTokenLine(Loop.TotalUsage, Loop.Iterations), Ansi.Reset);
+      PrintLn(Ansi.Dim + FormatTokenLine(Loop.TotalUsage, Loop.Iterations) + Ansi.Reset);
   finally
     Handlers.Free;
     FreeMCPClients(MCPClients);
@@ -388,8 +388,8 @@ begin
   TotalPrompt     := 0;
   Offline := not PickProvider(Cfg, A, Provider, Err);
   if Offline then
-    WriteLn(Ansi.Yellow, '(offline preview — ', Err, ')', Ansi.Reset);
-  WriteLn(Ansi.Dim, 'PasClaw interactive chat. /help for commands, /quit to exit.', Ansi.Reset);
+    PrintLn(Ansi.Yellow + '(offline preview — ' + Err + ')' + Ansi.Reset);
+  PrintLn(Ansi.Dim + 'PasClaw interactive chat. /help for commands, /quit to exit.' + Ansi.Reset);
 
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
   Reg := nil;
@@ -416,16 +416,16 @@ begin
       SetLength(Msgs, Length(Session.Messages));
       for i := 0 to High(Session.Messages) do Msgs[i] := Session.Messages[i];
       SystemPromptOverride := Session.Meta.SystemPromptOverride;
-      WriteLn(Ansi.Dim, '(resumed session ', Session.Meta.Id,
-              ' — ', Length(Msgs), ' messages)', Ansi.Reset);
+      PrintLn(Ansi.Dim + '(resumed session ' + Session.Meta.Id +
+              ' — ' + IntToStr(Length(Msgs)) + ' messages)' + Ansi.Reset);
     end
     else
-      WriteLn(Ansi.Dim, '(new session ', Session.Meta.Id,
-              ' — pasclaw resume ', Session.Meta.Id, ' to continue later)', Ansi.Reset);
+      PrintLn(Ansi.Dim + '(new session ' + Session.Meta.Id +
+              ' — pasclaw resume ' + Session.Meta.Id + ' to continue later)' + Ansi.Reset);
 
     while True do
     begin
-      Write(Ansi.Bold, '> ', Ansi.Reset);
+      Print(Ansi.Bold + '> ' + Ansi.Reset);
       if EOF then Break;
       ReadLn(Line);
       Line := Trim(Line);
@@ -446,13 +446,13 @@ begin
           ClearSteering(Session.Meta.Id);
           Session.Free;
           Session := TSession.Create('');   { fresh id }
-          WriteLn(Ansi.Dim, '(new session ', Session.Meta.Id, ')', Ansi.Reset);
+          PrintLn(Ansi.Dim + '(new session ' + Session.Meta.Id + ')' + Ansi.Reset);
         end
         else
         begin
           ClearSteering(Session.Meta.Id);
           PersistSession;   { writes empty Msgs + cleared override }
-          WriteLn(Ansi.Dim, '(history cleared)', Ansi.Reset);
+          PrintLn(Ansi.Dim + '(history cleared)' + Ansi.Reset);
         end;
         Continue;
       end;
@@ -462,73 +462,73 @@ begin
           win is `pasclaw steer <id> "..."` from another terminal
           while a long loop is mid-execution. }
         if PushSteering(Session.Meta.Id, Copy(Line, 8, MaxInt)) then
-          WriteLn(Ansi.Dim, '(queued; injects at top of next iteration)', Ansi.Reset)
+          PrintLn(Ansi.Dim + '(queued; injects at top of next iteration)' + Ansi.Reset)
         else
-          WriteLn(Ansi.Red, '(steer push failed)', Ansi.Reset);
+          PrintLn(Ansi.Red + '(steer push failed)' + Ansi.Reset);
         Continue;
       end;
       if Line = '/tools' then
       begin
         if Reg = nil then
-          WriteLn('(tools disabled — restart without --no-tools)')
+          PrintLn('(tools disabled — restart without --no-tools)')
         else
         begin
           Names := Reg.Names;
-          for i := 0 to High(Names) do WriteLn('  ', Names[i]);
+          for i := 0 to High(Names) do PrintLn('  ' + Names[i]);
         end;
         Continue;
       end;
       if (Line = '/help') or (Line = '/?') then
       begin
-        WriteLn('  /help        show this list');
-        WriteLn('  /status      model + provider + message count + thinking state');
-        WriteLn('  /new         clear conversation history (alias: /reset)');
-        WriteLn('  /reset       clear conversation history');
-        WriteLn('  /compact     force a one-shot summariser pass on the history now');
-        WriteLn('  /think       toggle extended thinking on the next turn (if the provider supports it)');
-        WriteLn('  /tools       list registered tools');
-        WriteLn('  /steer <msg> queue a mid-loop steering message for the NEXT iteration');
-        WriteLn('  /quit        exit (alias: /exit)');
+        PrintLn('  /help        show this list');
+        PrintLn('  /status      model + provider + message count + thinking state');
+        PrintLn('  /new         clear conversation history (alias: /reset)');
+        PrintLn('  /reset       clear conversation history');
+        PrintLn('  /compact     force a one-shot summariser pass on the history now');
+        PrintLn('  /think       toggle extended thinking on the next turn (if the provider supports it)');
+        PrintLn('  /tools       list registered tools');
+        PrintLn('  /steer <msg> queue a mid-loop steering message for the NEXT iteration');
+        PrintLn('  /quit        exit (alias: /exit)');
         Continue;
       end;
       if Line = '/status' then
       begin
         if Provider <> nil then
-          WriteLn('  provider:  ', Provider.GetName)
+          PrintLn('  provider:  ' + Provider.GetName)
         else
-          WriteLn('  provider:  (offline)');
-        WriteLn('  model:     ', Model);
-        WriteLn('  messages:  ', Length(Msgs));
+          PrintLn('  provider:  (offline)');
+        PrintLn('  model:     ' + Model);
+        PrintLn('  messages:  ' + IntToStr(Length(Msgs)));
         if Reg <> nil then
-          WriteLn('  tools:     ', Reg.Count)
+          PrintLn('  tools:     ' + IntToStr(Reg.Count))
         else
-          WriteLn('  tools:     (disabled)');
+          PrintLn('  tools:     (disabled)');
         if ThinkingOn then
-          WriteLn('  thinking:  on (next turn)')
+          PrintLn('  thinking:  on (next turn)')
         else
-          WriteLn('  thinking:  off');
+          PrintLn('  thinking:  off');
         if SystemPromptOverride <> '' then
-          WriteLn('  compacted: yes (summary in system prompt)')
+          PrintLn('  compacted: yes (summary in system prompt)')
         else
-          WriteLn('  compacted: no');
+          PrintLn('  compacted: no');
         if Cfg.PromptCache.Enabled then
         begin
           if TotalPrompt > 0 then
-            WriteLn(Format('  cache:     on, %d read / %d written (%d%% hit on prompt so far)',
+            PrintLn(Format('  cache:     on, %d read / %d written (%d%% hit on prompt so far)',
                            [TotalCacheRead, TotalCacheWrite,
                             (TotalCacheRead * 100) div TotalPrompt]))
           else
-            WriteLn('  cache:     on, no turns yet');
+            PrintLn('  cache:     on, no turns yet');
         end
         else
-          WriteLn('  cache:     off (prompt_cache.enabled=false in config)');
+          PrintLn('  cache:     off (prompt_cache.enabled=false in config)');
         if Session <> nil then
         begin
           i := PendingSteeringCount(Session.Meta.Id);
           if i > 0 then
-            WriteLn('  steering:  ', i, ' pending (folded at next iteration)')
+            PrintLn('  steering:  ' + IntToStr(i) + ' pending (folded at next iteration)')
           else
-            WriteLn('  steering:  none queued');
+            PrintLn('  steering:  none queued');
         end;
         Continue;
       end;
@@ -536,27 +536,27 @@ begin
       begin
         if (Provider <> nil) and (not Provider.SupportsThinking) then
         begin
-          WriteLn(Ansi.Yellow, 'provider ', Provider.GetName,
-                  ' does not support extended thinking — flag ignored.', Ansi.Reset);
+          PrintLn(Ansi.Yellow + 'provider ' + Provider.GetName +
+                  ' does not support extended thinking — flag ignored.' + Ansi.Reset);
           Continue;
         end;
         ThinkingOn := not ThinkingOn;
         if ThinkingOn then
-          WriteLn(Ansi.Dim, '(thinking on for next turn)', Ansi.Reset)
+          PrintLn(Ansi.Dim + '(thinking on for next turn)' + Ansi.Reset)
         else
-          WriteLn(Ansi.Dim, '(thinking off)', Ansi.Reset);
+          PrintLn(Ansi.Dim + '(thinking off)' + Ansi.Reset);
         Continue;
       end;
       if Line = '/compact' then
       begin
         if Length(Msgs) = 0 then
         begin
-          WriteLn(Ansi.Dim, '(no history to compact)', Ansi.Reset);
+          PrintLn(Ansi.Dim + '(no history to compact)' + Ansi.Reset);
           Continue;
         end;
         if Offline then
         begin
-          WriteLn(Ansi.Yellow, '/compact needs a configured provider to summarise.', Ansi.Reset);
+          PrintLn(Ansi.Yellow + '/compact needs a configured provider to summarise.' + Ansi.Reset);
           Continue;
         end;
         CompactOptsLocal := DefaultCompactOptions;
@@ -573,7 +573,7 @@ begin
           summary and resume replays the full transcript. Codex P2
           on PR #117. }
         PersistSession;
-        WriteLn(Ansi.Dim, '(history compacted; summary folded into system prompt)', Ansi.Reset);
+        PrintLn(Ansi.Dim + '(history compacted; summary folded into system prompt)' + Ansi.Reset);
         Continue;
       end;
       if Line = '' then Continue;
@@ -583,7 +583,7 @@ begin
 
       if Offline then
       begin
-        WriteLn(Ansi.Cyan, 'assistant', Ansi.Reset, ' (offline): I would respond once a provider is configured.');
+        PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (offline): I would respond once a provider is configured.');
         SetLength(Msgs, Length(Msgs) + 1);
         Msgs[High(Msgs)] := MakeMessage(mrAssistant, '(no response — offline)');
         Continue;
@@ -625,14 +625,14 @@ begin
 
       if RunToolLoop(LoopCfg, Msgs, Loop) then
       begin
-        WriteLn(Ansi.Cyan, 'assistant', Ansi.Reset, ' (', Provider.GetName, '/', Model, '):');
-        WriteLn(Loop.Content);
+        PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' + Provider.GetName + '/' + Model + '):');
+        PrintLn(Loop.Content);
         if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
         begin
           { Surface aggregate usage across every provider call in the
             turn (incl. tool-using rounds), not just the final reply.
             Codex P2 on PR #118. }
-          WriteLn(Ansi.Dim, FormatTokenLine(Loop.TotalUsage, Loop.Iterations), Ansi.Reset);
+          PrintLn(Ansi.Dim + FormatTokenLine(Loop.TotalUsage, Loop.Iterations) + Ansi.Reset);
           Inc(TotalPrompt,     TotalPromptTokens(Loop.TotalUsage, Provider.GetName));
           Inc(TotalCacheRead,  Loop.TotalUsage.CacheReadTokens);
           Inc(TotalCacheWrite, Loop.TotalUsage.CacheCreatedTokens);
@@ -682,9 +682,9 @@ var
 begin
   if not ParseArgs(Argv, A) then
   begin
-    WriteLn(ErrOutput, 'usage: pasclaw agent [-m "msg"] [--model M] [--provider P] [--system S]');
-    WriteLn(ErrOutput, '                     [--thinking low|medium|high] [--max-tokens N]');
-    WriteLn(ErrOutput, '                     [--max-iterations N] [--no-tools]');
+    PrintLnErr('usage: pasclaw agent [-m "msg"] [--model M] [--provider P] [--system S]');
+    PrintLnErr('                     [--thinking low|medium|high] [--max-tokens N]');
+    PrintLnErr('                     [--max-iterations N] [--no-tools]');
     Exit(1);
   end;
 
