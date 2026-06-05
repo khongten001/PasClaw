@@ -46,7 +46,10 @@ begin
   Opts := DefaultChatOptions;
   Body := BuildOAIRequest(OneUserMessage('hi'), NoUserTools, 'gpt-4o',
                           Opts, NoOpenAIServerTools);
-  AssertMissing(Body, 'web_search_options', 'no web_search_options by default');
+  { Default flipped to True in #146, but BuildOAIRequest is pure —
+    it emits exactly what the caller asks for. NoOpenAIServerTools
+    is the "off" sentinel, so the field must not appear. }
+  AssertMissing(Body, 'web_search_options', 'no web_search_options when off');
 end;
 
 procedure TestServerWebSearchOn;

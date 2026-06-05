@@ -358,7 +358,14 @@ begin
   AnthropicServerTools.WebSearchMaxUses := 0;
   AnthropicServerTools.WebFetch         := False;
   AnthropicServerTools.WebFetchMaxUses  := 0;
-  OpenAIServerTools.WebSearch           := False;
+  { Default-on: OpenAI's web_search_options is silently ignored on
+    every non-search-capable model (gpt-4o, gpt-4o-mini, etc.) and
+    on third-party OpenAI-compatible endpoints (Groq, OpenRouter,
+    vLLM, Ollama), so leaving it on costs nothing there. Operators
+    who pick gpt-5-search-api as their model get server-side search
+    "for free" with no extra config step. Flip to False in
+    config.json to suppress emitting the field entirely. }
+  OpenAIServerTools.WebSearch           := True;
 end;
 
 function ProviderToJSON(const P: TProviderConfig): TJsonObject;
@@ -509,12 +516,13 @@ begin
         Tmp.PutInt('web_fetch_max_uses', AnthropicServerTools.WebFetchMaxUses);
       Root.PutObject('anthropic_server_tools', Tmp);
     end;
-    if OpenAIServerTools.WebSearch then
-    begin
-      Tmp := TJsonObject.Create;
-      Tmp.PutBool('web_search', True);
-      Root.PutObject('openai_server_tools', Tmp);
-    end;
+    { Always emit — the default flipped to True in #146, so an
+      operator who sets web_search: false in config.json needs that
+      setting to round-trip. Skipping the emit when False would let
+      the default win on the next load. }
+    Tmp := TJsonObject.Create;
+    Tmp.PutBool('web_search', OpenAIServerTools.WebSearch);
+    Root.PutObject('openai_server_tools', Tmp);
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Providers) do
