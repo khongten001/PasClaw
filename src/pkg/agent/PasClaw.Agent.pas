@@ -312,6 +312,7 @@ uses
   PasClaw.Tools.Shell,
   PasClaw.Tools.Memory,
   PasClaw.Tools.WebSearch,
+  PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
@@ -477,7 +478,10 @@ begin
   RegisterFSTools(FRegistry, FUseHashline);
   RegisterShellTool(FRegistry);
   RegisterMemoryTools(FRegistry);
-  RegisterWebSearchTool(FRegistry);
+  if HasConfiguredWebSearchProvider(FConfig) then
+    RegisterWebSearchTool(FRegistry)
+  else
+    LogWebSearchSkipOnce;
   RegisterWebFetchTool(FRegistry);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(FRegistry, Skills);
@@ -870,7 +874,10 @@ begin
     RegisterFSTools(FRegistry, FEnableHashline);
     RegisterShellTool(FRegistry);
     RegisterMemoryTools(FRegistry);
-    RegisterWebSearchTool(FRegistry);
+    if HasConfiguredWebSearchProvider(FConfig) then
+      RegisterWebSearchTool(FRegistry)
+    else
+      LogWebSearchSkipOnce;
     RegisterWebFetchTool(FRegistry);
     Skills := LoadSkillManifests(GetHome);
     RegisterSkills(FRegistry, Skills);

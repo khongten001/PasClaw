@@ -32,6 +32,21 @@ uses
 
 function NewSearchProvider(const Cfg: TConfig; out ErrMsg: string): ISearchProvider;
 
+{ True when the operator has a real (non-DDG) provider configured —
+  either via Cfg.WebSearch.Provider + the required credential, or via
+  a known env-var API key alone (auto-detected). The web_search tool
+  gates registration on this so the model doesn't see a tool that
+  will silently come back empty when our zero-config fallback hits
+  DDG's anomaly wall. }
+function HasConfiguredWebSearchProvider(const Cfg: TConfig): Boolean;
+
+{ Log a one-time-per-process explanation that web_search was skipped
+  because no real provider is configured. Callers gating the tool's
+  registration should invoke this in their `else` branch so the
+  operator sees an actionable nudge in the boot log without us
+  spamming on every multi-registry pass. }
+procedure LogWebSearchSkipOnce;
+
 implementation
 
 uses
@@ -52,6 +67,23 @@ begin
   else              Result := FromCfg;
 end;
 
+function AutoDetectFromEnv: string;
+{ When the user set an API key but never set web_search.provider in
+  config.json, pick a sensible default. Priority is "key-only
+  providers first" — operators tend to set the Brave / Tavily /
+  Perplexity / Gemini keys when they want web search, and it'd be a
+  bad surprise to ignore that just because they didn't also touch
+  the Provider field. SearXNG isn't auto-detected because its
+  base_url is non-secret and lives in config.json proper. }
+begin
+  if GetEnvironmentVariable('PASCLAW_BRAVE_API_KEY')      <> '' then Exit('brave');
+  if GetEnvironmentVariable('PASCLAW_TAVILY_API_KEY')     <> '' then Exit('tavily');
+  if GetEnvironmentVariable('PASCLAW_PERPLEXITY_API_KEY') <> '' then Exit('perplexity');
+  if GetEnvironmentVariable('PASCLAW_GEMINI_API_KEY')     <> '' then Exit('gemini');
+  if GetEnvironmentVariable('PASCLAW_GOOGLE_API_KEY')     <> '' then Exit('gemini');
+  Result := '';
+end;
+
 function NewSearchProvider(const Cfg: TConfig; out ErrMsg: string): ISearchProvider;
 var
   Kind, Key: string;
@@ -59,7 +91,22 @@ begin
   ErrMsg := '';
   Kind := LowerCase(Trim(Cfg.WebSearch.Provider));
 
-  if (Kind = '') or (Kind = 'duckduckgo') or (Kind = 'ddg') then
+  if Kind = '' then
+  begin
+    { Auto-detect a real provider from env keys before falling all
+      the way back to DDG. Only fires when the operator hasn't named
+      a provider — explicit "duckduckgo"/"ddg" below is respected
+      verbatim so a paid env key (left over from another tool's
+      config) can't silently hijack searches the operator meant to
+      send to DDG. Codex P2 on PR #143. }
+    Kind := AutoDetectFromEnv;
+    if Kind = '' then
+    begin
+      Result := NewDuckDuckGoProvider;
+      Exit;
+    end;
+  end
+  else if (Kind = 'duckduckgo') or (Kind = 'ddg') then
   begin
     Result := NewDuckDuckGoProvider;
     Exit;
@@ -140,6 +187,72 @@ begin
 
   LogWarn('search.factory: unknown provider %s — falling back to duckduckgo', [Kind]);
   Result := NewDuckDuckGoProvider;
+end;
+
+var
+  GLogged: Boolean = False;
+
+procedure LogSkipOnceImpl;
+{ One-line info per process the first time web_search registration is
+  skipped, so the operator understands why the model doesn't see the
+  tool and how to flip it on. Subsequent skips during the same
+  process are silenced — multi-registry boots (cmd then component-
+  embedded refresh, etc.) shouldn't spam. }
+begin
+  if GLogged then Exit;
+  GLogged := True;
+  LogInfo('web_search disabled: no real provider configured. ' +
+          'Set $PASCLAW_BRAVE_API_KEY / $PASCLAW_TAVILY_API_KEY / ' +
+          '$PASCLAW_PERPLEXITY_API_KEY / $PASCLAW_GEMINI_API_KEY, ' +
+          'or set web_search.provider = "searxng" + base_url in config.json. ' +
+          '(DDG scrape fallback is disabled — its bot detection refuses non-browser ' +
+          'requests at the TLS-fingerprint level.)', []);
+end;
+
+function HasConfiguredWebSearchProvider(const Cfg: TConfig): Boolean;
+var
+  Kind: string;
+begin
+  Kind := LowerCase(Trim(Cfg.WebSearch.Provider));
+
+  { Explicit non-DDG provider: counts as "configured" iff its required
+    credential is reachable (env or cfg). The factory enforces the
+    same rule at NewSearchProvider time; mirror it here so the gate
+    decision lines up. }
+  if Kind = 'brave' then
+    Exit(PickKey(Cfg.WebSearch.APIKey, 'PASCLAW_BRAVE_API_KEY') <> '');
+  if Kind = 'tavily' then
+    Exit(PickKey(Cfg.WebSearch.APIKey, 'PASCLAW_TAVILY_API_KEY') <> '');
+  if Kind = 'perplexity' then
+    Exit(PickKey(Cfg.WebSearch.APIKey, 'PASCLAW_PERPLEXITY_API_KEY') <> '');
+  if (Kind = 'gemini') or (Kind = 'google_search') then
+    Exit((PickKey(Cfg.WebSearch.APIKey, 'PASCLAW_GEMINI_API_KEY') <> '') or
+         (GetEnvironmentVariable('PASCLAW_GOOGLE_API_KEY') <> ''));
+  if Kind = 'searxng' then
+    Exit(Cfg.WebSearch.BaseURL <> '');
+
+  { Empty provider: fall back to "does the operator have any
+    auto-detectable env key set?". Without that, the only real
+    option is the DDG scrape, which we've decided not to expose. }
+  if Kind = '' then
+    Exit(AutoDetectFromEnv <> '');
+
+  { Explicit 'duckduckgo'/'ddg': the operator chose the broken-
+    by-bot-wall scrape backend deliberately. Don't second-guess
+    them by sending requests to whatever paid key happens to be in
+    the env — and don't register the tool either, since DDG won't
+    deliver results. Codex P2 on PR #143. }
+  if (Kind = 'duckduckgo') or (Kind = 'ddg') then
+    Exit(False);
+
+  { Unknown Kind — the factory logs a warning and falls back to DDG,
+    so for the gate decision treat it as "not configured". }
+  Result := False;
+end;
+
+procedure LogWebSearchSkipOnce;
+begin
+  LogSkipOnceImpl;
 end;
 
 end.
