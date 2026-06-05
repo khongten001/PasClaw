@@ -14,7 +14,7 @@ uses
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw model [show|set <name>|add <provider> <name>]');
+  PrintLn('Usage: pasclaw model [show|set <name>|add <provider> <name>]');
 end;
 
 function DoShow: Integer;
@@ -23,8 +23,8 @@ var
 begin
   Cfg := LoadConfig;
   try
-    WriteLn('default provider: ', Cfg.DefaultProvider);
-    WriteLn('default model:    ', Cfg.DefaultModel);
+    PrintLn('default provider: ' + Cfg.DefaultProvider);
+    PrintLn('default model:    ' + Cfg.DefaultModel);
     Result := 0;
   finally
     Cfg.Free;
@@ -40,7 +40,7 @@ begin
   try
     Cfg.DefaultModel := Argv[1];
     SaveConfig(Cfg);
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'default model = ', Argv[1]);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'default model = ' + Argv[1]);
     Result := 0;
   finally
     Cfg.Free;
@@ -72,7 +72,7 @@ begin
       Cfg.Providers[High(Cfg.Providers)].Model := Argv[2];
     end;
     SaveConfig(Cfg);
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'registered ', Argv[1], '/', Argv[2]);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'registered ' + Argv[1] + '/' + Argv[2]);
     Result := 0;
   finally
     Cfg.Free;

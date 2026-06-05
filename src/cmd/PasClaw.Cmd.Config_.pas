@@ -10,7 +10,7 @@ function Cmd_Config_Run(const Argv: array of string): Integer;
 implementation
 
 uses
-  SysUtils, PasClaw.Config, PasClaw.Utils;
+  SysUtils, PasClaw.Config, PasClaw.Utils, PasClaw.CliUI;
 
 function Cmd_Config_Run(const Argv: array of string): Integer;
 var
@@ -18,7 +18,7 @@ var
 begin
   if (Length(Argv) > 0) and (Argv[0] = 'path') then
   begin
-    WriteLn(GetConfigPath);
+    PrintLn(GetConfigPath);
     Exit(0);
   end;
   if (Length(Argv) > 0) and (Argv[0] = 'reset') then
@@ -26,7 +26,7 @@ begin
     Cfg := TConfig.Create;
     try
       SaveConfig(Cfg);
-      WriteLn('wrote default config to ', GetConfigPath);
+      PrintLn('wrote default config to ' + GetConfigPath);
     finally
       Cfg.Free;
     end;
@@ -34,7 +34,7 @@ begin
   end;
   Cfg := LoadConfig;
   try
-    WriteLn(Cfg.ToJSON);
+    PrintLn(Cfg.ToJSON);
   finally
     Cfg.Free;
   end;

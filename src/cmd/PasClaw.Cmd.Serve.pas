@@ -149,22 +149,22 @@ begin
       Server.Start(Args.Addr, Args.Port);
 
       BaseURL := Format('http://%s:%d/v1', [Args.Addr, Args.Port]);
-      WriteLn(Ansi.Bold, 'OpenAI-compatible server up.', Ansi.Reset);
-      WriteLn('  base_url: ', BaseURL);
-      WriteLn('  model:    ', Cfg.DefaultModel);
-      WriteLn('  max-iter: ', Args.MaxIter);
-      WriteLn;
-      WriteLn(Ansi.Dim, '  Example (openai-python):', Ansi.Reset);
-      WriteLn('    client = OpenAI(base_url="', BaseURL, '", api_key="sk-pasclaw")');
-      WriteLn('    client.chat.completions.create(model="', Cfg.DefaultModel,
+      PrintLn(Ansi.Bold + 'OpenAI-compatible server up.' + Ansi.Reset);
+      PrintLn('  base_url: ' + BaseURL);
+      PrintLn('  model:    ' + Cfg.DefaultModel);
+      PrintLn(Format('  max-iter: %d', [Args.MaxIter]));
+      PrintLn;
+      PrintLn(Ansi.Dim + '  Example (openai-python):' + Ansi.Reset);
+      PrintLn('    client = OpenAI(base_url="' + BaseURL + '", api_key="sk-pasclaw")');
+      PrintLn('    client.chat.completions.create(model="' + Cfg.DefaultModel +
               '", messages=[{"role":"user","content":"hi"}])');
-      WriteLn;
-      WriteLn(Ansi.Dim, '  Example (curl):', Ansi.Reset);
-      WriteLn('    curl ', BaseURL, '/chat/completions -H "Content-Type: application/json" \');
-      WriteLn('         -d ''{"model":"', Cfg.DefaultModel,
+      PrintLn;
+      PrintLn(Ansi.Dim + '  Example (curl):' + Ansi.Reset);
+      PrintLn('    curl ' + BaseURL + '/chat/completions -H "Content-Type: application/json" \');
+      PrintLn('         -d ''{"model":"' + Cfg.DefaultModel +
               '","messages":[{"role":"user","content":"hi"}]}''');
-      WriteLn;
-      WriteLn(Ansi.Dim, 'Press Ctrl-C to stop.', Ansi.Reset);
+      PrintLn;
+      PrintLn(Ansi.Dim + 'Press Ctrl-C to stop.' + Ansi.Reset);
 
       Server.WaitForStop;
     finally

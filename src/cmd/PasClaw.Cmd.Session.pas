@@ -28,11 +28,11 @@ uses
 
 procedure PrintHelp;
 begin
-  WriteLn('Usage: pasclaw session <list|show|delete|export> [args]');
-  WriteLn('  list                list every saved session (id, title, msgs, last used)');
-  WriteLn('  show <id>           show one session: metadata + last N messages');
-  WriteLn('  delete <id>         remove the session file from disk');
-  WriteLn('  export <id>         print the raw session JSON to stdout');
+  PrintLn('Usage: pasclaw session <list|show|delete|export> [args]');
+  PrintLn('  list                list every saved session (id, title, msgs, last used)');
+  PrintLn('  show <id>           show one session: metadata + last N messages');
+  PrintLn('  delete <id>         remove the session file from disk');
+  PrintLn('  export <id>         print the raw session JSON to stdout');
 end;
 
 function FormatAge(Now_, Then_: Int64): string;
@@ -56,19 +56,19 @@ begin
   Sessions := ListSessions;
   if Length(Sessions) = 0 then
   begin
-    WriteLn(Ansi.Dim, '(no saved sessions)', Ansi.Reset);
+    PrintLn(Ansi.Dim + '(no saved sessions)' + Ansi.Reset);
     Exit(0);
   end;
   Now_ := DateTimeToUnix(Now, False);
-  WriteLn(Ansi.Bold, 'session id':28, '  ':2, 'updated':12, '  ':2, 'msgs':5, '  title', Ansi.Reset);
+  PrintLn(Ansi.Bold + Format('%28s', ['session id']) + '  ' + Format('%12s', ['updated']) + '  ' + Format('%5s', ['msgs']) + '  title' + Ansi.Reset);
   for i := 0 to High(Sessions) do
   begin
     Title := Sessions[i].Title;
     if Title = '' then Title := Ansi.Dim + '(untitled)' + Ansi.Reset;
-    WriteLn(Sessions[i].Id:28, '  ',
-            FormatAge(Now_, Sessions[i].UpdatedAt):12, '  ',
-            '':5,
-            '  ', Title);
+    PrintLn(Format('%28s', [Sessions[i].Id]) + '  ' +
+            Format('%12s', [FormatAge(Now_, Sessions[i].UpdatedAt)]) + '  ' +
+            Format('%5s', ['']) +
+            '  ' + Title);
   end;
   Result := 0;
 end;
@@ -85,21 +85,21 @@ begin
   try
     if not Sess.MetaExists then
     begin
-      WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'no session named ', Id);
+      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no session named ' + Id);
       Exit(1);
     end;
-    WriteLn(Ansi.Bold, 'id:        ', Ansi.Reset, Sess.Meta.Id);
-    WriteLn(Ansi.Bold, 'title:     ', Ansi.Reset, Sess.Meta.Title);
-    WriteLn(Ansi.Bold, 'model:     ', Ansi.Reset, Sess.Meta.Model);
-    WriteLn(Ansi.Bold, 'provider:  ', Ansi.Reset, Sess.Meta.Provider);
-    WriteLn(Ansi.Bold, 'messages:  ', Ansi.Reset, Length(Sess.Messages));
+    PrintLn(Ansi.Bold + 'id:        ' + Ansi.Reset + Sess.Meta.Id);
+    PrintLn(Ansi.Bold + 'title:     ' + Ansi.Reset + Sess.Meta.Title);
+    PrintLn(Ansi.Bold + 'model:     ' + Ansi.Reset + Sess.Meta.Model);
+    PrintLn(Ansi.Bold + 'provider:  ' + Ansi.Reset + Sess.Meta.Provider);
+    PrintLn(Ansi.Bold + 'messages:  ' + Ansi.Reset + IntToStr(Length(Sess.Messages)));
     if Sess.Meta.SystemPromptOverride <> '' then
-      WriteLn(Ansi.Bold, 'compacted: ', Ansi.Reset, Ansi.Dim, 'yes', Ansi.Reset);
-    WriteLn;
+      PrintLn(Ansi.Bold + 'compacted: ' + Ansi.Reset + Ansi.Dim + 'yes' + Ansi.Reset);
+    PrintLn;
     Start := Length(Sess.Messages) - TailCount;
     if Start < 0 then Start := 0
     else if Start > 0 then
-      WriteLn(Ansi.Dim, '... (', Start, ' earlier messages elided; use `export` for full JSON)', Ansi.Reset);
+      PrintLn(Ansi.Dim + '... (' + IntToStr(Start) + ' earlier messages elided; use `export` for full JSON)' + Ansi.Reset);
     for i := Start to High(Sess.Messages) do
     begin
       case Sess.Messages[i].Role of
@@ -112,7 +112,7 @@ begin
       end;
       Preview := Sess.Messages[i].Content;
       if Length(Preview) > 200 then Preview := Copy(Preview, 1, 200) + '…';
-      WriteLn(Role, ': ', Preview);
+      PrintLn(Role + ': ' + Preview);
     end;
     Result := 0;
   finally
@@ -127,12 +127,12 @@ begin
     { Stray steering messages for the just-deleted session would
       otherwise sit on disk forever — clear them too. }
     ClearSteering(Id);
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'deleted session ', Id);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'deleted session ' + Id);
     Result := 0;
   end
   else
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'no session named ', Id);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no session named ' + Id);
     Result := 1;
   end;
 end;
@@ -145,13 +145,13 @@ begin
   Path := SessionPath(Id);
   if (Path = '') or (not FileExists(Path)) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'no session named ', Id);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no session named ' + Id);
     Exit(1);
   end;
   S := TStringList.Create;
   try
     S.LoadFromFile(Path);
-    Write(S.Text);   { raw JSON to stdout; pipe through jq for pretty-print }
+    Print(S.Text);   { raw JSON to stdout; pipe through jq for pretty-print }
     Result := 0;
   finally
     S.Free;

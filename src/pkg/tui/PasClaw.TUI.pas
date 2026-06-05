@@ -1279,18 +1279,18 @@ begin
   W := TermWidth;
   Pad := W - 7 - Length(StatusLine(FProvider, FModel, FRegistry));
   if Pad < 2 then Pad := 2;
-  WriteLn;
-  WriteLn(Left, StringOfChar(' ', Pad), Right);
-  WriteLn(Ansi.Dim, StringOfChar('-', TermWidth), Ansi.Reset);
+  PrintLn;
+  PrintLn(Left + StringOfChar(' ', Pad) + Right);
+  PrintLn(Ansi.Dim + StringOfChar('-', TermWidth) + Ansi.Reset);
 end;
 
 procedure TTUI.ShowHelp;
 begin
-  WriteLn(Ansi.Bold, 'TUI commands:', Ansi.Reset);
-  WriteLn('  /help    show this');
-  WriteLn('  /tools   list registered tools');
-  WriteLn('  /clear   clear the screen');
-  WriteLn('  /quit    exit');
+  PrintLn(Ansi.Bold + 'TUI commands:' + Ansi.Reset);
+  PrintLn('  /help    show this');
+  PrintLn('  /tools   list registered tools');
+  PrintLn('  /clear   clear the screen');
+  PrintLn('  /quit    exit');
 end;
 
 procedure TTUI.ShowTools;
@@ -1300,21 +1300,21 @@ var
 begin
   if FRegistry = nil then
   begin
-    WriteLn(Ansi.Dim, '(no registry)', Ansi.Reset);
+    PrintLn(Ansi.Dim + '(no registry)' + Ansi.Reset);
     Exit;
   end;
   Names := FRegistry.Names;
-  WriteLn(Ansi.Bold, 'tools (', Length(Names), '):', Ansi.Reset);
-  for i := 0 to High(Names) do WriteLn('  ', Names[i]);
+  PrintLn(Ansi.Bold + 'tools (' + IntToStr(Length(Names)) + '):' + Ansi.Reset);
+  for i := 0 to High(Names) do PrintLn('  ' + Names[i]);
 end;
 
 procedure TTUI.HandleSlashCommand(const Cmd: string);
 begin
   if (Cmd = '/quit') or (Cmd = '/exit') or (Cmd = '/q') then begin FQuit := True; Exit; end;
-  if Cmd = '/clear' then begin Write(#27'[2J', #27'[H'); DrawHeader; Exit; end;
+  if Cmd = '/clear' then begin Print(#27'[2J' + #27'[H'); DrawHeader; Exit; end;
   if Cmd = '/tools' then begin ShowTools; Exit; end;
   if Cmd = '/help'  then begin ShowHelp;  Exit; end;
-  WriteLn(Ansi.Yellow, 'unknown command: ', Cmd, Ansi.Reset);
+  PrintLn(Ansi.Yellow + 'unknown command: ' + Cmd + Ansi.Reset);
 end;
 
 procedure TTUI.HandleUserInput(const Text: string);
@@ -1328,7 +1328,7 @@ var
 begin
   if FProvider = nil then
   begin
-    WriteLn(Ansi.Yellow, 'pasclaw  > ', Ansi.Reset,
+    PrintLn(Ansi.Yellow + 'pasclaw  > ' + Ansi.Reset +
             '(offline - no provider configured)');
     Exit;
   end;
@@ -1350,14 +1350,14 @@ begin
   TimeoutSec        := ResolveRequestTimeoutSeconds;
 
   LogDebug('tool-loop start model=%s timeout=%ds', [FModel, TimeoutSec]);
-  WriteLn(Ansi.Dim, '         [hint: press Ctrl+C to interrupt]', Ansi.Reset);
+  PrintLn(Ansi.Dim + '         [hint: press Ctrl+C to interrupt]' + Ansi.Reset);
   W := TRunToolLoopThread.Create(Cfg, Msgs);
   W.Start;
   WaitRes := W.DoneEvent.WaitFor(TimeoutSec * 1000);
   if WaitRes = wrTimeout then
   begin
     LogWarn('tool-loop timeout after %ds (possible slow model response or deadlocked tool call)', [TimeoutSec]);
-    WriteLn(Ansi.Red, 'pasclaw  > ', Ansi.Reset, Format('(request timed out after %ds)', [TimeoutSec]));
+    PrintLn(Ansi.Red + 'pasclaw  > ' + Ansi.Reset + Format('(request timed out after %ds)', [TimeoutSec]));
     W.Terminate;
     W.FreeOnTerminate := True;
     Exit;
@@ -1366,19 +1366,19 @@ begin
   if not W.Ok then
   begin
     LogWarn('tool-loop failed: %s', [W.Err]);
-    WriteLn(Ansi.Red, 'pasclaw  > ', Ansi.Reset, '(tool loop failed)');
+    PrintLn(Ansi.Red + 'pasclaw  > ' + Ansi.Reset + '(tool loop failed)');
     W.Free;
     Exit;
   end;
   Loop := W.LoopResult;
   W.Free;
   LogDebug('tool-loop end ok iters=%d', [Loop.Iterations]);
-  Write(Ansi.BoldBlue, 'pasclaw', Ansi.Reset, '  > ');
-  WriteLn(Loop.Content);
+  Print(Ansi.BoldBlue + 'pasclaw' + Ansi.Reset + '  > ');
+  PrintLn(Loop.Content);
   if Loop.LastResp.Usage.InputTokens + Loop.LastResp.Usage.OutputTokens > 0 then
-    WriteLn(Ansi.Dim, '         ',
+    PrintLn(Ansi.Dim + '         ' +
       Format('[tokens in=%d out=%d, iters=%d]',
-        [Loop.LastResp.Usage.InputTokens, Loop.LastResp.Usage.OutputTokens, Loop.Iterations]),
+        [Loop.LastResp.Usage.InputTokens, Loop.LastResp.Usage.OutputTokens, Loop.Iterations]) +
       Ansi.Reset);
 end;
 
@@ -1386,14 +1386,14 @@ procedure TTUI.Run;
 var
   Line: string;
 begin
-  Write(#27'[2J', #27'[H');
+  Print(#27'[2J' + #27'[H');
   DrawHeader;
-  WriteLn(Ansi.Dim, '/help for commands, /quit to exit', Ansi.Reset);
-  WriteLn;
+  PrintLn(Ansi.Dim + '/help for commands, /quit to exit' + Ansi.Reset);
+  PrintLn;
   FQuit := False;
   while not FQuit do
   begin
-    Write(Ansi.BoldBlue, 'you', Ansi.Reset, '      > ');
+    Print(Ansi.BoldBlue + 'you' + Ansi.Reset + '      > ');
     if EOF then Break;
     ReadLn(Line);
     Line := Trim(Line);
@@ -1405,7 +1405,7 @@ begin
     end;
     HandleUserInput(Line);
   end;
-  WriteLn(Ansi.Dim, 'goodbye.', Ansi.Reset);
+  PrintLn(Ansi.Dim + 'goodbye.' + Ansi.Reset);
 end;
 
 {$ENDIF}

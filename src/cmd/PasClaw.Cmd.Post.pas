@@ -39,28 +39,28 @@ uses
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw post <discord|slack|teams|webhook|line|whatsapp> <target> "<content>"');
-  WriteLn('  discord  <webhook-url> "<text>"');
-  WriteLn('  slack    <webhook-url> "<text>"');
-  WriteLn('  teams    <webhook-url> "<text>"');
-  WriteLn('  webhook  <url> "<text>"           (auth via $PASCLAW_WEBHOOK_AUTH)');
-  WriteLn('  line     <userId|groupId|roomId> "<text>"');
-  WriteLn('                                    (token via $PASCLAW_LINE_TOKEN)');
-  WriteLn('  whatsapp <to-phone-number> "<text>"');
-  WriteLn('                                    (token via $PASCLAW_WHATSAPP_TOKEN,');
-  WriteLn('                                     phone-id via $PASCLAW_WHATSAPP_PHONE_ID)');
+  PrintLn('Usage: pasclaw post <discord|slack|teams|webhook|line|whatsapp> <target> "<content>"');
+  PrintLn('  discord  <webhook-url> "<text>"');
+  PrintLn('  slack    <webhook-url> "<text>"');
+  PrintLn('  teams    <webhook-url> "<text>"');
+  PrintLn('  webhook  <url> "<text>"           (auth via $PASCLAW_WEBHOOK_AUTH)');
+  PrintLn('  line     <userId|groupId|roomId> "<text>"');
+  PrintLn('                                    (token via $PASCLAW_LINE_TOKEN)');
+  PrintLn('  whatsapp <to-phone-number> "<text>"');
+  PrintLn('                                    (token via $PASCLAW_WHATSAPP_TOKEN,');
+  PrintLn('                                     phone-id via $PASCLAW_WHATSAPP_PHONE_ID)');
 end;
 
 function ReportResult(Success: Boolean; const ChannelName: string): Integer;
 begin
   if Success then
   begin
-    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'posted to ', ChannelName);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'posted to ' + ChannelName);
     Result := 0;
   end
   else
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, ChannelName, ' post failed');
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + ChannelName + ' post failed');
     Result := 1;
   end;
 end;
@@ -111,7 +111,7 @@ begin
   Token := GetEnvironmentVariable('PASCLAW_LINE_TOKEN');
   if Token = '' then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'line: set PASCLAW_LINE_TOKEN to a channel access token');
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'line: set PASCLAW_LINE_TOKEN to a channel access token');
     Exit(1);
   end;
   L := TLinePush.Create(Token);
@@ -128,12 +128,12 @@ begin
   PhoneId := GetEnvironmentVariable('PASCLAW_WHATSAPP_PHONE_ID');
   if Token = '' then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'whatsapp: set PASCLAW_WHATSAPP_TOKEN to a system-user access token');
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'whatsapp: set PASCLAW_WHATSAPP_TOKEN to a system-user access token');
     Exit(1);
   end;
   if PhoneId = '' then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'whatsapp: set PASCLAW_WHATSAPP_PHONE_ID to your phone-number-id');
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'whatsapp: set PASCLAW_WHATSAPP_PHONE_ID to your phone-number-id');
     Exit(1);
   end;
   W := TWhatsAppPush.Create(Token, PhoneId);

@@ -40,12 +40,12 @@ uses
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw vault <search|show|install> [args]');
-  WriteLn;
-  WriteLn('  search <query> [--limit N]   Search pasclaw.dev Code Vault.');
-  WriteLn('  show <slug>                  Print full entry detail.');
-  WriteLn('  install <slug> [<dest>]      git clone the repo into <dest>');
-  WriteLn('                               (default $PASCLAW_HOME/workspace/vault/<slug>).');
+  PrintLn('Usage: pasclaw vault <search|show|install> [args]');
+  PrintLn;
+  PrintLn('  search <query> [--limit N]   Search pasclaw.dev Code Vault.');
+  PrintLn('  show <slug>                  Print full entry detail.');
+  PrintLn('  install <slug> [<dest>]      git clone the repo into <dest>');
+  PrintLn('                               (default $PASCLAW_HOME/workspace/vault/<slug>).');
 end;
 
 function DoSearch(const Argv: array of string): Integer;
@@ -62,31 +62,31 @@ begin
     if Argv[2] = '--limit' then
       Limit := StrToIntDef(Argv[3], 25);
 
-  WriteLn('Searching pasclaw.dev Code Vault: ', Query, ' …');
+  PrintLn('Searching pasclaw.dev Code Vault: ' + Query + ' …');
   if not SearchVault(Query, Limit, Results, ErrMsg) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'search failed: ', ErrMsg);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'search failed: ' + ErrMsg);
     Exit(1);
   end;
   if Length(Results) = 0 then
   begin
-    WriteLn('(no matches)');
+    PrintLn('(no matches)');
     Exit(0);
   end;
-  WriteLn(Ansi.Bold, 'slug', Ansi.Reset, '                       version    name');
+  PrintLn(Ansi.Bold + 'slug' + Ansi.Reset + '                       version    name');
   for i := 0 to High(Results) do
   begin
-    WriteLn(Results[i].Slug:26, '  ', Results[i].Version:9, '  ', Results[i].DisplayName);
+    PrintLn(Format('%26s  %9s  %s', [Results[i].Slug, Results[i].Version, Results[i].DisplayName]));
     Summary := Trim(Results[i].Summary);
     if Summary <> '' then
-      WriteLn('                            ', Ansi.Dim, Summary, Ansi.Reset);
+      PrintLn('                            ' + Ansi.Dim + Summary + Ansi.Reset);
   end;
-  WriteLn;
-  WriteLn(Ansi.Dim, 'Show with:    ', Ansi.Reset,
-          Ansi.Bold, 'pasclaw vault show <slug>', Ansi.Reset);
-  WriteLn(Ansi.Dim, 'Install with: ', Ansi.Reset,
-          Ansi.Bold, 'pasclaw vault install <slug>', Ansi.Reset,
-          Ansi.Dim, '  (git clone into workspace/vault/<slug>)', Ansi.Reset);
+  PrintLn;
+  PrintLn(Ansi.Dim + 'Show with:    ' + Ansi.Reset +
+          Ansi.Bold + 'pasclaw vault show <slug>' + Ansi.Reset);
+  PrintLn(Ansi.Dim + 'Install with: ' + Ansi.Reset +
+          Ansi.Bold + 'pasclaw vault install <slug>' + Ansi.Reset +
+          Ansi.Dim + '  (git clone into workspace/vault/<slug>)' + Ansi.Reset);
   Result := 0;
 end;
 
@@ -99,46 +99,46 @@ begin
   Slug := Argv[1];
   if not GetVaultEntry(Slug, Detail, ErrMsg) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'get failed: ', ErrMsg);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'get failed: ' + ErrMsg);
     Exit(1);
   end;
   if Detail.Blocked then
-    WriteLn(Ansi.Red, '⚠ malware-flagged', Ansi.Reset)
+    PrintLn(Ansi.Red + '⚠ malware-flagged' + Ansi.Reset)
   else if Detail.Suspicious then
-    WriteLn(Ansi.Yellow, '⚠ flagged as suspicious', Ansi.Reset);
-  WriteLn(Ansi.Bold, 'slug:        ', Ansi.Reset, Detail.Slug);
-  WriteLn(Ansi.Bold, 'name:        ', Ansi.Reset, Detail.DisplayName);
+    PrintLn(Ansi.Yellow + '⚠ flagged as suspicious' + Ansi.Reset);
+  PrintLn(Ansi.Bold + 'slug:        ' + Ansi.Reset + Detail.Slug);
+  PrintLn(Ansi.Bold + 'name:        ' + Ansi.Reset + Detail.DisplayName);
   if Detail.Summary <> '' then
-    WriteLn(Ansi.Bold, 'summary:     ', Ansi.Reset, Detail.Summary);
+    PrintLn(Ansi.Bold + 'summary:     ' + Ansi.Reset + Detail.Summary);
   if Detail.RepoURL <> '' then
-    WriteLn(Ansi.Bold, 'repo:        ', Ansi.Reset, Detail.RepoURL);
+    PrintLn(Ansi.Bold + 'repo:        ' + Ansi.Reset + Detail.RepoURL);
   if Detail.HomepageURL <> '' then
-    WriteLn(Ansi.Bold, 'homepage:    ', Ansi.Reset, Detail.HomepageURL);
+    PrintLn(Ansi.Bold + 'homepage:    ' + Ansi.Reset + Detail.HomepageURL);
   if Detail.License <> '' then
-    WriteLn(Ansi.Bold, 'license:     ', Ansi.Reset, Detail.License);
+    PrintLn(Ansi.Bold + 'license:     ' + Ansi.Reset + Detail.License);
   if Detail.LatestVersion <> '' then
-    WriteLn(Ansi.Bold, 'version:     ', Ansi.Reset, Detail.LatestVersion);
+    PrintLn(Ansi.Bold + 'version:     ' + Ansi.Reset + Detail.LatestVersion);
   if Detail.Category <> '' then
-    WriteLn(Ansi.Bold, 'category:    ', Ansi.Reset, Detail.Category);
+    PrintLn(Ansi.Bold + 'category:    ' + Ansi.Reset + Detail.Category);
   if Detail.Tags <> '' then
-    WriteLn(Ansi.Bold, 'tags:        ', Ansi.Reset, Detail.Tags);
+    PrintLn(Ansi.Bold + 'tags:        ' + Ansi.Reset + Detail.Tags);
   if Detail.DelphiVersions <> '' then
-    WriteLn(Ansi.Bold, 'delphi:      ', Ansi.Reset, Detail.DelphiVersions);
+    PrintLn(Ansi.Bold + 'delphi:      ' + Ansi.Reset + Detail.DelphiVersions);
   if Detail.PackageManager <> '' then
-    WriteLn(Ansi.Bold, 'package mgr: ', Ansi.Reset, Detail.PackageManager);
+    PrintLn(Ansi.Bold + 'package mgr: ' + Ansi.Reset + Detail.PackageManager);
   if Detail.ViewCount > 0 then
-    WriteLn(Ansi.Bold, 'views:       ', Ansi.Reset, IntToStr(Detail.ViewCount));
+    PrintLn(Ansi.Bold + 'views:       ' + Ansi.Reset + IntToStr(Detail.ViewCount));
   if Detail.InstallSnippet <> '' then
   begin
-    WriteLn;
-    WriteLn(Ansi.Bold, 'install snippet:', Ansi.Reset);
-    WriteLn(Detail.InstallSnippet);
+    PrintLn;
+    PrintLn(Ansi.Bold + 'install snippet:' + Ansi.Reset);
+    PrintLn(Detail.InstallSnippet);
   end;
   if Detail.DescriptionMarkdown <> '' then
   begin
-    WriteLn;
-    WriteLn(Ansi.Bold, 'description:', Ansi.Reset);
-    WriteLn(Detail.DescriptionMarkdown);
+    PrintLn;
+    PrintLn(Ansi.Bold + 'description:' + Ansi.Reset);
+    PrintLn(Detail.DescriptionMarkdown);
   end;
   Result := 0;
 end;
@@ -181,7 +181,7 @@ begin
       begin
         SetLength(Bytes, N);
         Move(Buf[0], Bytes[0], N);
-        Write(TEncoding.UTF8.GetString(Bytes));
+        Print(TEncoding.UTF8.GetString(Bytes));
       end;
     until (N = 0) and (not P.Running);
     { latch ExitCode via the side-effect on Running }
@@ -213,29 +213,29 @@ begin
 
   if DirectoryExists(DestDir) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset,
-            'destination already exists: ', DestDir);
-    WriteLn(Ansi.Dim, '  remove it first, or pass a different <dest> path.', Ansi.Reset);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
+            'destination already exists: ' + DestDir);
+    PrintLn(Ansi.Dim + '  remove it first, or pass a different <dest> path.' + Ansi.Reset);
     Exit(1);
   end;
 
   if not GetVaultEntry(Slug, Detail, ErrMsg) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'vault lookup failed: ', ErrMsg);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'vault lookup failed: ' + ErrMsg);
     Exit(1);
   end;
   if Detail.Blocked then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset,
-            'pasclaw.dev flagged "', Slug, '" as malware — refusing install');
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
+            'pasclaw.dev flagged "' + Slug + '" as malware — refusing install');
     Exit(1);
   end;
   if Detail.Suspicious then
-    WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
-            'pasclaw.dev flagged "', Slug, '" as suspicious — proceeding anyway');
+    PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
+            'pasclaw.dev flagged "' + Slug + '" as suspicious — proceeding anyway');
   if Detail.RepoURL = '' then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset,
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
             'vault entry has no repoUrl');
     Exit(1);
   end;
@@ -243,17 +243,17 @@ begin
   ParentDir := ExtractFileDir(DestDir);
   if ParentDir <> '' then
     ForceDirectories(ParentDir);
-  WriteLn('Cloning ', Detail.RepoURL, ' …');
+  PrintLn('Cloning ' + Detail.RepoURL + ' …');
   if not RunGitClone(Detail.RepoURL, DestDir, ErrMsg) then
   begin
-    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, ErrMsg);
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + ErrMsg);
     Exit(1);
   end;
-  WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'cloned into ', DestDir);
+  PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'cloned into ' + DestDir);
   if Detail.InstallSnippet <> '' then
   begin
-    WriteLn(Ansi.Dim, 'Install snippet from vault:', Ansi.Reset);
-    WriteLn(Detail.InstallSnippet);
+    PrintLn(Ansi.Dim + 'Install snippet from vault:' + Ansi.Reset);
+    PrintLn(Detail.InstallSnippet);
   end;
   Result := 0;
 end;

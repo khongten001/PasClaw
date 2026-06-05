@@ -21,11 +21,11 @@ uses
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw membench [--records N] [--content N] [--keep] [--out DIR]');
-  WriteLn('  --records N    number of log entries to write (default 1000)');
-  WriteLn('  --content N    payload bytes per entry (default 128)');
-  WriteLn('  --keep         keep the generated NDJSON file');
-  WriteLn('  --out DIR      output directory (default $TMPDIR)');
+  PrintLn('Usage: pasclaw membench [--records N] [--content N] [--keep] [--out DIR]');
+  PrintLn('  --records N    number of log entries to write (default 1000)');
+  PrintLn('  --content N    payload bytes per entry (default 128)');
+  PrintLn('  --keep         keep the generated NDJSON file');
+  PrintLn('  --out DIR      output directory (default $TMPDIR)');
 end;
 
 function ParseArgs(const Argv: array of string; var Opts: TMembenchOpts): Boolean;
@@ -62,10 +62,10 @@ var
 begin
   if not ParseArgs(Argv, Opts) then Exit(1);
 
-  WriteLn(Ansi.Bold, 'PasClaw membench', Ansi.Reset);
-  WriteLn('  records: ', Opts.Records);
-  WriteLn('  content: ', Opts.ContentSize, ' bytes/record');
-  WriteLn('  running...');
+  PrintLn(Ansi.Bold + 'PasClaw membench' + Ansi.Reset);
+  PrintLn(Format('  records: %d', [Opts.Records]));
+  PrintLn(Format('  content: %d bytes/record', [Opts.ContentSize]));
+  PrintLn('  running...');
 
   Res := RunMembench(Opts);
 
@@ -76,15 +76,15 @@ begin
   if Res.WriteSeconds <= 0 then MBs := 0
   else MBs := (Res.BytesOnDisk / 1048576.0) / Res.WriteSeconds;
 
-  WriteLn;
-  WriteLn(Ansi.Bold, 'results', Ansi.Reset);
-  WriteLn(Format('  write: %d records in %.3fs  -> %.0f rec/s, %.2f MiB/s',
+  PrintLn;
+  PrintLn(Ansi.Bold + 'results' + Ansi.Reset);
+  PrintLn(Format('  write: %d records in %.3fs  -> %.0f rec/s, %.2f MiB/s',
     [Res.RecordsWritten, Res.WriteSeconds, WriteRate, MBs]));
-  WriteLn(Format('  load:  %d records in %.3fs  -> %.0f rec/s',
+  PrintLn(Format('  load:  %d records in %.3fs  -> %.0f rec/s',
     [Res.RecordsLoaded, Res.LoadSeconds, LoadRate]));
-  WriteLn(Format('  size:  %d bytes on disk', [Res.BytesOnDisk]));
+  PrintLn(Format('  size:  %d bytes on disk', [Res.BytesOnDisk]));
   if Opts.KeepFile then
-    WriteLn('  path:  ', Res.Path);
+    PrintLn('  path:  ' + Res.Path);
 
   Result := 0;
 end;

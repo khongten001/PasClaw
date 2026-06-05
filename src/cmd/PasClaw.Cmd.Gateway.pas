@@ -269,20 +269,23 @@ begin
 
       Server.Start(Args.Addr, Args.Port);
 
-      WriteLn(Ansi.Bold, 'Gateway up.', Ansi.Reset);
-      WriteLn('  http://', Args.Addr, ':', Args.Port, '/v1/health');
-      WriteLn('  http://', Args.Addr, ':', Args.Port, '/v1/tools');
-      WriteLn('  POST http://', Args.Addr, ':', Args.Port, '/v1/chat   {"message":"..."}');
+      PrintLn(Ansi.Bold + 'Gateway up.' + Ansi.Reset);
+      PrintLn(Format('  http://%s:%d/v1/health', [Args.Addr, Args.Port]));
+      PrintLn(Format('  http://%s:%d/v1/tools',  [Args.Addr, Args.Port]));
+      PrintLn(Format('  POST http://%s:%d/v1/chat   {"message":"..."}',
+                     [Args.Addr, Args.Port]));
       if Args.Line then
-        WriteLn('  POST http://', Args.Addr, ':', Args.Port, '/webhooks/line   (LINE platform)');
+        PrintLn(Format('  POST http://%s:%d/webhooks/line   (LINE platform)',
+                       [Args.Addr, Args.Port]));
       if Args.WhatsApp then
-        WriteLn('  ANY http://', Args.Addr, ':', Args.Port, '/webhooks/whatsapp   (WhatsApp Cloud)');
+        PrintLn(Format('  ANY http://%s:%d/webhooks/whatsapp   (WhatsApp Cloud)',
+                       [Args.Addr, Args.Port]));
       if Args.Matrix then
-        WriteLn('  matrix sync ', Args.MatrixHome, '  (Matrix homeserver)');
+        PrintLn('  matrix sync ' + Args.MatrixHome + '  (Matrix homeserver)');
       if Args.IRC then
-        WriteLn('  irc ', Args.IRCServer, ':', Args.IRCPort, ' ', Args.IRCNick,
-                ' joining ', Args.IRCChannel);
-      WriteLn(Ansi.Dim, 'Press Ctrl-C to stop.', Ansi.Reset);
+        PrintLn(Format('  irc %s:%d %s joining %s',
+                       [Args.IRCServer, Args.IRCPort, Args.IRCNick, Args.IRCChannel]));
+      PrintLn(Ansi.Dim + 'Press Ctrl-C to stop.' + Ansi.Reset);
 
       if Args.Telegram then
       begin
