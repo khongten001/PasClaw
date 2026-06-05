@@ -149,6 +149,7 @@ function EnsureOpenSSL(out ErrMsg: string): Boolean;
 implementation
 
 uses
+  PasClaw.Utils,
 {$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
   System.Net.URLClient, System.Net.HttpClient;
 {$ELSE}
@@ -333,6 +334,7 @@ begin
                Result.StatusCode, Result.ContentType,
                Result.RespHeaders, Result.ErrorMsg);
     Result.Body := Resp.DataString;
+    TagUTF8(Result.Body);
   finally
     Resp.Free;
     Req.Free;
@@ -362,6 +364,7 @@ begin
                Result.StatusCode, Result.ContentType,
                Result.RespHeaders, Result.ErrorMsg);
     Result.Body := Resp.DataString;
+    TagUTF8(Result.Body);
   finally
     Resp.Free;
     Req.Free;
@@ -389,6 +392,7 @@ begin
                Result.StatusCode, Result.ContentType,
                Result.RespHeaders, Result.ErrorMsg);
     Result.Body := Resp.DataString;
+    TagUTF8(Result.Body);
   finally
     Resp.Free;
     C.Free;
@@ -427,6 +431,7 @@ begin
                Result.StatusCode, Result.ContentType,
                Result.RespHeaders, Result.ErrorMsg);
     Result.Body := Resp.DataString;
+    TagUTF8(Result.Body);
     if (Adapter <> nil) and Adapter.Rejected then
     begin
       Result.ErrorMsg    := Adapter.RejectReason;
@@ -465,6 +470,7 @@ begin
                Result.StatusCode, Result.ContentType,
                Result.RespHeaders, Result.ErrorMsg);
     Result.Body := Resp.DataString;
+    TagUTF8(Result.Body);
   finally
     Resp.Free;
     Req.Free;
@@ -627,6 +633,7 @@ begin
         Http.Get(URL, Resp);
       Result.StatusCode := Http.ResponseCode;
       Result.Body := Resp.DataString;
+      TagUTF8(Result.Body);
       Result.ContentType := LowerCase(Http.Response.ContentType);
       CaptureIndyHeaders(Http, Result.RespHeaders);
     except
@@ -634,6 +641,7 @@ begin
       begin
         Result.StatusCode := E.ErrorCode;
         Result.Body       := E.ErrorMessage;
+        TagUTF8(Result.Body);
         Result.ContentType := LowerCase(Http.Response.ContentType);
         Result.ErrorMsg   := E.Message;
         CaptureIndyHeaders(Http, Result.RespHeaders);
@@ -642,6 +650,7 @@ begin
       begin
         Result.StatusCode := Http.ResponseCode;
         Result.Body       := Resp.DataString;
+        TagUTF8(Result.Body);
         Result.ContentType := LowerCase(Http.Response.ContentType);
         Result.ErrorMsg   := E.Message;
         CaptureIndyHeaders(Http, Result.RespHeaders);
@@ -781,17 +790,20 @@ begin
       Http.Put(URL, Req, Resp);
       Result.StatusCode := Http.ResponseCode;
       Result.Body       := Resp.DataString;
+      TagUTF8(Result.Body);
     except
       on E: EIdHTTPProtocolException do
       begin
         Result.StatusCode := E.ErrorCode;
         Result.Body       := E.ErrorMessage;
+        TagUTF8(Result.Body);
         Result.ErrorMsg   := E.Message;
       end;
       on E: Exception do
       begin
         Result.StatusCode := Http.ResponseCode;
         Result.Body       := Resp.DataString;
+        TagUTF8(Result.Body);
         Result.ErrorMsg   := E.Message;
       end;
     end;

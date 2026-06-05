@@ -27,7 +27,45 @@ procedure WriteFileText(const Path, Content: string);
 function SplitToList(const S: string; Sep: Char): TStringList;
 function NowIsoUtc: string;
 
+(* Tag S as carrying CP_UTF8 bytes without rewriting them. No-op on
+   Delphi (string = UnicodeString, codepages don't apply) and on any
+   platform where the string is empty.
+
+   Why this exists. Under FPC {$MODE DELPHI}, `string` is still
+   `AnsiString` (1-byte elements) — it carries a codepage tag.
+   Strings produced by `TStringStream(... TEncoding.UTF8).DataString`,
+   by `Indy` response reads, and by `fpjson`'s `.Get('field', '')`
+   path come out tagged **CP_NONE / 0 (system default)**, even though
+   their bytes are valid UTF-8. Downstream code that does
+   codepage-aware conversion — `TEncoding.UTF8.GetBytes(s)`,
+   string-concat across mismatched codepages, AnsiString-aware
+   I/O — sees the system tag, interprets the UTF-8 bytes as the
+   system codepage (CP1252 on Windows), and re-encodes to UTF-8.
+   Result: classic mojibake on the wire and in the terminal —
+   `é` (UTF-8 `C3 A9`) becomes `Ã©` (`C3 83 C2 A9`).
+
+   Calling TagUTF8 at every boundary where bytes enter the program
+   (HTTP response read, file read, env var, JSON parse output) keeps
+   the tag honest. The bytes themselves are untouched — only the
+   `StringCodePage(s)` metadata flips from 0 → 65001. *)
+procedure TagUTF8(var S: string); inline;
+
 implementation
+
+procedure TagUTF8(var S: string);
+begin
+  if S = '' then Exit;
+  {$IFDEF FPC}
+  { SetCodePage with Convert=False retags the AnsiString in place
+    without touching the underlying bytes — exactly the boundary
+    behaviour we want. Convert=True would re-encode through the
+    current tag's codepage and corrupt anything already-UTF-8 that
+    was mis-tagged as CP_0; we do NOT want that. }
+  SetCodePage(RawByteString(S), CP_UTF8, False);
+  {$ENDIF}
+  { Delphi modern: string = UnicodeString, no codepage tag —
+    nothing to do, the inline compiler will collapse the call. }
+end;
 
 function DupStr(const S: string; Count: Integer): string;
 var
@@ -141,10 +179,12 @@ begin
   try
     SetLength(Bytes, Strm.Size);
     if Strm.Size > 0 then Strm.ReadBuffer(Bytes[0], Strm.Size);
-    { TEncoding.UTF8.GetString round-trips correctly in both FPC and Delphi:
-      under FPC the result is AnsiString-UTF8; under Delphi it's UnicodeString
-      decoded from the UTF-8 bytes. }
     Result := TEncoding.UTF8.GetString(Bytes);
+    { Under FPC, TEncoding.UTF8.GetString returns AnsiString carrying
+      CP_0 (system default) — the bytes are UTF-8 but the tag isn't.
+      Retag at the boundary so downstream code that calls
+      TEncoding.UTF8.GetBytes on this string doesn't double-encode. }
+    TagUTF8(Result);
   finally
     Strm.Free;
   end;
@@ -154,13 +194,19 @@ procedure WriteFileText(const Path, Content: string);
 var
   Strm: TFileStream;
   Bytes: TBytes;
+  Tagged: string;
 begin
   EnsureDir(ExtractFilePath(Path));
   Strm := TFileStream.Create(Path, fmCreate);
   try
     if Content <> '' then
     begin
-      Bytes := TEncoding.UTF8.GetBytes(Content);
+      { Retag before GetBytes — see PasClaw.Utils.TagUTF8 doc.
+        Without this, FPC interprets a CP_0 Content as the system
+        codepage and double-encodes any non-ASCII to UTF-8 on disk. }
+      Tagged := Content;
+      TagUTF8(Tagged);
+      Bytes := TEncoding.UTF8.GetBytes(Tagged);
       Strm.WriteBuffer(Bytes[0], Length(Bytes));
     end;
   finally
