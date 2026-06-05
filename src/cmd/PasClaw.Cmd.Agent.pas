@@ -148,7 +148,8 @@ end;
 
 function NewBuiltinRegistry(UseHashline: Boolean = True;
                             EnableVault: Boolean = False;
-                            EnableWebSearch: Boolean = False): TToolRegistry;
+                            EnableWebSearch: Boolean = False;
+                            EnableWebFetch: Boolean = False): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -164,7 +165,12 @@ begin
     bot-detection wall refuses non-browser TLS fingerprints in 2026. }
   if EnableWebSearch then RegisterWebSearchTool(Result)
   else                    LogWebSearchSkipOnce;
-  RegisterWebFetchTool(Result);
+  { web_fetch is opt-in (Cfg.WebFetchEnabled). Off by default
+    because picoclaw's model fetches URLs via shell+curl and we
+    don't want to silently divert that traffic. Operators on
+    container/sandboxed deploys without curl can flip this in
+    config.json. }
+  if EnableWebFetch then RegisterWebFetchTool(Result);
   { Vault tools register only when explicitly enabled — callers pass
     Cfg.VaultToolsEnabled. Off-by-default per the onboarding opt-in
     flow; flipping the config flag (or re-running `pasclaw onboard`)
@@ -311,7 +317,8 @@ begin
   Reg := nil;
   if not A.NoTools then
     Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
-                              HasConfiguredWebSearchProvider(Cfg));
+                              HasConfiguredWebSearchProvider(Cfg),
+                              Cfg.WebFetchEnabled);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
@@ -388,7 +395,8 @@ begin
   Reg := nil;
   if not A.NoTools then
     Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
-                              HasConfiguredWebSearchProvider(Cfg));
+                              HasConfiguredWebSearchProvider(Cfg),
+                              Cfg.WebFetchEnabled);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;

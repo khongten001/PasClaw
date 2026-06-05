@@ -235,6 +235,14 @@ type
        Operators who skip onboarding can flip this directly in
        config.json or re-run `pasclaw onboard`. *)
     VaultToolsEnabled: Boolean;
+    (* Off-by-default: when True, Cmd.Agent / Cmd.Gateway / Cmd.Serve
+       register the web_fetch tool. Picoclaw doesn't ship a web_fetch
+       — its model fetches arbitrary URLs through shell + curl — so
+       PasClaw's default posture mirrors that. Flip this on for
+       deployments where curl isn't available (sandboxed containers,
+       constrained shells), or where the operator wants the tracked
+       web_fetch path with its size cap / save_to convenience. *)
+    WebFetchEnabled:   Boolean;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -297,6 +305,7 @@ begin
   PromptCache.Enabled  := True;  { default-on; see TPromptCacheConfig comment }
   PromptCache.TTL      := '';    { default 5m via empty }
   VaultToolsEnabled    := False; { off by default; onboarding asks to opt in }
+  WebFetchEnabled      := False; { off by default; the model uses shell+curl }
 end;
 
 function ProviderToJSON(const P: TProviderConfig): TJsonObject;
@@ -431,6 +440,8 @@ begin
     { Off-by-default — only serialise when True so stock configs stay tidy. }
     if VaultToolsEnabled then
       Root.PutBool('vault_tools_enabled', True);
+    if WebFetchEnabled then
+      Root.PutBool('web_fetch_enabled', True);
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Providers) do
@@ -582,6 +593,7 @@ begin
     end;
 
     VaultToolsEnabled := Root.GetBool('vault_tools_enabled', VaultToolsEnabled);
+    WebFetchEnabled   := Root.GetBool('web_fetch_enabled',   WebFetchEnabled);
 
     Arr := Root.ChildArray('providers');
     if Arr <> nil then

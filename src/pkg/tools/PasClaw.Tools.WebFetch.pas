@@ -175,9 +175,45 @@ begin
             SameText(Copy(S, 1, Length(Prefix)), Prefix);
 end;
 
+function WriteBodyToFile(const Path, Body: string; out ErrMsg: string): Boolean;
+{ Write the UTF-8 bytes of Body to Path, creating parent dirs as needed.
+  Returns False with ErrMsg on any failure. Direct TFileStream avoids
+  TStringList.SaveToFile's TEncoding.Default codepage trap on Delphi/
+  Windows — content with non-ASCII bytes would otherwise be mangled
+  on the way to disk. }
+var
+  Dir: string;
+  Bytes: TBytes;
+  FS: TFileStream;
+begin
+  Result := False;
+  ErrMsg := '';
+  Dir := ExtractFilePath(Path);
+  if (Dir <> '') and not DirectoryExists(Dir) then
+    if not ForceDirectories(Dir) then
+    begin
+      ErrMsg := 'web_fetch: cannot create parent directory: ' + Dir;
+      Exit;
+    end;
+  try
+    FS := TFileStream.Create(Path, fmCreate);
+    try
+      Bytes := TEncoding.UTF8.GetBytes(Body);
+      if Length(Bytes) > 0 then
+        FS.WriteBuffer(Bytes[0], Length(Bytes));
+    finally
+      FS.Free;
+    end;
+    Result := True;
+  except
+    on E: Exception do
+      ErrMsg := 'web_fetch: write failed: ' + E.Message;
+  end;
+end;
+
 function Tool_WebFetch(const ArgsJSON: string; out ErrMsg: string): string;
 var
-  URL: string;
+  URL, SaveTo, SandboxReason, Preview: string;
   MaxChars: Integer;
   RedirectGuard: TWebFetchRedirectGuard;
   Resp: THTTPResult;
@@ -201,6 +237,22 @@ begin
   MaxChars := ParseIntArg(ArgsJSON, 'max_chars', DEFAULT_MAX_CHARS);
   if MaxChars < 100           then MaxChars := 100;
   if MaxChars > HARD_MAX_CHARS then MaxChars := HARD_MAX_CHARS;
+
+  { Optional curl -o: when save_to is set, the full response body is
+    written to disk and the tool result becomes a small receipt
+    instead of the inlined content. The model then uses fs_read /
+    fs_grep on the saved file. This skips the max_chars cap entirely
+    so the model can pull down arbitrarily large pages / API dumps
+    without blowing the context window. }
+  ParseStringArg(ArgsJSON, 'save_to', SaveTo);
+  if SaveTo <> '' then
+  begin
+    if not CanWritePath(SaveTo, SandboxReason) then
+    begin
+      ErrMsg := 'web_fetch: save_to refused: ' + SandboxReason;
+      Exit;
+    end;
+  end;
 
   { SSRF pre-check on the initial URL. The redirect guard covers
     subsequent hops; both layers must pass for the request to land. }
@@ -231,6 +283,22 @@ begin
     Exit;
   end;
 
+  { save_to path: write full body to disk regardless of content-type
+    (operator already allowed the path via the sandbox), return only
+    a short receipt with a preview. }
+  if SaveTo <> '' then
+  begin
+    if not WriteBodyToFile(SaveTo, Resp.Body, ErrMsg) then Exit;
+    Preview := Copy(Resp.Body, 1, 200);
+    Result := Format('web_fetch: saved %d bytes to %s (status %d, content-type %s)',
+                     [Length(Resp.Body), SaveTo, Resp.StatusCode, Resp.ContentType]);
+    if Trim(Preview) <> '' then
+      Result := Result + sLineBreak + 'preview: ' + Preview;
+    LogDebug('web_fetch url=%s bytes_in=%d saved_to=%s',
+             [URL, Length(Resp.Body), SaveTo]);
+    Exit;
+  end;
+
   if (Pos('text/html',             Resp.ContentType) > 0) or
      (Pos('application/xhtml+xml', Resp.ContentType) > 0) or
      (Resp.ContentType = '') then
@@ -243,7 +311,8 @@ begin
   end
   else
   begin
-    ErrMsg := Format('web_fetch: unsupported content-type %s', [Resp.ContentType]);
+    ErrMsg := Format('web_fetch: unsupported content-type %s (try save_to to download as-is)',
+                     [Resp.ContentType]);
     Exit;
   end;
 
@@ -258,15 +327,19 @@ begin
   if R = nil then Exit;
   T.Name        := 'web_fetch';
   T.Description :=
-    'Fetch the contents of an HTTP/HTTPS URL and return readable plain text. ' +
-    'Strips HTML tags, decodes entities, collapses whitespace. Useful after ' +
-    'web_search to read a specific result page. Caps the output at 50 KB ' +
-    'by default; pass max_chars to override (range 100–200000).';
+    'Fetch the contents of an HTTP/HTTPS URL. By default returns ' +
+    'readable plain text (strips HTML tags, decodes entities) capped at ' +
+    'max_chars (default 50000). Pass save_to to write the full body to a ' +
+    'file under the workspace instead — useful for large pages, binary ' +
+    'downloads, or anything that would blow the model''s context. When ' +
+    'save_to is set, the tool result is a short receipt + preview, and ' +
+    'the model uses fs_read / fs_grep on the saved file.';
   T.Schema      :=
     '{"type":"object",' +
     '"properties":{' +
     '"url":{"type":"string","description":"http:// or https:// URL."},' +
-    '"max_chars":{"type":"integer","minimum":100,"maximum":200000,"description":"Output char cap (default 50000)."}' +
+    '"max_chars":{"type":"integer","minimum":100,"maximum":200000,"description":"Inline output char cap (default 50000). Ignored when save_to is set."},' +
+    '"save_to":{"type":"string","description":"Optional workspace-relative path. When set, the full response body is written there and the tool returns a receipt only."}' +
     '},"required":["url"]}';
   T.Handler     := Tool_WebFetch;
   T.IsCore      := True;
