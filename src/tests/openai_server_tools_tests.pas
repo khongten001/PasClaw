@@ -4,8 +4,10 @@ program openai_server_tools_tests;
 
 uses
   SysUtils,
+  PasClaw.Config,
   PasClaw.Providers.Types,
-  PasClaw.Providers.OpenAI;
+  PasClaw.Providers.OpenAI,
+  PasClaw.Providers.Factory;
 
 procedure Fail(const Msg, Body: string);
 begin
@@ -94,9 +96,54 @@ begin
   AssertContains(Body, 'user-defined search',   'user description preserved');
 end;
 
+procedure AssertTrue(Cond: Boolean; const Msg: string);
+begin
+  if not Cond then Fail(Msg + ' (expected true)', '');
+end;
+
+procedure AssertFalse(Cond: Boolean; const Msg: string);
+begin
+  if Cond then Fail(Msg + ' (expected false)', '');
+end;
+
+procedure TestIsGenuineOpenAI;
+begin
+  { Catalog OpenAI entry — gate ON. }
+  AssertTrue(IsGenuineOpenAI('openai', 'openai'), 'kind=openai, name=openai');
+  AssertTrue(IsGenuineOpenAI('OpenAI', ''),       'kind=OpenAI (case-insens)');
+  AssertTrue(IsGenuineOpenAI('  openai  ', ''),   'kind with whitespace');
+
+  { Kind blank — fall back to Name. }
+  AssertTrue(IsGenuineOpenAI('', 'openai'),       'kind empty, name=openai');
+  AssertFalse(IsGenuineOpenAI('', 'groq'),        'kind empty, name=groq');
+  AssertFalse(IsGenuineOpenAI('', ''),            'kind+name both empty');
+
+  { Everything else in the pfOpenAI family — gate OFF. The
+    openai-compat case is the one that NormalizeProviderKind
+    collapses to "openai" for spec lookup; IsGenuineOpenAI must
+    NOT collapse it, since openai-compat backends are intentionally
+    non-OpenAI and won't accept web_search_options. }
+  AssertFalse(IsGenuineOpenAI('openai-compat', ''), 'kind=openai-compat (not OpenAI)');
+  AssertFalse(IsGenuineOpenAI('groq', ''),          'kind=groq');
+  AssertFalse(IsGenuineOpenAI('openrouter', ''),    'kind=openrouter');
+  AssertFalse(IsGenuineOpenAI('ollama', ''),        'kind=ollama');
+  AssertFalse(IsGenuineOpenAI('vllm', ''),          'kind=vllm');
+  AssertFalse(IsGenuineOpenAI('litellm', ''),       'kind=litellm');
+  AssertFalse(IsGenuineOpenAI('deepseek', ''),      'kind=deepseek');
+  AssertFalse(IsGenuineOpenAI('mistral', ''),       'kind=mistral');
+  AssertFalse(IsGenuineOpenAI('together', ''),      'kind=together');
+
+  { Explicit Kind always wins over Name fallback — operator with
+    kind=groq, name=openai (unusual but possible) must NOT get
+    web_search_options. }
+  AssertFalse(IsGenuineOpenAI('groq', 'openai'),
+              'kind=groq, name=openai (kind wins)');
+end;
+
 begin
   TestNoServerTools;
   TestServerWebSearchOn;
   TestCoexistsWithFunctionTool;
+  TestIsGenuineOpenAI;
   Writeln('openai_server_tools_tests: OK');
 end.
