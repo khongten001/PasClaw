@@ -76,6 +76,7 @@ var
   Base, Model, APIKey: string;
   RequiresKey: Boolean;
   ServerTools: TAnthropicServerTools;
+  OAIServerTools: TOpenAIServerTools;
 begin
   Provider := nil;
   ErrMsg := '';
@@ -120,7 +121,11 @@ begin
         Provider := TAnthropicProvider.Create(APIKey, Base, Model, ServerTools);
       end;
     pfOpenAI:
-      Provider := TOpenAIProvider.Create(APIKey, Base, Model, Kind, Spec.Auth);
+      begin
+        OAIServerTools.WebSearch := Cfg.OpenAIServerTools.WebSearch;
+        Provider := TOpenAIProvider.Create(APIKey, Base, Model, Kind, Spec.Auth,
+                                            OAIServerTools);
+      end;
     pfGemini:
       Provider := TGeminiProvider.Create(APIKey, Base, Model);
     pfPlaceholder:

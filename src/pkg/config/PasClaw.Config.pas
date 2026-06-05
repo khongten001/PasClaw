@@ -225,6 +225,29 @@ type
     WebFetchMaxUses:  Integer;
   end;
 
+  (* OpenAI Chat Completions: opt-in server-side web search.
+     Emits "web_search_options": {} as a top-level request field
+     when WebSearch is True. Only OpenAI's search-capable models
+     honour the field — currently `gpt-5-search-api` (and the
+     deprecated `gpt-4o-search-preview` / `gpt-4o-mini-search-preview`,
+     shutdown 2026-07-23). The operator must set Cfg.DefaultModel
+     (or per-call model) to one of those; on `gpt-4o` and friends
+     OpenAI silently ignores the field.
+
+     Off by default. Third-party OpenAI-compatible endpoints
+     (Groq, OpenRouter, Together, vLLM, Ollama) do NOT recognise
+     web_search_options — flipping this on while pointed at one
+     of them is harmless but pointless.
+
+     Unlike Anthropic's tools-array entry, this is a top-level
+     parameter — it does NOT collide with a user-defined
+     `web_search` function tool. Both can be active at once.
+
+     See: https://developers.openai.com/api/docs/guides/tools-web-search *)
+  TOpenAIServerToolsConfig = record
+    WebSearch: Boolean;
+  end;
+
   TConfig = class
   public
     DefaultProvider: string;
@@ -267,6 +290,7 @@ type
        web_fetch path with its size cap / save_to convenience. *)
     WebFetchEnabled:   Boolean;
     AnthropicServerTools: TAnthropicServerToolsConfig;
+    OpenAIServerTools:    TOpenAIServerToolsConfig;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -334,6 +358,7 @@ begin
   AnthropicServerTools.WebSearchMaxUses := 0;
   AnthropicServerTools.WebFetch         := False;
   AnthropicServerTools.WebFetchMaxUses  := 0;
+  OpenAIServerTools.WebSearch           := False;
 end;
 
 function ProviderToJSON(const P: TProviderConfig): TJsonObject;
@@ -483,6 +508,12 @@ begin
       if AnthropicServerTools.WebFetchMaxUses > 0 then
         Tmp.PutInt('web_fetch_max_uses', AnthropicServerTools.WebFetchMaxUses);
       Root.PutObject('anthropic_server_tools', Tmp);
+    end;
+    if OpenAIServerTools.WebSearch then
+    begin
+      Tmp := TJsonObject.Create;
+      Tmp.PutBool('web_search', True);
+      Root.PutObject('openai_server_tools', Tmp);
     end;
 
     Arr := TJsonArray.Create;
@@ -648,6 +679,15 @@ begin
         Obj.GetBool('web_fetch', AnthropicServerTools.WebFetch);
       AnthropicServerTools.WebFetchMaxUses :=
         Obj.GetInt('web_fetch_max_uses', AnthropicServerTools.WebFetchMaxUses);
+    finally
+      Obj.Free;
+    end;
+
+    Obj := Root.ChildObject('openai_server_tools');
+    if Obj <> nil then
+    try
+      OpenAIServerTools.WebSearch :=
+        Obj.GetBool('web_search', OpenAIServerTools.WebSearch);
     finally
       Obj.Free;
     end;
