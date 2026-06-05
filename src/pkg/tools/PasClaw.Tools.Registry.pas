@@ -12,7 +12,7 @@ unit PasClaw.Tools.Registry;
 interface
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, SyncObjs,
   PasClaw.Tools.Types,
   PasClaw.Providers.Types;
 
@@ -26,8 +26,16 @@ type
   TToolRegistry = class
   private
     FTools: TToolList;
+    { Background MCP loaders (PasClaw.MCP.Bridge) call Register after
+      ConnectMCPServers has already returned; gateway worker threads
+      may be reading the same array via Find / ToProviderDefs at the
+      same time. One CS guards every method's data-access phase.
+      RunTool releases the lock before invoking the handler so a slow
+      tool (HTTP MCP call, shell-out) can't block parallel reads. }
+    FLock:  TCriticalSection;
   public
     constructor Create;
+    destructor  Destroy; override;
     procedure Register(const T: TTool);
     function  Find(const Name: string; out T: TTool): Boolean;
     function  Names: TStringArray;
@@ -42,6 +50,13 @@ constructor TToolRegistry.Create;
 begin
   inherited Create;
   SetLength(FTools, 0);
+  FLock := TCriticalSection.Create;
+end;
+
+destructor TToolRegistry.Destroy;
+begin
+  FLock.Free;
+  inherited Destroy;
 end;
 
 procedure TToolRegistry.Register(const T: TTool);
@@ -62,52 +77,77 @@ begin
     TMethod(Stored.HandlerObj).Code := nil;
     TMethod(Stored.HandlerObj).Data := nil;
   end;
-  for i := 0 to High(FTools) do
-    if FTools[i].Name = Stored.Name then
-    begin
-      FTools[i] := Stored;
-      Exit;
-    end;
-  SetLength(FTools, Length(FTools) + 1);
-  FTools[High(FTools)] := Stored;
+  FLock.Acquire;
+  try
+    for i := 0 to High(FTools) do
+      if FTools[i].Name = Stored.Name then
+      begin
+        FTools[i] := Stored;
+        Exit;
+      end;
+    SetLength(FTools, Length(FTools) + 1);
+    FTools[High(FTools)] := Stored;
+  finally
+    FLock.Release;
+  end;
 end;
 
 function TToolRegistry.Find(const Name: string; out T: TTool): Boolean;
 var
   i: Integer;
 begin
-  for i := 0 to High(FTools) do
-    if FTools[i].Name = Name then
-    begin
-      T := FTools[i];
-      Exit(True);
-    end;
-  Result := False;
+  FLock.Acquire;
+  try
+    for i := 0 to High(FTools) do
+      if FTools[i].Name = Name then
+      begin
+        T := FTools[i];
+        Exit(True);
+      end;
+    Result := False;
+  finally
+    FLock.Release;
+  end;
 end;
 
 function TToolRegistry.Names: TStringArray;
 var
   i: Integer;
 begin
-  SetLength(Result, Length(FTools));
-  for i := 0 to High(FTools) do Result[i] := FTools[i].Name;
+  FLock.Acquire;
+  try
+    SetLength(Result, Length(FTools));
+    for i := 0 to High(FTools) do Result[i] := FTools[i].Name;
+  finally
+    FLock.Release;
+  end;
 end;
 
 function TToolRegistry.Count: Integer;
 begin
-  Result := Length(FTools);
+  FLock.Acquire;
+  try
+    Result := Length(FTools);
+  finally
+    FLock.Release;
+  end;
 end;
 
 function TToolRegistry.ToProviderDefs: TToolDefinitionArray;
 var
   i: Integer;
 begin
-  SetLength(Result, Length(FTools));
-  for i := 0 to High(FTools) do
-  begin
-    Result[i].Name        := FTools[i].Name;
-    Result[i].Description := FTools[i].Description;
-    Result[i].Schema      := FTools[i].Schema;
+  FLock.Acquire;
+  try
+    SetLength(Result, Length(FTools));
+    for i := 0 to High(FTools) do
+    begin
+      Result[i].Name        := FTools[i].Name;
+      Result[i].Description := FTools[i].Description;
+      Result[i].Schema      := FTools[i].Schema;
+    end;
+  finally
+    FLock.Release;
   end;
 end;
 
@@ -116,6 +156,10 @@ var
   T: TTool;
 begin
   ErrMsg := '';
+  { Snapshot T under the lock, then release it before dispatching.
+    Handlers can sit on a network round-trip for tens of seconds (MCP
+    HTTP), and holding the registry lock that long would serialise
+    every concurrent gateway request through it. }
   if not Find(Name, T) then
   begin
     ErrMsg := 'unknown tool: ' + Name;

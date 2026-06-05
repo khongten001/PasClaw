@@ -1,7 +1,40 @@
 {
-  PasClaw.MCP.Bridge - registers MCP tools into the PasClaw tools registry
-  so the agent loop can invoke them transparently. Tools are namespaced as
+  PasClaw.MCP.Bridge - register MCP tools into the PasClaw tool registry
+  so the agent loop can invoke them transparently. Tools are namespaced
   "<server>__<tool>" to avoid clashes with built-ins or between servers.
+
+  Two-layer boot for fast startup with multiple servers:
+
+    1. Cache pass (synchronous, instant).
+       Each enabled MCP server's tools/list response from the previous
+       boot lives at <home>/mcp-cache/<server>.json. ConnectMCPServers
+       reads each cache and registers the tools with a "still loading"
+       dispatch (server state = lsLoading). The model sees the tools
+       immediately on the first chat completion; attempts to *call*
+       them before the live connect finishes return
+       "mcp loading, retry" rather than crashing.
+
+    2. Network pass (one TThread per server, parallel).
+       Each TMCPLoader creates the real client, runs Connect + ListTools,
+       saves a fresh cache, and atomically swaps the live Client into
+       its server-state object (lsReady). Tools newly seen vs the cache
+       get fresh dispatch objects registered into the (thread-safe)
+       TToolRegistry; stale ones stay in the registry but their state
+       flips to lsFailed so calls surface "no longer exposed".
+
+       A failed connect leaves the cached tools registered but the
+       server state goes lsFailed + Error, so CallTool surfaces the
+       connect error rather than silently looking like "loading"
+       forever.
+
+  Dispatch uses TTool.HandlerObj (method-of-object) so each registered
+  tool carries its server+tool context implicitly — no fixed slot table,
+  no per-slot handler boilerplate, no MaxBindings cap. Replicate's
+  catalog can be as big as it wants.
+
+  FreeMCPClients waits for every loader thread to finish before freeing
+  its client, so a fast `^C` doesn't race the thread that's still inside
+  Connect.
 }
 unit PasClaw.MCP.Bridge;
 
@@ -20,122 +53,212 @@ uses
   PasClaw.MCP.HttpClient;
 
 type
-  TMCPClientList = array of TMCPBaseClient;
+  TMCPClientList = array of TThread;
 
 { Connect every enabled MCP server from the config and register their tools
-  into Reg. Returns the list of live clients (caller frees with FreeMCPClients
-  after the agent loop exits). }
+  into Reg. Cached tools become visible immediately; live connects happen
+  in background threads. Returns the list of loader threads — pass it back
+  to FreeMCPClients to drain on shutdown. }
 function ConnectMCPServers(Cfg: TConfig; Reg: TToolRegistry): TMCPClientList;
 procedure FreeMCPClients(var Clients: TMCPClientList);
 
 implementation
 
 uses
-  PasClaw.Logger;
+  SyncObjs,
+  PasClaw.Logger,
+  PasClaw.MCP.Cache;
 
 type
-  { Each handler needs to remember which client + tool to dispatch to.
-    We keep a small global slot table because TToolHandler is a plain
-    procedural type (no closure context). 32 slots is well above any
-    reasonable MCP-server-count for a single-user CLI. }
-  TMCPBinding = record
-    Client:   TMCPBaseClient;
-    ToolName: string;
-    InUse:    Boolean;
+  TMCPLoadState = (lsLoading, lsReady, lsFailed);
+
+  TMCPServerState = class;
+
+  { One per registered MCP tool. Holds enough context for the registry
+    to dispatch through HandlerObj without consulting any global table.
+    Owned by its TMCPServerState. }
+  TMCPToolDispatch = class
+  private
+    FState:    TMCPServerState;
+    FToolName: string;
+  public
+    constructor Create(State: TMCPServerState; const ToolName: string);
+    function Handler(const ArgsJSON: string; out ErrMsg: string): string;
   end;
 
-const
-  MaxBindings = 32;
+  { Per-server shared state. One instance per MCP server entry; every
+    tool dispatched for that server reads its live Client + State from
+    here. Also owns the list of TMCPToolDispatch instances created on
+    its behalf — they outlive any single tools/list call so the
+    registry's HandlerObj pointers stay valid for the process lifetime. }
+  TMCPServerState = class
+  private
+    FLock:        TCriticalSection;
+    FName:        string;
+    FClient:      TMCPBaseClient;
+    FState:      TMCPLoadState;
+    FError:       string;
+    FDispatchLock: TCriticalSection;  { guards FDispatches concurrent grow/scan }
+    FDispatches:  TList;              { TList of TMCPToolDispatch — owned }
+  public
+    constructor Create(const AName: string);
+    destructor  Destroy; override;
+    procedure SetReady(C: TMCPBaseClient);
+    procedure SetFailed(const Err: string);
+    function  CallTool(const ToolName, ArgsJSON: string;
+                       out ErrMsg: string): string;
+    function  HasDispatchFor(const ToolName: string): Boolean;
+    function  AddDispatch(const ToolName: string): TMCPToolDispatch;
+    property Name: string read FName;
+  end;
+
+  TMCPLoader = class(TThread)
+  private
+    FCfg:    TMCPServer;
+    FReg:    TToolRegistry;
+    FState:  TMCPServerState;
+    FClient: TMCPBaseClient;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const ServerCfg: TMCPServer; Reg: TToolRegistry;
+                       State: TMCPServerState);
+    destructor  Destroy; override;
+  end;
 
 var
-  GBindings: array[0..MaxBindings - 1] of TMCPBinding;
+  GStates: TList;  { TList of TMCPServerState — owned; freed in FreeMCPClients }
 
-function FindBinding(const RegisteredName: string; out Idx: Integer): Boolean; forward;
-
-{ Per-slot handlers. We can't generate these dynamically in Pascal, so we
-  hand-roll one per slot and use the slot index to look up the binding.
-  The macro template below is FPC-only and documentary — Delphi ignores it. }
-{$IFDEF FPC}
-{$MACRO ON}
-{$DEFINE MAKE_HANDLER :=
-function H_NUM(const ArgsJSON: string; out ErrMsg: string): string;
-var
-  Idx: Integer;
-  Done: Boolean;
+constructor TMCPServerState.Create(const AName: string);
 begin
-  ErrMsg := '';
-  Idx := NUM;
-  if not GBindings[Idx].InUse then
-  begin
-    ErrMsg := 'mcp slot stale';
-    Exit('');
-  end;
-  Done := GBindings[Idx].Client.CallTool(GBindings[Idx].ToolName, ArgsJSON, Result, ErrMsg);
-  if not Done and (ErrMsg = '') then ErrMsg := 'mcp call failed';
+  inherited Create;
+  FLock         := TCriticalSection.Create;
+  FDispatchLock := TCriticalSection.Create;
+  FDispatches   := TList.Create;
+  FName   := AName;
+  FClient := nil;
+  FState  := lsLoading;
+  FError  := '';
 end;
-}
-{$ENDIF}
 
-{ Slot handlers: we emit one per index so the function table is fixed at
-  compile time. If you raise MaxBindings, extend this block to match. }
-function H_0(const A: string; out E: string): string;  var D: Boolean; begin E:=''; if not GBindings[0 ].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[0 ].Client.CallTool(GBindings[0 ].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_1(const A: string; out E: string): string;  var D: Boolean; begin E:=''; if not GBindings[1 ].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[1 ].Client.CallTool(GBindings[1 ].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_2(const A: string; out E: string): string;  var D: Boolean; begin E:=''; if not GBindings[2 ].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[2 ].Client.CallTool(GBindings[2 ].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_3(const A: string; out E: string): string;  var D: Boolean; begin E:=''; if not GBindings[3 ].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[3 ].Client.CallTool(GBindings[3 ].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_4(const A: string; out E: string): string;  var D: Boolean; begin E:=''; if not GBindings[4 ].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[4 ].Client.CallTool(GBindings[4 ].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_5(const A: string; out E: string): string;  var D: Boolean; begin E:=''; if not GBindings[5 ].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[5 ].Client.CallTool(GBindings[5 ].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_6(const A: string; out E: string): string;  var D: Boolean; begin E:=''; if not GBindings[6 ].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[6 ].Client.CallTool(GBindings[6 ].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_7(const A: string; out E: string): string;  var D: Boolean; begin E:=''; if not GBindings[7 ].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[7 ].Client.CallTool(GBindings[7 ].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_8(const A: string; out E: string): string;  var D: Boolean; begin E:=''; if not GBindings[8 ].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[8 ].Client.CallTool(GBindings[8 ].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_9(const A: string; out E: string): string;  var D: Boolean; begin E:=''; if not GBindings[9 ].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[9 ].Client.CallTool(GBindings[9 ].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_10(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[10].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[10].Client.CallTool(GBindings[10].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_11(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[11].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[11].Client.CallTool(GBindings[11].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_12(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[12].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[12].Client.CallTool(GBindings[12].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_13(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[13].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[13].Client.CallTool(GBindings[13].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_14(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[14].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[14].Client.CallTool(GBindings[14].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_15(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[15].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[15].Client.CallTool(GBindings[15].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_16(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[16].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[16].Client.CallTool(GBindings[16].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_17(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[17].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[17].Client.CallTool(GBindings[17].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_18(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[18].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[18].Client.CallTool(GBindings[18].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_19(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[19].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[19].Client.CallTool(GBindings[19].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_20(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[20].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[20].Client.CallTool(GBindings[20].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_21(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[21].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[21].Client.CallTool(GBindings[21].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_22(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[22].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[22].Client.CallTool(GBindings[22].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_23(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[23].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[23].Client.CallTool(GBindings[23].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_24(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[24].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[24].Client.CallTool(GBindings[24].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_25(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[25].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[25].Client.CallTool(GBindings[25].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_26(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[26].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[26].Client.CallTool(GBindings[26].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_27(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[27].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[27].Client.CallTool(GBindings[27].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_28(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[28].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[28].Client.CallTool(GBindings[28].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_29(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[29].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[29].Client.CallTool(GBindings[29].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_30(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[30].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[30].Client.CallTool(GBindings[30].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-function H_31(const A: string; out E: string): string; var D: Boolean; begin E:=''; if not GBindings[31].InUse then begin E:='stale';Result:='';Exit;end; D:=GBindings[31].Client.CallTool(GBindings[31].ToolName,A,Result,E); if not D and (E='') then E:='mcp call failed'; end;
-
-{ Delphi rejects @FunctionName as a constant expression in typed-constant
-  array initializers; populate the table at startup instead. }
+destructor TMCPServerState.Destroy;
 var
-  Handlers: array[0..MaxBindings - 1] of TToolHandler;
+  i: Integer;
+begin
+  if FClient <> nil then begin FClient.Free; FClient := nil; end;
+  for i := 0 to FDispatches.Count - 1 do
+    TMCPToolDispatch(FDispatches[i]).Free;
+  FDispatches.Free;
+  FDispatchLock.Free;
+  FLock.Free;
+  inherited Destroy;
+end;
 
-function FindBinding(const RegisteredName: string; out Idx: Integer): Boolean;
+procedure TMCPServerState.SetReady(C: TMCPBaseClient);
+begin
+  FLock.Acquire;
+  try
+    FClient := C;
+    FState  := lsReady;
+    FError  := '';
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TMCPServerState.SetFailed(const Err: string);
+begin
+  FLock.Acquire;
+  try
+    FState := lsFailed;
+    FError := Err;
+    { Keep FClient as-is — if a prior connect had succeeded and the
+      refresh subsequently failed, calls can still go through the old
+      session until the next FreeMCPClients. The MCP HTTP client will
+      surface its own error if the session has gone stale. }
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TMCPServerState.CallTool(const ToolName, ArgsJSON: string;
+                                  out ErrMsg: string): string;
+var
+  C: TMCPBaseClient;
+  S: TMCPLoadState;
+  E: string;
+  OK: Boolean;
+begin
+  Result := '';
+  ErrMsg := '';
+  FLock.Acquire;
+  try
+    C := FClient;
+    S := FState;
+    E := FError;
+  finally
+    FLock.Release;
+  end;
+  case S of
+    lsLoading:
+      begin
+        ErrMsg := Format('mcp[%s] still connecting — retry in a moment', [FName]);
+        Exit;
+      end;
+    lsFailed:
+      if C = nil then
+      begin
+        ErrMsg := Format('mcp[%s] unreachable: %s', [FName, E]);
+        Exit;
+      end;
+    lsReady: ;
+  end;
+  if C = nil then
+  begin
+    ErrMsg := Format('mcp[%s] client missing (internal bridge bug)', [FName]);
+    Exit;
+  end;
+  OK := C.CallTool(ToolName, ArgsJSON, Result, ErrMsg);
+  if (not OK) and (ErrMsg = '') then ErrMsg := 'mcp call failed';
+end;
+
+function TMCPServerState.HasDispatchFor(const ToolName: string): Boolean;
 var
   i: Integer;
 begin
   Result := False;
-  for i := 0 to High(GBindings) do
-    if GBindings[i].InUse and (GBindings[i].ToolName = RegisteredName) then
-    begin
-      Idx := i;
-      Exit(True);
-    end;
+  FDispatchLock.Acquire;
+  try
+    for i := 0 to FDispatches.Count - 1 do
+      if TMCPToolDispatch(FDispatches[i]).FToolName = ToolName then
+        Exit(True);
+  finally
+    FDispatchLock.Release;
+  end;
 end;
 
-function AllocateSlot: Integer;
-var
-  i: Integer;
+function TMCPServerState.AddDispatch(const ToolName: string): TMCPToolDispatch;
 begin
-  for i := 0 to High(GBindings) do
-    if not GBindings[i].InUse then Exit(i);
-  Result := -1;
+  Result := TMCPToolDispatch.Create(Self, ToolName);
+  FDispatchLock.Acquire;
+  try
+    FDispatches.Add(Result);
+  finally
+    FDispatchLock.Release;
+  end;
+end;
+
+constructor TMCPToolDispatch.Create(State: TMCPServerState; const ToolName: string);
+begin
+  inherited Create;
+  FState    := State;
+  FToolName := ToolName;
+end;
+
+function TMCPToolDispatch.Handler(const ArgsJSON: string;
+                                   out ErrMsg: string): string;
+begin
+  Result := FState.CallTool(FToolName, ArgsJSON, ErrMsg);
 end;
 
 function IsHttpUrl(const S: string): Boolean;
@@ -145,69 +268,154 @@ begin
              ((Length(S) >= 8) and (LowerCase(Copy(S, 1, 8)) = 'https://')));
 end;
 
-function ConnectMCPServers(Cfg: TConfig; Reg: TToolRegistry): TMCPClientList;
+function NamespacedToolName(const Server, Tool: string): string;
+begin
+  Result := Server + '__' + Tool;
+end;
+
+procedure RegisterToolViaDispatch(Reg: TToolRegistry;
+                                   const Server: string;
+                                   const Tool: TMCPTool;
+                                   Dispatch: TMCPToolDispatch);
 var
-  i, j, slot: Integer;
-  Client: TMCPBaseClient;
+  Entry: TTool;
+begin
+  Entry.Name        := NamespacedToolName(Server, Tool.Name);
+  Entry.Description := '[mcp:' + Server + '] ' + Tool.Description;
+  Entry.Schema      := Tool.Schema;
+  { Object-method dispatch — no static slot indirection, no MaxBindings
+    cap. The registry zeros Handler when HandlerObj is set elsewhere;
+    here we point Handler at nil and rely on RunTool's "if Assigned
+    HandlerObj" branch. }
+  Entry.Handler     := nil;
+  Entry.HandlerObj  := Dispatch.Handler;
+  Entry.IsCore      := False;
+  Reg.Register(Entry);
+end;
+
+{ ============================================================
+  TMCPLoader — one per MCP server, runs Connect+ListTools async.
+  ============================================================ }
+
+constructor TMCPLoader.Create(const ServerCfg: TMCPServer; Reg: TToolRegistry;
+                              State: TMCPServerState);
+begin
+  inherited Create({CreateSuspended=}True);
+  FreeOnTerminate := False;
+  FCfg    := ServerCfg;
+  FReg    := Reg;
+  FState  := State;
+  FClient := nil;
+end;
+
+destructor TMCPLoader.Destroy;
+begin
+  { Execute either transferred FClient to FState (and nulled FClient
+    here) or failed before reaching that point — in which case the
+    client is still ours to free. }
+  if FClient <> nil then begin FClient.Free; FClient := nil; end;
+  inherited Destroy;
+end;
+
+procedure TMCPLoader.Execute;
+var
   Tools: TMCPToolArray;
   Err: string;
-  ToolEntry: TTool;
-  Bound: Integer;
+  Dispatch: TMCPToolDispatch;
+  i: Integer;
+begin
+  try
+    if IsHttpUrl(FCfg.Cmd) then
+      FClient := TMCPHttpClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args)
+    else
+      FClient := TMCPStdioClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args);
+    if not FClient.Connect(30 * 1000, Err) then
+    begin
+      LogWarn('mcp[%s] connect failed: %s', [FCfg.Name, Err]);
+      FState.SetFailed(Err);
+      Exit;
+    end;
+    if not FClient.ListTools(Tools, Err) then
+    begin
+      LogWarn('mcp[%s] tools/list failed: %s', [FCfg.Name, Err]);
+      FState.SetFailed(Err);
+      Exit;
+    end;
+    LogInfo('mcp[%s] live connect OK (%d tools)', [FCfg.Name, Length(Tools)]);
+    SaveCachedTools(FCfg.Name, Tools);
+
+    { Register any tools we didn't already see in the cache pass.
+      HasDispatchFor is O(N) per lookup; for ~5000 tools that's
+      25M comparisons worst case — annoying but bounded, and only
+      happens once per boot. If that becomes a measurable problem,
+      promote FDispatches to a sorted TStringList. }
+    for i := 0 to High(Tools) do
+    begin
+      if FState.HasDispatchFor(Tools[i].Name) then Continue;
+      Dispatch := FState.AddDispatch(Tools[i].Name);
+      RegisterToolViaDispatch(FReg, FCfg.Name, Tools[i], Dispatch);
+    end;
+
+    FState.SetReady(FClient);
+    { Ownership transferred to FState; clear ours so Destroy doesn't
+      double-free. }
+    FClient := nil;
+  except
+    on E: Exception do
+    begin
+      LogWarn('mcp[%s] loader crashed: %s', [FCfg.Name, E.Message]);
+      FState.SetFailed(E.Message);
+    end;
+  end;
+end;
+
+{ ============================================================
+  Boot path.
+  ============================================================ }
+
+function ConnectMCPServers(Cfg: TConfig; Reg: TToolRegistry): TMCPClientList;
+var
+  i, j: Integer;
+  CachedTools: TMCPToolArray;
+  Loader: TMCPLoader;
+  State: TMCPServerState;
+  Dispatch: TMCPToolDispatch;
+  CachedCount, CachedRegistered: Integer;
 begin
   SetLength(Result, 0);
-  Bound := 0;
+  CachedRegistered := 0;
   for i := 0 to High(Cfg.MCPServers) do
   begin
     if not Cfg.MCPServers[i].Enabled then Continue;
-    if IsHttpUrl(Cfg.MCPServers[i].Cmd) then
+
+    State := TMCPServerState.Create(Cfg.MCPServers[i].Name);
+    GStates.Add(State);
+
+    { Cache pass: register cached tools with the state in lsLoading. }
+    CachedCount := 0;
+    if LoadCachedTools(Cfg.MCPServers[i].Name, CachedTools) then
     begin
-      { HTTP transport: Cmd = URL, Args (optional) = "Bearer ..." token }
-      Client := TMCPHttpClient.Create(Cfg.MCPServers[i].Name,
-                                      Cfg.MCPServers[i].Cmd,
-                                      Cfg.MCPServers[i].Args);
-    end
-    else
-    begin
-      Client := TMCPStdioClient.Create(Cfg.MCPServers[i].Name,
-                                       Cfg.MCPServers[i].Cmd,
-                                       Cfg.MCPServers[i].Args);
-    end;
-    if not Client.Connect(5000, Err) then
-    begin
-      LogWarn('mcp[%s] connect failed: %s', [Cfg.MCPServers[i].Name, Err]);
-      Client.Free;
-      Continue;
-    end;
-    if not Client.ListTools(Tools, Err) then
-    begin
-      LogWarn('mcp[%s] list tools failed: %s', [Cfg.MCPServers[i].Name, Err]);
-      Client.Free;
-      Continue;
-    end;
-    LogInfo('mcp[%s] connected, %d tool(s)', [Cfg.MCPServers[i].Name, Length(Tools)]);
-    SetLength(Result, Length(Result) + 1);
-    Result[High(Result)] := Client;
-    for j := 0 to High(Tools) do
-    begin
-      slot := AllocateSlot;
-      if slot < 0 then
+      for j := 0 to High(CachedTools) do
       begin
-        LogWarn('mcp: out of binding slots (max %d); skipping further tools', [MaxBindings]);
-        Exit;
+        Dispatch := State.AddDispatch(CachedTools[j].Name);
+        RegisterToolViaDispatch(Reg, Cfg.MCPServers[i].Name,
+                                CachedTools[j], Dispatch);
+        Inc(CachedCount);
       end;
-      ToolEntry.Name        := Cfg.MCPServers[i].Name + '__' + Tools[j].Name;
-      ToolEntry.Description := '[mcp:' + Cfg.MCPServers[i].Name + '] ' + Tools[j].Description;
-      ToolEntry.Schema      := Tools[j].Schema;
-      ToolEntry.Handler     := Handlers[slot];
-      ToolEntry.IsCore      := False;
-      GBindings[slot].Client   := Client;
-      GBindings[slot].ToolName := Tools[j].Name;
-      GBindings[slot].InUse    := True;
-      Reg.Register(ToolEntry);
-      Inc(Bound);
+      if CachedCount > 0 then
+        LogInfo('mcp[%s] cache hit: %d tool(s) registered, live refresh started',
+                [Cfg.MCPServers[i].Name, CachedCount]);
+      Inc(CachedRegistered, CachedCount);
     end;
+
+    Loader := TMCPLoader.Create(Cfg.MCPServers[i], Reg, State);
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := Loader;
+    Loader.Start;
   end;
-  if Bound > 0 then LogDebug('mcp: %d tool(s) bound across %d server(s)', [Bound, Length(Result)]);
+  if CachedRegistered > 0 then
+    LogDebug('mcp: %d cached tool(s) registered across %d server(s); waiting on background refresh',
+             [CachedRegistered, Length(Result)]);
 end;
 
 procedure FreeMCPClients(var Clients: TMCPClientList);
@@ -215,25 +423,26 @@ var
   i: Integer;
 begin
   for i := 0 to High(Clients) do
-    if Clients[i] <> nil then Clients[i].Free;
+    if Clients[i] <> nil then
+    begin
+      try Clients[i].WaitFor; except end;
+      Clients[i].Free;
+    end;
   SetLength(Clients, 0);
-  for i := 0 to High(GBindings) do
-  begin
-    GBindings[i].Client   := nil;
-    GBindings[i].ToolName := '';
-    GBindings[i].InUse    := False;
-  end;
+
+  { Server states (and their owned dispatch objects + clients) are
+    referenced from the registry via HandlerObj pointers; freeing them
+    here invalidates those entries, but the caller is tearing the whole
+    agent down so the registry is going too. }
+  for i := 0 to GStates.Count - 1 do
+    TMCPServerState(GStates[i]).Free;
+  GStates.Clear;
 end;
 
 initialization
-  { all bindings start free }
-  Handlers[0]  := @H_0;   Handlers[1]  := @H_1;   Handlers[2]  := @H_2;   Handlers[3]  := @H_3;
-  Handlers[4]  := @H_4;   Handlers[5]  := @H_5;   Handlers[6]  := @H_6;   Handlers[7]  := @H_7;
-  Handlers[8]  := @H_8;   Handlers[9]  := @H_9;   Handlers[10] := @H_10;  Handlers[11] := @H_11;
-  Handlers[12] := @H_12;  Handlers[13] := @H_13;  Handlers[14] := @H_14;  Handlers[15] := @H_15;
-  Handlers[16] := @H_16;  Handlers[17] := @H_17;  Handlers[18] := @H_18;  Handlers[19] := @H_19;
-  Handlers[20] := @H_20;  Handlers[21] := @H_21;  Handlers[22] := @H_22;  Handlers[23] := @H_23;
-  Handlers[24] := @H_24;  Handlers[25] := @H_25;  Handlers[26] := @H_26;  Handlers[27] := @H_27;
-  Handlers[28] := @H_28;  Handlers[29] := @H_29;  Handlers[30] := @H_30;  Handlers[31] := @H_31;
+  GStates := TList.Create;
+
+finalization
+  GStates.Free;
 
 end.
