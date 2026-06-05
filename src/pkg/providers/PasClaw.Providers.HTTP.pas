@@ -1,16 +1,29 @@
-{
-  PasClaw.Providers.HTTP - thin wrapper around TIdHTTP for JSON POSTs.
-  Builds in both Delphi and FPC (Indy works in both). Under FPC the project
-  vendors Indy via `make get-indy`; under Delphi it ships with RAD Studio.
+(*
+  PasClaw.Providers.HTTP - centralised outbound HTTP wrapper.
 
-  HTTPS support requires OpenSSL. On Linux: package "libssl-dev" / runtime
-  "libssl.so.3"; on Windows: copy libeay32.dll + ssleay32.dll next to the
-  binary. We probe two search locations before the first HTTPS request:
-    1. $PASCLAW_OPENSSL_DIR (if set)
-    2. the directory holding pasclaw.exe
-  If neither resolves a working OpenSSL pair we surface an actionable
-  error message instead of Indy's cryptic 'Could not load SSL library.'.
-}
+  Two interchangeable backends, picked by compile-time define:
+
+    Indy (default everywhere)
+      - TIdHTTP + TIdSSLIOHandlerSocketOpenSSL.
+      - HTTPS needs OpenSSL DLLs: libssl-dev / libssl.so.3 on Linux;
+        libeay32.dll + ssleay32.dll next to pasclaw.exe on Windows
+        (or under $PASCLAW_OPENSSL_DIR). EnsureOpenSSL probes both.
+      - Works on FPC and Delphi — the only path FPC supports.
+
+    TNetHTTPClient (Delphi-only, opt-in)
+      - THTTPClient via System.Net.HttpClient.
+      - Uses Windows SChannel / Apple TransportSecurity / NSURLSession,
+        so no OpenSSL DLLs are needed at all.
+      - Enable with -DPASCLAW_NETHTTP on the dcc32/dcc64 command line,
+        or by adding the symbol to the project's conditional defines.
+        Ignored under FPC since TNetHTTPClient doesn't exist there —
+        FPC stays on Indy regardless.
+
+  The public interface is library-neutral; callers see neither Indy
+  nor TNetHTTPClient types. EnsureOpenSSL stays in the interface for
+  both backends — it's a no-op success under TNetHTTPClient so an
+  onboarding precheck can call it uniformly.
+*)
 unit PasClaw.Providers.HTTP;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -19,9 +32,7 @@ unit PasClaw.Providers.HTTP;
 interface
 
 uses
-  SysUtils, Classes,
-  IdHTTP, IdSSLOpenSSL, IdSSLOpenSSLHeaders,
-  IdGlobal, IdExceptionCore, IdException;
+  SysUtils, Classes;
 
 type
   THTTPResult = record
@@ -117,6 +128,14 @@ function EnsureOpenSSL(out ErrMsg: string): Boolean;
 
 implementation
 
+uses
+{$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
+  System.Net.URLClient, System.Net.HttpClient;
+{$ELSE}
+  IdHTTP, IdSSLOpenSSL, IdSSLOpenSSLHeaders,
+  IdGlobal, IdExceptionCore, IdException;
+{$IFEND}
+
 function MakeHeader(const Name, Value: string): THeaderPair;
 begin
   Result.Name  := Name;
@@ -127,6 +146,333 @@ function MakeHTTPS(URL: string): Boolean;
 begin
   Result := (Length(URL) >= 8) and SameText(Copy(URL, 1, 8), 'https://');
 end;
+
+{$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
+(* ============================================================
+   TNetHTTPClient backend — Delphi only, opt-in via -DPASCLAW_NETHTTP.
+   TLS via the OS (SChannel on Windows, Secure Transport on macOS,
+   OpenSSL via NSURLSession-equivalent on Linux), so no OpenSSL DLL
+   shipping requirement. EnsureOpenSSL is a no-op success here for
+   onboarding-precheck parity.
+   ============================================================ *)
+
+function EnsureOpenSSL(out ErrMsg: string): Boolean;
+begin
+  ErrMsg := '';
+  Result := True;
+end;
+
+function MakeNetHeaders(const Headers: array of THeaderPair): TNetHeaders;
+var
+  i: Integer;
+begin
+  SetLength(Result, Length(Headers));
+  for i := 0 to High(Headers) do
+    Result[i] := TNetHeader.Create(Headers[i].Name, Headers[i].Value);
+end;
+
+function NewNetClient(TimeoutSeconds: Integer;
+                      const UserAgent, Accept: string): THTTPClient;
+begin
+  Result := THTTPClient.Create;
+  Result.ConnectionTimeout := TimeoutSeconds * 1000;
+  Result.ResponseTimeout   := TimeoutSeconds * 1000;
+  Result.HandleRedirects   := True;
+  if UserAgent <> '' then
+    Result.UserAgent := UserAgent
+  else
+    Result.UserAgent := 'PasClaw/0.1 (+https://github.com/FMXExpress/PasClaw)';
+  if Accept <> '' then
+    Result.Accept := Accept;
+end;
+
+type
+  { Bridges THTTPRedirectGuard to THTTPClient.OnRedirect. The TNetHTTPClient
+    redirect event can't raise — it cancels the follow by setting
+    AAllowRedirect := False — so we record the refusal here and the caller
+    promotes it to a THTTPResult.ErrorMsg after the request returns. }
+  TNetRedirectAdapter = class
+  private
+    FGuard: THTTPRedirectGuard;
+  public
+    Rejected:     Boolean;
+    RejectReason: string;
+    constructor Create(AGuard: THTTPRedirectGuard);
+    procedure OnRedirect(const Sender: TObject; var ARequest: IHTTPRequest;
+                          const AResponse: IHTTPResponse;
+                          var AAllowRedirect: Boolean);
+  end;
+
+constructor TNetRedirectAdapter.Create(AGuard: THTTPRedirectGuard);
+begin
+  inherited Create;
+  FGuard       := AGuard;
+  Rejected     := False;
+  RejectReason := '';
+end;
+
+procedure TNetRedirectAdapter.OnRedirect(const Sender: TObject;
+                                          var ARequest: IHTTPRequest;
+                                          const AResponse: IHTTPResponse;
+                                          var AAllowRedirect: Boolean);
+var
+  Dest, LocalReason: string;
+  Allow: Boolean;
+begin
+  if not Assigned(FGuard) then
+  begin
+    AAllowRedirect := True;
+    Exit;
+  end;
+  Dest        := ARequest.URL.ToString;
+  Allow       := True;
+  LocalReason := '';
+  FGuard(Dest, Allow, LocalReason);
+  ARequest.URL   := TURI.Create(Dest);
+  AAllowRedirect := Allow;
+  if not Allow then
+  begin
+    Rejected     := True;
+    RejectReason := LocalReason;
+  end;
+end;
+
+function NetExecute(C: THTTPClient; const Method, URL: string;
+                    Req: TStream;
+                    Resp: TStream;
+                    const Hdrs: TNetHeaders;
+                    out StatusCode: Integer;
+                    out ContentType: string;
+                    out ErrMsg: string): Boolean;
+var
+  R: IHTTPResponse;
+begin
+  Result := False;
+  StatusCode  := 0;
+  ContentType := '';
+  ErrMsg      := '';
+  try
+    R := C.Execute(Method, URL, Req, Resp, Hdrs);
+    StatusCode  := R.StatusCode;
+    ContentType := LowerCase(R.MimeType);
+    Result      := True;
+  except
+    on E: Exception do
+      ErrMsg := E.Message;
+  end;
+end;
+
+function PostJSON(const URL, JSON: string;
+                  const Headers: array of THeaderPair;
+                  TimeoutSeconds: Integer): THTTPResult;
+var
+  C: THTTPClient;
+  Req, Resp: TStringStream;
+  Hdrs: TNetHeaders;
+begin
+  Result.StatusCode  := 0;
+  Result.Body        := '';
+  Result.ContentType := '';
+  Result.ErrorMsg    := '';
+  C    := NewNetClient(TimeoutSeconds, '', 'application/json');
+  Req  := TStringStream.Create(JSON, TEncoding.UTF8);
+  Resp := TStringStream.Create('', TEncoding.UTF8);
+  try
+    Hdrs := MakeNetHeaders(Headers);
+    Hdrs := Hdrs + [TNetHeader.Create('Content-Type', 'application/json; charset=utf-8')];
+    NetExecute(C, 'POST', URL, Req, Resp, Hdrs,
+               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+    Result.Body := Resp.DataString;
+  finally
+    Resp.Free;
+    Req.Free;
+    C.Free;
+  end;
+end;
+
+function PutJSON(const URL, JSON: string;
+                 const Headers: array of THeaderPair;
+                 TimeoutSeconds: Integer): THTTPResult;
+var
+  C: THTTPClient;
+  Req, Resp: TStringStream;
+  Hdrs: TNetHeaders;
+begin
+  Result.StatusCode  := 0;
+  Result.Body        := '';
+  Result.ContentType := '';
+  Result.ErrorMsg    := '';
+  C    := NewNetClient(TimeoutSeconds, '', 'application/json');
+  Req  := TStringStream.Create(JSON, TEncoding.UTF8);
+  Resp := TStringStream.Create('', TEncoding.UTF8);
+  try
+    Hdrs := MakeNetHeaders(Headers);
+    Hdrs := Hdrs + [TNetHeader.Create('Content-Type', 'application/json; charset=utf-8')];
+    NetExecute(C, 'PUT', URL, Req, Resp, Hdrs,
+               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+    Result.Body := Resp.DataString;
+  finally
+    Resp.Free;
+    Req.Free;
+    C.Free;
+  end;
+end;
+
+function GetJSONURL(const URL: string;
+                    const Headers: array of THeaderPair;
+                    TimeoutSeconds: Integer): THTTPResult;
+var
+  C: THTTPClient;
+  Resp: TStringStream;
+  Hdrs: TNetHeaders;
+begin
+  Result.StatusCode  := 0;
+  Result.Body        := '';
+  Result.ContentType := '';
+  Result.ErrorMsg    := '';
+  C    := NewNetClient(TimeoutSeconds, '', 'application/json');
+  Resp := TStringStream.Create('', TEncoding.UTF8);
+  try
+    Hdrs := MakeNetHeaders(Headers);
+    NetExecute(C, 'GET', URL, nil, Resp, Hdrs,
+               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+    Result.Body := Resp.DataString;
+  finally
+    Resp.Free;
+    C.Free;
+  end;
+end;
+
+function GetURL(const URL: string;
+                const Headers: array of THeaderPair;
+                TimeoutSeconds: Integer;
+                const UserAgent: string;
+                const Accept: string;
+                OnRedirect: THTTPRedirectGuard): THTTPResult;
+var
+  C: THTTPClient;
+  Resp: TStringStream;
+  Hdrs: TNetHeaders;
+  EffAccept: string;
+  Adapter: TNetRedirectAdapter;
+begin
+  Result.StatusCode  := 0;
+  Result.Body        := '';
+  Result.ContentType := '';
+  Result.ErrorMsg    := '';
+  if Accept <> '' then EffAccept := Accept else EffAccept := '*/*';
+  C       := NewNetClient(TimeoutSeconds, UserAgent, EffAccept);
+  Resp    := TStringStream.Create('', TEncoding.UTF8);
+  Adapter := nil;
+  try
+    if Assigned(OnRedirect) then
+    begin
+      Adapter := TNetRedirectAdapter.Create(OnRedirect);
+      C.OnRedirect := Adapter.OnRedirect;
+    end;
+    Hdrs := MakeNetHeaders(Headers);
+    NetExecute(C, 'GET', URL, nil, Resp, Hdrs,
+               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+    Result.Body := Resp.DataString;
+    if (Adapter <> nil) and Adapter.Rejected then
+    begin
+      Result.ErrorMsg    := Adapter.RejectReason;
+      Result.StatusCode  := -1;
+    end;
+  finally
+    Adapter.Free;
+    Resp.Free;
+    C.Free;
+  end;
+end;
+
+function PostRaw(const URL, ContentType, Body: string;
+                 const Headers: array of THeaderPair;
+                 TimeoutSeconds: Integer;
+                 const UserAgent: string;
+                 const Accept: string): THTTPResult;
+var
+  C: THTTPClient;
+  Req, Resp: TStringStream;
+  Hdrs: TNetHeaders;
+  EffAccept: string;
+begin
+  Result.StatusCode  := 0;
+  Result.Body        := '';
+  Result.ContentType := '';
+  Result.ErrorMsg    := '';
+  if Accept <> '' then EffAccept := Accept else EffAccept := '*/*';
+  C    := NewNetClient(TimeoutSeconds, UserAgent, EffAccept);
+  Req  := TStringStream.Create(Body, TEncoding.UTF8);
+  Resp := TStringStream.Create('', TEncoding.UTF8);
+  try
+    Hdrs := MakeNetHeaders(Headers);
+    Hdrs := Hdrs + [TNetHeader.Create('Content-Type', ContentType + '; charset=utf-8')];
+    NetExecute(C, 'POST', URL, Req, Resp, Hdrs,
+               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+    Result.Body := Resp.DataString;
+  finally
+    Resp.Free;
+    Req.Free;
+    C.Free;
+  end;
+end;
+
+function PostJSONToStream(const URL, JSON: string;
+                          RespStream: TStream;
+                          const Headers: array of THeaderPair;
+                          TimeoutSeconds: Integer;
+                          const UserAgent: string;
+                          const Accept: string;
+                          out StatusCode: Integer;
+                          out ErrMsg: string): Boolean;
+var
+  C: THTTPClient;
+  Req: TStringStream;
+  Hdrs: TNetHeaders;
+  EffAccept, RespContentType: string;
+begin
+  Result := False;
+  if Accept <> '' then EffAccept := Accept else EffAccept := 'application/json';
+  C   := NewNetClient(TimeoutSeconds, UserAgent, EffAccept);
+  Req := TStringStream.Create(JSON, TEncoding.UTF8);
+  try
+    Hdrs := MakeNetHeaders(Headers);
+    Hdrs := Hdrs + [TNetHeader.Create('Content-Type', 'application/json; charset=utf-8')];
+    NetExecute(C, 'POST', URL, Req, RespStream, Hdrs,
+               StatusCode, RespContentType, ErrMsg);
+    Result := (StatusCode >= 200) and (StatusCode < 300);
+  finally
+    Req.Free;
+    C.Free;
+  end;
+end;
+
+function GetURLToStream(const URL: string; Stream: TStream;
+                        const Headers: array of THeaderPair;
+                        TimeoutSeconds: Integer): THTTPResult;
+var
+  C: THTTPClient;
+  Hdrs: TNetHeaders;
+begin
+  Result.StatusCode  := 0;
+  Result.Body        := '';
+  Result.ContentType := '';
+  Result.ErrorMsg    := '';
+  C := NewNetClient(TimeoutSeconds, '', '*/*');
+  try
+    Hdrs := MakeNetHeaders(Headers);
+    NetExecute(C, 'GET', URL, nil, Stream, Hdrs,
+               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+  finally
+    C.Free;
+  end;
+end;
+
+{$ELSE}
+(* ============================================================
+   Indy backend — default on both Delphi and FPC.
+   ============================================================ *)
 
 procedure ApplyHeaders(Http: TIdHTTP; const Headers: array of THeaderPair);
 var
@@ -562,5 +908,7 @@ begin
     Http.Free;
   end;
 end;
+
+{$IFEND}
 
 end.
