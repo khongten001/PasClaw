@@ -175,40 +175,52 @@ begin
             SameText(Copy(S, 1, Length(Prefix)), Prefix);
 end;
 
-function WriteBodyToFile(const Path, Body: string; out ErrMsg: string): Boolean;
-{ Write the UTF-8 bytes of Body to Path, creating parent dirs as needed.
-  Returns False with ErrMsg on any failure. Direct TFileStream avoids
-  TStringList.SaveToFile's TEncoding.Default codepage trap on Delphi/
-  Windows — content with non-ASCII bytes would otherwise be mangled
-  on the way to disk. }
+function EnsureParentDir(const Path: string; out ErrMsg: string): Boolean;
 var
   Dir: string;
-  Bytes: TBytes;
-  FS: TFileStream;
 begin
-  Result := False;
+  Result := True;
   ErrMsg := '';
   Dir := ExtractFilePath(Path);
   if (Dir <> '') and not DirectoryExists(Dir) then
     if not ForceDirectories(Dir) then
     begin
       ErrMsg := 'web_fetch: cannot create parent directory: ' + Dir;
-      Exit;
+      Result := False;
     end;
+end;
+
+function ReadPreviewBytes(const Path: string; MaxBytes: Integer): TBytes;
+{ Read up to MaxBytes from Path for the receipt preview. Used after a
+  binary-safe stream download where Resp.Body is empty. }
+var
+  FS: TFileStream;
+  N: Int64;
+begin
+  SetLength(Result, 0);
+  if not FileExists(Path) then Exit;
   try
-    FS := TFileStream.Create(Path, fmCreate);
+    FS := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
     try
-      Bytes := TEncoding.UTF8.GetBytes(Body);
-      if Length(Bytes) > 0 then
-        FS.WriteBuffer(Bytes[0], Length(Bytes));
+      N := FS.Size;
+      if N > MaxBytes then N := MaxBytes;
+      SetLength(Result, N);
+      if N > 0 then FS.ReadBuffer(Result[0], N);
     finally
       FS.Free;
     end;
-    Result := True;
   except
-    on E: Exception do
-      ErrMsg := 'web_fetch: write failed: ' + E.Message;
+    SetLength(Result, 0);
   end;
+end;
+
+function LooksTextual(const ContentType: string): Boolean;
+begin
+  Result := (Pos('text/', ContentType) = 1) or
+            (Pos('application/json',       ContentType) > 0) or
+            (Pos('application/xml',        ContentType) > 0) or
+            (Pos('application/javascript', ContentType) > 0) or
+            (Pos('application/xhtml',      ContentType) > 0);
 end;
 
 function Tool_WebFetch(const ArgsJSON: string; out ErrMsg: string): string;
@@ -218,6 +230,9 @@ var
   RedirectGuard: TWebFetchRedirectGuard;
   Resp: THTTPResult;
   Headers: array of THeaderPair;
+  FS: TFileStream;
+  Bytes: TBytes;
+  WrittenBytes: Int64;
 begin
   ErrMsg := '';
   Result := '';
@@ -267,6 +282,64 @@ begin
     ErrMsg := '';
   end;
 
+  { save_to: stream bytes straight to disk via the binary-safe wrapper.
+    GetURL returns a UTF-8-decoded string, which mangles non-text
+    payloads (PDFs, images, archives) on the round trip back through
+    TEncoding.UTF8.GetBytes — losing precisely the use case save_to
+    advertises. The receipt + preview are reconstructed from the file
+    so the model still gets a sniffable hint. }
+  if SaveTo <> '' then
+  begin
+    if not EnsureParentDir(SaveTo, ErrMsg) then Exit;
+    RedirectGuard := TWebFetchRedirectGuard.Create;
+    FS := nil;
+    WrittenBytes := 0;
+    try
+      try
+        FS := TFileStream.Create(SaveTo, fmCreate);
+      except
+        on E: Exception do
+        begin
+          ErrMsg := 'web_fetch: write failed: ' + E.Message;
+          Exit;
+        end;
+      end;
+      try
+        Resp := GetURLToStreamGuarded(URL, FS, Headers, 30,
+                                       'Mozilla/5.0 (PasClaw web_fetch)',
+                                       '*/*',
+                                       RedirectGuard.OnRedirect);
+        WrittenBytes := FS.Size;
+      finally
+        FS.Free;
+      end;
+    finally
+      RedirectGuard.Free;
+    end;
+
+    if Resp.ErrorMsg <> '' then
+    begin
+      ErrMsg := 'web_fetch: HTTP error: ' + Resp.ErrorMsg;
+      Exit;
+    end;
+
+    Bytes := ReadPreviewBytes(SaveTo, 200);
+    if (Length(Bytes) > 0) and LooksTextual(Resp.ContentType) then
+      Preview := TEncoding.UTF8.GetString(Bytes)
+    else
+      Preview := '';
+
+    Result := Format('web_fetch: saved %d bytes to %s (status %d, content-type %s)',
+                     [WrittenBytes, SaveTo, Resp.StatusCode, Resp.ContentType]);
+    if Trim(Preview) <> '' then
+      Result := Result + sLineBreak + 'preview: ' + Preview
+    else if not LooksTextual(Resp.ContentType) then
+      Result := Result + sLineBreak + 'preview: (binary content)';
+    LogDebug('web_fetch url=%s bytes_in=%d saved_to=%s',
+             [URL, WrittenBytes, SaveTo]);
+    Exit;
+  end;
+
   RedirectGuard := TWebFetchRedirectGuard.Create;
   try
     Resp := GetURL(URL, Headers, 30,
@@ -280,22 +353,6 @@ begin
   if Resp.ErrorMsg <> '' then
   begin
     ErrMsg := 'web_fetch: HTTP error: ' + Resp.ErrorMsg;
-    Exit;
-  end;
-
-  { save_to path: write full body to disk regardless of content-type
-    (operator already allowed the path via the sandbox), return only
-    a short receipt with a preview. }
-  if SaveTo <> '' then
-  begin
-    if not WriteBodyToFile(SaveTo, Resp.Body, ErrMsg) then Exit;
-    Preview := Copy(Resp.Body, 1, 200);
-    Result := Format('web_fetch: saved %d bytes to %s (status %d, content-type %s)',
-                     [Length(Resp.Body), SaveTo, Resp.StatusCode, Resp.ContentType]);
-    if Trim(Preview) <> '' then
-      Result := Result + sLineBreak + 'preview: ' + Preview;
-    LogDebug('web_fetch url=%s bytes_in=%d saved_to=%s',
-             [URL, Length(Resp.Body), SaveTo]);
     Exit;
   end;
 
@@ -343,7 +400,12 @@ begin
     '},"required":["url"]}';
   T.Handler     := Tool_WebFetch;
   T.IsCore      := True;
-  T.Category    := tcReadOnly;  { HTTP GET only, no shared state }
+  { Mutating because save_to writes to the workspace. Without this the
+    agent scheduler can run a follow-up fs_read in parallel with the
+    in-flight download and observe a half-written file. The plain
+    inlined-text path doesn't touch shared state, but tagging at the
+    tool level (not per-call) is the only signal the registry exposes. }
+  T.Category    := tcMutating;
   R.Register(T);
 end;
 
