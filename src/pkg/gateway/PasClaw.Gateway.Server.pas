@@ -239,11 +239,20 @@ procedure WriteBodyStream(AResp: TIdHTTPResponseInfo; const Body: string);
 var
   Strm: TMemoryStream;
   Bytes: TBytes;
+  Tagged: string;
 begin
   { Indy's ContentText writer on FPC + UTF-8 doesn't always flush a body
     correctly. ContentStream is the reliable path: encode the string to bytes
-    ourselves, hand Indy a TMemoryStream sized in bytes, and let it stream. }
-  Bytes := TEncoding.UTF8.GetBytes(Body);
+    ourselves, hand Indy a TMemoryStream sized in bytes, and let it stream.
+
+    The TagUTF8 call is defence-in-depth: PasClaw.Providers.HTTP already
+    tags response bodies at the boundary, but anywhere a CP_0 string slips
+    through (an unimported source literal, a third-party path we add later)
+    TEncoding.UTF8.GetBytes would double-encode it via the system codepage.
+    Tagging here keeps the wire bytes honest regardless of upstream tag. }
+  Tagged := Body;
+  TagUTF8(Tagged);
+  Bytes := TEncoding.UTF8.GetBytes(Tagged);
   Strm := TMemoryStream.Create;
   if Length(Bytes) > 0 then
     Strm.WriteBuffer(Bytes[0], Length(Bytes));
@@ -1190,10 +1199,18 @@ const
   CRLF: array[0..1] of Byte = (13, 10);
 var
   Payload, Header, Frame: TBytes;
-  HeaderStr: string;
+  HeaderStr, Tagged: string;
   i, Offset: Integer;
 begin
-  Payload := TEncoding.UTF8.GetBytes(Data);
+  { Same FPC retag the body writer does — without it, a CP_0-tagged
+    Data string (e.g. literal SSE control text like 'data: [DONE]'
+    or fragments built across mixed-codepage concatenations) goes
+    through TEncoding.UTF8.GetBytes assuming system codepage and
+    double-encodes any non-ASCII byte. The chunked SSE path bypasses
+    WriteBodyStream entirely, so it needs its own retag. }
+  Tagged := Data;
+  TagUTF8(Tagged);
+  Payload := TEncoding.UTF8.GetBytes(Tagged);
   if Length(Payload) = 0 then Exit;
   (* HTTP/1.1 chunked-transfer chunk: `<hex-length>\r\n<bytes>\r\n`.
      The response header (set by HandleChatCompletions) carries

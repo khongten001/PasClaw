@@ -143,7 +143,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper print-version get-indy webui-res
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag print-version get-indy webui-res
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -232,4 +232,10 @@ test-println-helper: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/println_helper_tests.pas -o$(BUILDDIR)/println_helper_tests
 	@$(BUILDDIR)/println_helper_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper
+# PasClaw.Utils.TagUTF8 — codepage retag at byte-stream boundaries.
+test-utf8-codepage-tag: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/utf8_codepage_tag_tests.pas -o$(BUILDDIR)/utf8_codepage_tag_tests
+	@$(BUILDDIR)/utf8_codepage_tag_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag

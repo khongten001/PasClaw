@@ -89,12 +89,17 @@ end;
 procedure TMemoryLog.WriteLine(const S: string);
 var
   Bytes: TBytes;
+  Tagged: string;
 begin
   if FStream = nil then Exit;
   { Encode UTF-8 bytes explicitly. Writing `Line[1]` directly worked under
     FPC (1-byte AnsiString) but wrote half the bytes under Delphi
-    (2-byte UnicodeString). }
-  Bytes := TEncoding.UTF8.GetBytes(S + #10);
+    (2-byte UnicodeString). TagUTF8 the input under FPC so GetBytes
+    doesn't reinterpret CP_0 bytes through the system codepage and
+    double-encode (see PasClaw.Utils.TagUTF8 doc). }
+  Tagged := S + #10;
+  TagUTF8(Tagged);
+  Bytes := TEncoding.UTF8.GetBytes(Tagged);
   if Length(Bytes) > 0 then
     FStream.WriteBuffer(Bytes[0], Length(Bytes));
 end;
