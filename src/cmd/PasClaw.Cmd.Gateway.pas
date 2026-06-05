@@ -28,6 +28,7 @@ uses
   PasClaw.Tools.Shell,
   PasClaw.Tools.Memory,
   PasClaw.Tools.WebSearch,
+  PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.Vault,
   PasClaw.Tools.Sandbox,
@@ -167,7 +168,10 @@ begin
       RegisterFSTools(Reg, not Args.NoHashline);
       RegisterShellTool(Reg);
       RegisterMemoryTools(Reg);
-      RegisterWebSearchTool(Reg);
+      if HasConfiguredWebSearchProvider(Cfg) then
+        RegisterWebSearchTool(Reg)
+      else
+        LogWebSearchSkipOnce;
       RegisterWebFetchTool(Reg);
       { Off by default — onboarding opt-in flips Cfg.VaultToolsEnabled.
         Without this branch, `pasclaw onboard` could report

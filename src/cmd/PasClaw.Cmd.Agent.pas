@@ -29,6 +29,7 @@ uses
   PasClaw.Tools.Shell,
   PasClaw.Tools.Memory,
   PasClaw.Tools.WebSearch,
+  PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.Vault,
   PasClaw.Tools.ToolLoop,
@@ -146,7 +147,8 @@ begin
 end;
 
 function NewBuiltinRegistry(UseHashline: Boolean = True;
-                            EnableVault: Boolean = False): TToolRegistry;
+                            EnableVault: Boolean = False;
+                            EnableWebSearch: Boolean = False): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -154,7 +156,14 @@ begin
   RegisterFSTools(Result, UseHashline);
   RegisterShellTool(Result);
   RegisterMemoryTools(Result);
-  RegisterWebSearchTool(Result);
+  { web_search registers only when a real provider is configured
+    (Brave / Tavily / Perplexity / Gemini key, or SearXNG base URL).
+    Callers compute the flag via PasClaw.Search.Factory's
+    HasConfiguredWebSearchProvider and pass it here. The DDG scrape
+    fallback is intentionally hidden from the model because DDG's
+    bot-detection wall refuses non-browser TLS fingerprints in 2026. }
+  if EnableWebSearch then RegisterWebSearchTool(Result)
+  else                    LogWebSearchSkipOnce;
   RegisterWebFetchTool(Result);
   { Vault tools register only when explicitly enabled — callers pass
     Cfg.VaultToolsEnabled. Off-by-default per the onboarding opt-in
@@ -300,7 +309,9 @@ begin
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
 
   Reg := nil;
-  if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled);
+  if not A.NoTools then
+    Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
+                              HasConfiguredWebSearchProvider(Cfg));
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
@@ -375,7 +386,9 @@ begin
 
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
   Reg := nil;
-  if not A.NoTools then Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled);
+  if not A.NoTools then
+    Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
+                              HasConfiguredWebSearchProvider(Cfg));
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;

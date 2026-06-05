@@ -26,6 +26,7 @@ uses
   PasClaw.Tools.Shell,
   PasClaw.Tools.Memory,
   PasClaw.Tools.WebSearch,
+  PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.Sandbox,
   PasClaw.MCP.Bridge,
@@ -93,7 +94,10 @@ begin
       RegisterFSTools(Reg, not A.NoHashline);
       RegisterShellTool(Reg);
       RegisterMemoryTools(Reg);
-      RegisterWebSearchTool(Reg);
+      if HasConfiguredWebSearchProvider(Cfg) then
+        RegisterWebSearchTool(Reg)
+      else
+        LogWebSearchSkipOnce;
       RegisterWebFetchTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
