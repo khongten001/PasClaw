@@ -94,6 +94,19 @@
     background:linear-gradient(135deg,rgba(65,17,32,.78),rgba(37,14,25,.72));box-shadow:var(--glow-hot)}
   .toolcall{color:var(--cyan);font-weight:600}
   .toolresult{color:var(--mut);padding-left:1.2rem}
+  /* In-flight indicator inside the assistant bubble — three pulsing dots
+     while we wait for the first SSE delta. textContent = ... naturally
+     overwrites this once content arrives. */
+  .typing{display:inline-flex;gap:.3rem;padding:.15rem 0;align-items:center}
+  .typing span{width:.5rem;height:.5rem;border-radius:50%;
+    background:var(--mag);box-shadow:var(--glow-mag);
+    animation:typingPulse 1.2s ease-in-out infinite}
+  .typing span:nth-child(2){animation-delay:.15s}
+  .typing span:nth-child(3){animation-delay:.3s}
+  @keyframes typingPulse{
+    0%,80%,100%{opacity:.25;transform:scale(.85)}
+    40%{opacity:1;transform:scale(1)}
+  }
   form.send{display:flex;gap:.5rem;margin:0;padding:.6rem;
     border-top:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
   textarea{flex:1;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
@@ -372,6 +385,7 @@ f.addEventListener("submit", async e => {
   m.value = ""; b.disabled = true;
 
   const bub = addLine("a", "");
+  bub.innerHTML = '<span class="typing"><span></span><span></span><span></span></span>';
   let assistantText = "";
 
   /* Use /v1/chat/completions with stream:true so tool calls + results
@@ -424,6 +438,11 @@ f.addEventListener("submit", async e => {
     bub.textContent = String(err);
     bub.parentElement.className = "row e";
   } finally {
+    /* Safety net for streams that close without ever sending a delta —
+       textContent = ... above clears the typing indicator naturally on
+       first content, but a content-less success would otherwise leave
+       the dots pulsing forever. */
+    if (bub.querySelector(".typing")) bub.textContent = "(no response)";
     recordTurn("a", assistantText);
     b.disabled = false;
     m.focus();
