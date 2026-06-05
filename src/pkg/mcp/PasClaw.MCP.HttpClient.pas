@@ -30,6 +30,12 @@ type
   private
     FName, FURL, FAuth: string;
     FNextId: Integer;
+    { Streamable-HTTP session id — issued by the server in the
+      `Mcp-Session-Id` response header on `initialize`, and required
+      back on every subsequent request per the MCP 2025-03-26 spec.
+      Replicate's server returns 400 "Mcp-Session-Id header is
+      required" if we don't echo it on tools/list etc. }
+    FSessionId: string;
     function RoundTrip(const Method, ParamsJSON: string;
                        TimeoutSeconds: Integer; out RespJSON: string): Boolean;
   public
@@ -91,23 +97,44 @@ begin
   end;
 end;
 
+function LookupHeader(const Headers: THeaderPairs; const Name: string): string;
+{ Case-insensitive header lookup. HTTP header names are
+  case-insensitive per RFC 7230 §3.2, and Indy + TNetHTTPClient
+  surface them with whatever case the wire used (Replicate sends
+  "Mcp-Session-Id"; other servers may send "mcp-session-id"). }
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 0 to High(Headers) do
+    if SameText(Headers[i].Name, Name) then
+    begin
+      Result := Headers[i].Value;
+      Exit;
+    end;
+end;
+
 function TMCPHttpClient.RoundTrip(const Method, ParamsJSON: string;
                                   TimeoutSeconds: Integer;
                                   out RespJSON: string): Boolean;
 
   function BuildHeaders(const EffectiveAuth: string): TArray<THeaderPair>;
+  var
+    N: Integer;
   begin
+    N := 1;
+    if EffectiveAuth <> '' then Inc(N);
+    if FSessionId    <> '' then Inc(N);
+    SetLength(Result, N);
+    Result[0] := MakeHeader('Accept', 'application/json, text/event-stream');
+    N := 1;
     if EffectiveAuth <> '' then
     begin
-      SetLength(Result, 2);
-      Result[0] := MakeHeader('Accept', 'application/json, text/event-stream');
-      Result[1] := MakeHeader('Authorization', EffectiveAuth);
-    end
-    else
-    begin
-      SetLength(Result, 1);
-      Result[0] := MakeHeader('Accept', 'application/json, text/event-stream');
+      Result[N] := MakeHeader('Authorization', EffectiveAuth);
+      Inc(N);
     end;
+    if FSessionId <> '' then
+      Result[N] := MakeHeader('Mcp-Session-Id', FSessionId);
   end;
 
   function ResolveAuth: string;
@@ -180,6 +207,13 @@ begin
             [FName, Resp.StatusCode, Copy(Resp.Body, 1, 200)]);
     Exit(False);
   end;
+  { Streamable-HTTP transport: capture the session id the server may
+    have issued on this response. Per MCP 2025-03-26 the server sets
+    it on the initialize response and rotates it at its discretion;
+    we just always-latch the latest value so subsequent RoundTrips
+    echo whatever the server most recently told us to use. }
+  if FSessionId = '' then
+    FSessionId := LookupHeader(Resp.RespHeaders, 'Mcp-Session-Id');
   RespJSON := CollapseSSE(Resp.Body);
   Result := RespJSON <> '';
 end;
