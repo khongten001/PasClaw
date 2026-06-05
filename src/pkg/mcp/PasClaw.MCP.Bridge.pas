@@ -317,6 +317,23 @@ begin
   inherited Destroy;
 end;
 
+{$IFDEF MSWINDOWS}
+{ ole32 imports — declared locally instead of pulling in Windows /
+  Winapi.ActiveX so the bridge stays cross-compiler-friendly. WinHTTP
+  (which System.Net.HttpClient uses under PASCLAW_NETHTTP) needs COM
+  initialised on any thread that issues a request — without it the
+  WinHTTP proxy/cert/cred plumbing can't talk to the OS providers and
+  every request fails with WINHTTP_NAME_NOT_RESOLVED (12007) even
+  though main-thread requests against the same host succeed fine.
+  Indy on FPC doesn't care, but the call is cheap and consistent. }
+const
+  COINIT_MULTITHREADED = $0;
+function CoInitializeEx(pvReserved: Pointer; dwCoInit: LongWord): Integer; stdcall;
+  external 'ole32.dll' name 'CoInitializeEx';
+procedure CoUninitialize; stdcall;
+  external 'ole32.dll' name 'CoUninitialize';
+{$ENDIF}
+
 procedure TMCPLoader.Execute;
 var
   Tools: TMCPToolArray;
@@ -324,6 +341,10 @@ var
   Dispatch: TMCPToolDispatch;
   i: Integer;
 begin
+  {$IFDEF MSWINDOWS}
+  CoInitializeEx(nil, COINIT_MULTITHREADED);
+  try
+  {$ENDIF}
   try
     if IsHttpUrl(FCfg.Cmd) then
       FClient := TMCPHttpClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args)
@@ -375,6 +396,11 @@ begin
       FState.SetFailed(E.Message);
     end;
   end;
+  {$IFDEF MSWINDOWS}
+  finally
+    CoUninitialize;
+  end;
+  {$ENDIF}
 end;
 
 { ============================================================
