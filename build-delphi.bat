@@ -45,7 +45,11 @@ if not exist "build\delphi\%PLATFORM%\%CONFIG%\dcu" mkdir "build\delphi\%PLATFOR
 set "UNIT_PATH=src\cmd;src\pkg\cliui;src\pkg\utils;src\pkg\logger;src\pkg\config;src\pkg\json;src\pkg\providers;src\pkg\tokenizer;src\pkg\tools;src\pkg\mcp;src\pkg\gateway;src\pkg\channels;src\pkg\cron;src\pkg\skills;src\pkg\agent;src\pkg\memory;src\pkg\updater;src\pkg\membench;src\pkg\tui;src\pkg\platform;src\pkg\hashline;src\pkg\component;src\pkg\vendor\dmvcframework"
 
 echo Building %DPR% with dcc64.exe...
-dcc64.exe -B -CC -E"build\delphi\%PLATFORM%\%CONFIG%" -N0"build\delphi\%PLATFORM%\%CONFIG%\dcu" -U"%UNIT_PATH%" -NSSystem;System.Net;System.Win;Xml;Data;Datasnap;Web;Soap;Winapi "%DPR%"
+rem -DPASCLAW_NETHTTP routes outbound HTTP through System.Net.HttpClient
+rem so the Delphi build uses SChannel for TLS instead of needing the
+rem OpenSSL DLLs shipped alongside pasclaw.exe. The .dproj path picks
+rem this up via DCC_Define; the direct-dcc64 path needs it explicitly.
+dcc64.exe -B -CC -E"build\delphi\%PLATFORM%\%CONFIG%" -N0"build\delphi\%PLATFORM%\%CONFIG%\dcu" -U"%UNIT_PATH%" -NSSystem;System.Net;System.Win;Xml;Data;Datasnap;Web;Soap;Winapi -DPASCLAW_NETHTTP "%DPR%"
 if errorlevel 1 (
   echo ERROR: Delphi dcc64 build failed.
   exit /b 1

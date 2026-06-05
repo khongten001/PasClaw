@@ -40,8 +40,6 @@ implementation
 
 uses
   StrUtils,
-  IdHTTP, IdSSLOpenSSL,
-  IdGlobal,
   PasClaw.Logger,
   PasClaw.Providers.HTTP;
 
@@ -186,45 +184,28 @@ const
   SnippetEnd  = '</a>';
 var
   HTML, Body, Block, RawTitle, RawSnippet, Href: string;
-  HTTP: TIdHTTP;
-  SSLHandler: TIdSSLIOHandlerSocketOpenSSL;
+  Resp: THTTPResult;
+  Headers: array of THeaderPair;
   Cursor, HrefStart, HrefEnd, BlockStart, TitleClose: Integer;
   N: Integer;
 begin
   SetLength(Hits, 0);
   ErrMsg := '';
   Result := False;
+  SetLength(Headers, 0);
 
-  HTTP := TIdHTTP.Create(nil);
-  SSLHandler := nil;
-  try
-    HTTP.HandleRedirects := True;
-    HTTP.Request.UserAgent := 'Mozilla/5.0 (PasClaw web_search)';
-    HTTP.Request.Accept := 'text/html';
-    HTTP.ConnectTimeout := 15000;
-    HTTP.ReadTimeout    := 15000;
-    { html.duckduckgo.com is HTTPS-only; Indy needs an SSL IOHandler
-      attached before the POST or it raises
-      "Could not load SSL library" / "no IOHandler for SSL".
-      web_fetch already does this for arbitrary URLs; the
-      zero-config search fallback obviously needs it too. }
-    SSLHandler := TIdSSLIOHandlerSocketOpenSSL.Create(nil);
-    SSLHandler.SSLOptions.SSLVersions := [sslvTLSv1_2];
-    HTTP.IOHandler := SSLHandler;
-    Body := 'q=' + UrlEncode(Query) + '&kl=us-en';
-    try
-      HTML := HTTP.Post('https://html.duckduckgo.com/html/', Body);
-    except
-      on E: Exception do
-      begin
-        ErrMsg := 'duckduckgo: HTTP error: ' + E.Message;
-        Exit;
-      end;
-    end;
-  finally
-    HTTP.Free;
-    if SSLHandler <> nil then SSLHandler.Free;
+  Body := 'q=' + UrlEncode(Query) + '&kl=us-en';
+  Resp := PostRaw('https://html.duckduckgo.com/html/',
+                  'application/x-www-form-urlencoded', Body,
+                  Headers, 15,
+                  'Mozilla/5.0 (PasClaw web_search)',
+                  'text/html');
+  if Resp.ErrorMsg <> '' then
+  begin
+    ErrMsg := 'duckduckgo: HTTP error: ' + Resp.ErrorMsg;
+    Exit;
   end;
+  HTML := Resp.Body;
 
   if Trim(HTML) = '' then
   begin

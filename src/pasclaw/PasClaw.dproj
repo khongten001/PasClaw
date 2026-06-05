@@ -81,6 +81,16 @@
         -->
         <DCC_Namespace>System;System.Net;System.Win;Xml;Data;Datasnap;Web;Soap;Winapi;Posix;$(DCC_Namespace)</DCC_Namespace>
         <DCC_UnitAlias>WinTypes=Winapi.Windows;WinProcs=Winapi.Windows;$(DCC_UnitAlias)</DCC_UnitAlias>
+        <!--
+          Route outbound HTTP through System.Net.HttpClient (THTTPClient)
+          instead of Indy under Delphi. SChannel handles TLS on Windows
+          so users don't need libeay32.dll / ssleay32.dll alongside the
+          exe. Defined in the Base group so every Platform × Config
+          inherits it. To switch back to Indy for cross-checking,
+          delete this DCC_Define line — FPC ignores PASCLAW_NETHTTP
+          regardless (TNetHTTPClient doesn't exist there).
+        -->
+        <DCC_Define>PASCLAW_NETHTTP;$(DCC_Define)</DCC_Define>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base_Win32)'!=''">
         <DCC_UsePackage>vcl;rtl;$(DCC_UsePackage)</DCC_UsePackage>
