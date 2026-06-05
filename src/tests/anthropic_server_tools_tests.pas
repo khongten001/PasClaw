@@ -1,0 +1,140 @@
+program anthropic_server_tools_tests;
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
+{$H+}
+
+uses
+  SysUtils,
+  PasClaw.Providers.Types,
+  PasClaw.Providers.Anthropic;
+
+procedure Fail(const Msg, Body: string);
+begin
+  Writeln('FAIL: ' + Msg);
+  Writeln('--- body ---');
+  Writeln(Body);
+  Halt(1);
+end;
+
+procedure AssertContains(const Haystack, Needle, Msg: string);
+begin
+  if Pos(Needle, Haystack) = 0 then
+    Fail(Msg + ' (expected to find: ' + Needle + ')', Haystack);
+end;
+
+procedure AssertMissing(const Haystack, Needle, Msg: string);
+begin
+  if Pos(Needle, Haystack) > 0 then
+    Fail(Msg + ' (did NOT expect: ' + Needle + ')', Haystack);
+end;
+
+function OneUserMessage(const Text: string): TMessageArray;
+begin
+  SetLength(Result, 1);
+  Result[0] := MakeMessage(mrUser, Text);
+end;
+
+function NoUserTools: TToolDefinitionArray;
+begin
+  SetLength(Result, 0);
+end;
+
+function UserTool(const Name, Desc, Schema: string): TToolDefinition;
+begin
+  Result.Name        := Name;
+  Result.Description := Desc;
+  Result.Schema      := Schema;
+end;
+
+procedure TestNoServerTools;
+var
+  Opts: TChatOptions;
+  Body: string;
+begin
+  Opts := DefaultChatOptions;
+  Opts.CacheEnabled := False;
+  Body := BuildRequest(OneUserMessage('hi'), NoUserTools, 'claude-opus-4-7',
+                       Opts, NoAnthropicServerTools);
+  AssertMissing(Body, '"web_search_20260209"', 'no server tools by default');
+  AssertMissing(Body, '"web_fetch_20260209"',  'no server tools by default');
+  AssertMissing(Body, '"tools"',               'no tools key when nothing registered');
+end;
+
+procedure TestServerWebSearchOnly;
+var
+  Opts: TChatOptions;
+  Body: string;
+  ST: TAnthropicServerTools;
+begin
+  Opts := DefaultChatOptions;
+  Opts.CacheEnabled := False;
+  ST := NoAnthropicServerTools;
+  ST.WebSearch := True;
+
+  Body := BuildRequest(OneUserMessage('hi'), NoUserTools, 'claude-opus-4-7',
+                       Opts, ST);
+  AssertContains(Body, '"tools"',                'tools array emitted');
+  AssertContains(Body, '"type" : "web_search_20260209"', 'web_search type id');
+  AssertContains(Body, '"name" : "web_search"',    'web_search name');
+  AssertMissing(Body, '"web_fetch_20260209"',    'web_fetch off when not enabled');
+  AssertMissing(Body, '"max_uses"',              'no max_uses when unset');
+end;
+
+procedure TestServerToolsBoth;
+var
+  Opts: TChatOptions;
+  Body: string;
+  ST: TAnthropicServerTools;
+begin
+  Opts := DefaultChatOptions;
+  Opts.CacheEnabled := False;
+  ST := NoAnthropicServerTools;
+  ST.WebSearch        := True;
+  ST.WebSearchMaxUses := 3;
+  ST.WebFetch         := True;
+  ST.WebFetchMaxUses  := 5;
+
+  Body := BuildRequest(OneUserMessage('hi'), NoUserTools, 'claude-opus-4-7',
+                       Opts, ST);
+  AssertContains(Body, '"type" : "web_search_20260209"', 'web_search type id');
+  AssertContains(Body, '"type" : "web_fetch_20260209"',  'web_fetch type id');
+  AssertContains(Body, '"max_uses" : 3',                  'web_search max_uses');
+  AssertContains(Body, '"max_uses" : 5',                  'web_fetch max_uses');
+end;
+
+procedure TestUserToolNameCollisionDropped;
+var
+  Opts: TChatOptions;
+  Body: string;
+  ST: TAnthropicServerTools;
+  Tools: TToolDefinitionArray;
+begin
+  Opts := DefaultChatOptions;
+  Opts.CacheEnabled := False;
+  ST := NoAnthropicServerTools;
+  ST.WebSearch := True;
+  ST.WebFetch  := True;
+
+  SetLength(Tools, 3);
+  Tools[0] := UserTool('fs_read',    'read a file', '{"type":"object"}');
+  Tools[1] := UserTool('web_search', 'should be dropped', '{"type":"object"}');
+  Tools[2] := UserTool('web_fetch',  'should be dropped', '{"type":"object"}');
+
+  Body := BuildRequest(OneUserMessage('hi'), Tools, 'claude-opus-4-7',
+                       Opts, ST);
+  { fs_read survives, the colliders are dropped, the server entries
+    take their place. The "should be dropped" description proves the
+    user entry was removed — Anthropic would otherwise see two tools
+    named "web_search" and 400. }
+  AssertContains(Body, '"name" : "fs_read"',           'non-colliding user tool kept');
+  AssertContains(Body, '"type" : "web_search_20260209"', 'server web_search emitted');
+  AssertContains(Body, '"type" : "web_fetch_20260209"',  'server web_fetch emitted');
+  AssertMissing(Body, 'should be dropped',           'colliding user tools dropped');
+end;
+
+begin
+  TestNoServerTools;
+  TestServerWebSearchOnly;
+  TestServerToolsBoth;
+  TestUserToolNameCollisionDropped;
+  Writeln('anthropic_server_tools_tests: OK');
+end.

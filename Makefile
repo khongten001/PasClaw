@@ -143,7 +143,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview print-version get-indy webui-res
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools print-version get-indy webui-res
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -214,4 +214,10 @@ test-toolview: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/toolview_tests.pas -o$(BUILDDIR)/toolview_tests
 	@$(BUILDDIR)/toolview_tests
 
-test: smoke test-hashline test-toolview
+# Anthropic provider — server-side web_search / web_fetch wire shape.
+test-anthropic-server-tools: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/anthropic_server_tools_tests.pas -o$(BUILDDIR)/anthropic_server_tools_tests
+	@$(BUILDDIR)/anthropic_server_tools_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools

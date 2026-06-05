@@ -18,13 +18,28 @@ uses
   PasClaw.Providers.Intf;
 
 type
+  (* Opt-in toggles for Anthropic-side server tools. Mirrors
+     PasClaw.Config.TAnthropicServerToolsConfig — kept in this unit so
+     PasClaw.Providers.Anthropic doesn't have to USE the config unit
+     (the providers/config dependency direction is currently
+     config → providers, and inverting that would pull TConfig into
+     every provider unit test). *)
+  TAnthropicServerTools = record
+    WebSearch:        Boolean;
+    WebSearchMaxUses: Integer;
+    WebFetch:         Boolean;
+    WebFetchMaxUses:  Integer;
+  end;
+
   TAnthropicProvider = class(TInterfacedObject, ILLMProvider)
   private
     FAPIKey:  string;
     FAPIBase: string;
     FDefaultModel: string;
+    FServerTools: TAnthropicServerTools;
   public
-    constructor Create(const APIKey, APIBase, DefaultModel: string);
+    constructor Create(const APIKey, APIBase, DefaultModel: string;
+                       const ServerTools: TAnthropicServerTools);
     function Chat(const Messages: array of TMessage;
                   const Tools:    array of TToolDefinition;
                   const Model:    string;
@@ -41,13 +56,25 @@ type
     function SupportsStreaming: Boolean;
   end;
 
+{ Default-initialised TAnthropicServerTools (everything off). Use in
+  tests / embedders that don't care about the server-tool surface. }
+function NoAnthropicServerTools: TAnthropicServerTools;
+
 { Exposed so tests + embedders can render the wire body without
   hitting the network. Pure function; doesn't depend on the provider
-  instance. Same code path Chat / ChatStream execute. }
+  instance. Same code path Chat / ChatStream execute.
+
+  ServerTools.WebSearch / WebFetch append the corresponding
+  Anthropic server-side tool entries (web_search_20260209 /
+  web_fetch_20260209) to the tools array. When a server tool is
+  active, any caller-supplied tool with a colliding name (web_search,
+  web_fetch) is silently dropped so the request doesn't 400 with
+  "tools[*].name: duplicate". }
 function BuildRequest(const Messages: array of TMessage;
                       const Tools:    array of TToolDefinition;
                       const Model:    string;
-                      const Options:  TChatOptions): string;
+                      const Options:  TChatOptions;
+                      const ServerTools: TAnthropicServerTools): string;
 
 implementation
 
@@ -57,12 +84,22 @@ uses
   PasClaw.Providers.Stream,
   PasClaw.Logger;
 
-constructor TAnthropicProvider.Create(const APIKey, APIBase, DefaultModel: string);
+function NoAnthropicServerTools: TAnthropicServerTools;
+begin
+  Result.WebSearch        := False;
+  Result.WebSearchMaxUses := 0;
+  Result.WebFetch         := False;
+  Result.WebFetchMaxUses  := 0;
+end;
+
+constructor TAnthropicProvider.Create(const APIKey, APIBase, DefaultModel: string;
+                                      const ServerTools: TAnthropicServerTools);
 begin
   inherited Create;
   FAPIKey := APIKey;
   if APIBase <> '' then FAPIBase := APIBase else FAPIBase := 'https://api.anthropic.com';
   if DefaultModel <> '' then FDefaultModel := DefaultModel else FDefaultModel := 'claude-opus-4-7';
+  FServerTools := ServerTools;
 end;
 
 function TAnthropicProvider.GetDefaultModel: string;
@@ -112,14 +149,43 @@ begin
   if TTL = '1h' then Result.PutStr('ttl', '1h');
 end;
 
+function ServerToolCollides(const Name: string;
+                            const ServerTools: TAnthropicServerTools): Boolean;
+{ True iff Name is one of the user-tool names that would duplicate a
+  server-side tool we're about to emit. Anthropic rejects a tools
+  array with two entries sharing a name; we drop the user entry in
+  favour of the server-side one (Claude runs the latter on its own
+  infrastructure, no round-trip needed). }
+begin
+  Result := (ServerTools.WebSearch and SameText(Name, 'web_search'))
+         or (ServerTools.WebFetch  and SameText(Name, 'web_fetch'));
+end;
+
+function CountEffectiveTools(const Tools: array of TToolDefinition;
+                              const ServerTools: TAnthropicServerTools): Integer;
+{ How many user tools survive the collision filter, plus the server
+  tools that will be appended. Used to pick the last-tool index for
+  the cache_control breakpoint. }
+var
+  i: Integer;
+begin
+  Result := 0;
+  for i := 0 to High(Tools) do
+    if not ServerToolCollides(Tools[i].Name, ServerTools) then
+      Inc(Result);
+  if ServerTools.WebSearch then Inc(Result);
+  if ServerTools.WebFetch  then Inc(Result);
+end;
+
 function BuildRequest(const Messages: array of TMessage;
                       const Tools:    array of TToolDefinition;
                       const Model:    string;
-                      const Options:  TChatOptions): string;
+                      const Options:  TChatOptions;
+                      const ServerTools: TAnthropicServerTools): string;
 var
   Root, Block, ToolObj, Thinking, Msg, EmptyInput, SysBlock, CC: TJsonObject;
   MsgArr, ToolArr, ContentArr, SysArr: TJsonArray;
-  i, j: Integer;
+  i, j, Emitted, LastIdx: Integer;
   Sys: string;
 begin
   Root := TJsonObject.Create;
@@ -218,11 +284,20 @@ begin
     end;
     Root.PutArray('messages', MsgArr);
 
-    if Length(Tools) > 0 then
+    if (Length(Tools) > 0) or ServerTools.WebSearch or ServerTools.WebFetch then
     begin
       ToolArr := TJsonArray.Create;
+      LastIdx := CountEffectiveTools(Tools, ServerTools) - 1;
+      Emitted := 0;
       for i := 0 to High(Tools) do
       begin
+        { When Cfg flips on a server-side equivalent, suppress the
+          user-registered tool with the same name. Two entries called
+          "web_search" in the tools array would 400 with "duplicate
+          tool name"; we keep the server-side one (Claude executes it
+          on Anthropic's infrastructure, no round-trip via PasClaw). }
+        if ServerToolCollides(Tools[i].Name, ServerTools) then Continue;
+
         ToolObj := TJsonObject.Create;
         ToolObj.PutStr('name', Tools[i].Name);
         if Tools[i].Description <> '' then ToolObj.PutStr('description', Tools[i].Description);
@@ -233,20 +308,59 @@ begin
           EmptyInput := TJsonObject.Create;
           ToolObj.PutObject('input_schema', EmptyInput);
         end;
-        { Tag the LAST tool entry with cache_control — Anthropic
-          caches up to and including the tagged block, so a single
-          breakpoint on the trailing tool covers the entire tools
-          array as a stable prefix. Combined with the system-prompt
-          breakpoint above we use 2 of Anthropic's 4-breakpoint
-          budget; the remaining two are reserved for compaction
-          summaries or higher-layer hints later. }
-        if Options.CacheEnabled and (i = High(Tools)) then
+        { Tag the LAST effective tool entry with cache_control —
+          Anthropic caches up to and including the tagged block, so
+          a single breakpoint on the trailing tool covers the entire
+          tools array as a stable prefix. Combined with the
+          system-prompt breakpoint above we use 2 of Anthropic's
+          4-breakpoint budget; the remaining two are reserved for
+          compaction summaries or higher-layer hints later. }
+        if Options.CacheEnabled and (Emitted = LastIdx) then
         begin
           CC := MakeCacheControl(Options.CacheTTL);
           ToolObj.PutObject('cache_control', CC);
         end;
         ToolArr.AddObject(ToolObj);
+        Inc(Emitted);
       end;
+
+      { Server-side tools — Claude executes web_search / web_fetch on
+        Anthropic's infrastructure. The tool entries are versioned
+        type strings, not the user-tool name+input_schema shape; no
+        beta header is required for the _20260209 versions. Dynamic
+        filtering of search results activates automatically.
+        See: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview }
+      if ServerTools.WebSearch then
+      begin
+        ToolObj := TJsonObject.Create;
+        ToolObj.PutStr('type', 'web_search_20260209');
+        ToolObj.PutStr('name', 'web_search');
+        if ServerTools.WebSearchMaxUses > 0 then
+          ToolObj.PutInt('max_uses', ServerTools.WebSearchMaxUses);
+        if Options.CacheEnabled and (Emitted = LastIdx) then
+        begin
+          CC := MakeCacheControl(Options.CacheTTL);
+          ToolObj.PutObject('cache_control', CC);
+        end;
+        ToolArr.AddObject(ToolObj);
+        Inc(Emitted);
+      end;
+      if ServerTools.WebFetch then
+      begin
+        ToolObj := TJsonObject.Create;
+        ToolObj.PutStr('type', 'web_fetch_20260209');
+        ToolObj.PutStr('name', 'web_fetch');
+        if ServerTools.WebFetchMaxUses > 0 then
+          ToolObj.PutInt('max_uses', ServerTools.WebFetchMaxUses);
+        if Options.CacheEnabled and (Emitted = LastIdx) then
+        begin
+          CC := MakeCacheControl(Options.CacheTTL);
+          ToolObj.PutObject('cache_control', CC);
+        end;
+        ToolArr.AddObject(ToolObj);
+        Inc(Emitted);
+      end;
+
       Root.PutArray('tools', ToolArr);
 
       (* tool_choice mapping (Anthropic Messages API):
@@ -374,7 +488,7 @@ var
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1/messages';
-  Body := BuildRequest(Messages, Tools, UseModel, Options);
+  Body := BuildRequest(Messages, Tools, UseModel, Options, FServerTools);
 
   SetLength(Headers, 2);
   Headers[0] := MakeHeader('x-api-key',          FAPIKey);
@@ -556,7 +670,7 @@ begin
   { Force stream:true in the request body. }
   Opts := Options;
   Opts.Stream := True;
-  Body := BuildRequest(Messages, Tools, UseModel, Opts);
+  Body := BuildRequest(Messages, Tools, UseModel, Opts, FServerTools);
   Root := TJsonObject.Parse(Body);
   if Root = nil then
   begin
