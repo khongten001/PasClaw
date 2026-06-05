@@ -60,6 +60,13 @@ type
     AuthEndpoint: string;
     TokenEndpoint: string;
     RegEndpoint:  string;
+    { Canonical resource URI from the protected-resource metadata.
+      Sent as the RFC 8707 `resource` parameter on every /authorize
+      and /token call so the issued access token is audience-scoped
+      to the MCP server. Without it Replicate's auth server hands
+      back a token whose MCP endpoint rejects as "Invalid token
+      format" — the symptom that motivated PR #138. }
+    Resource:     string;
   end;
 
 { Run the full interactive flow for ServerName (the MCP entry name,
@@ -215,6 +222,7 @@ begin
       Tok.AuthEndpoint   := Obj.GetStr('auth_endpoint',  '');
       Tok.TokenEndpoint  := Obj.GetStr('token_endpoint', '');
       Tok.RegEndpoint    := Obj.GetStr('reg_endpoint',   '');
+      Tok.Resource       := Obj.GetStr('resource',       '');
       Tok.ExpiresAtUnix  := Obj.GetInt('expires_at_unix', 0);
     finally
       Obj.Free;
@@ -245,6 +253,7 @@ begin
     Obj.PutStr('auth_endpoint',  Tok.AuthEndpoint);
     Obj.PutStr('token_endpoint', Tok.TokenEndpoint);
     Obj.PutStr('reg_endpoint',   Tok.RegEndpoint);
+    Obj.PutStr('resource',       Tok.Resource);
     if Tok.ExpiresAtUnix > 0 then
       Obj.PutInt('expires_at_unix', Tok.ExpiresAtUnix);
     L := TStringList.Create;
@@ -328,7 +337,8 @@ begin
 end;
 
 function DiscoverEndpoints(const ServerURL: string;
-                           out AuthEndpoint, TokenEndpoint, RegEndpoint, Issuer: string;
+                           out AuthEndpoint, TokenEndpoint, RegEndpoint,
+                               Issuer, Resource: string;
                            out ErrMsg: string): Boolean;
 var
   Urls: TArray<string>;
@@ -345,6 +355,7 @@ begin
   TokenEndpoint := '';
   RegEndpoint   := '';
   Issuer        := '';
+  Resource      := '';
   SetLength(Empty, 0);
 
   Urls := ProtectedResourceMetadataURLs(ServerURL);
@@ -377,6 +388,10 @@ begin
     Exit;
   end;
   try
+    { Canonical resource URI — RFC 9728 §3.2. Fall back to the
+      MCP server URL if absent so we always have something to feed
+      RFC 8707; Replicate populates it as e.g. "https://mcp.replicate.com/". }
+    Resource := Obj.GetStr('resource', ServerURL);
     AuthServers := Obj.ChildArray('authorization_servers');
     if (AuthServers <> nil) and (AuthServers.Count > 0) then
     try
@@ -619,17 +634,42 @@ end;
 
 { ---------- Browser open ------------------------------------------ }
 
+{$IFDEF MSWINDOWS}
+{ Direct ShellExecuteW import — going through `cmd /C start ...`
+  mangles every percent-encoded character in the authorize URL
+  because cmd interprets `%NAME%` (and even partial `%NN` runs in
+  some parsing modes) as environment-variable expansion. Codex
+  caught this on PR #138 after the original cmd-nesting fix. Using
+  the Windows shell API directly skips cmd entirely. }
+const
+  SW_SHOWNORMAL_ = 1;
+function ShellExecuteW(hwnd: NativeUInt;
+                       lpOperation, lpFile, lpParameters, lpDirectory: PWideChar;
+                       nShowCmd: Integer): NativeUInt; stdcall;
+  external 'shell32.dll' name 'ShellExecuteW';
+{$ENDIF}
+
 procedure OpenBrowser(const URL: string);
+{$IFDEF MSWINDOWS}
+var
+  Rc: NativeUInt;
+  UrlW: UnicodeString;
+begin
+  UrlW := UnicodeString(URL);
+  Rc := ShellExecuteW(0, 'open', PWideChar(UrlW), nil, nil, SW_SHOWNORMAL_);
+  if Rc <= 32 then
+    LogWarn('OAuth: ShellExecuteW failed (rc=%d); paste this URL manually: %s',
+            [Integer(Rc), URL]);
+end;
+{$ELSE}
 var
   Cmd, Discard: string;
 begin
-  {$IFDEF MSWINDOWS}
-  Cmd := 'cmd /c start "" "' + URL + '"';
-  {$ELSE}{$IFDEF DARWIN}
+  {$IFDEF DARWIN}
   Cmd := 'open ' + '"' + URL + '"';
   {$ELSE}
   Cmd := 'xdg-open ' + '"' + URL + '"';
-  {$ENDIF}{$ENDIF}
+  {$ENDIF}
   try
     RunOneShot(Cmd, Discard);
   except
@@ -638,6 +678,7 @@ begin
               [E.Message, URL]);
   end;
 end;
+{$ENDIF}
 
 { ---------- Token endpoint POST ----------------------------------- }
 
@@ -700,7 +741,7 @@ end;
 function RunOAuthFlow(const ServerName, ServerURL: string;
                       out ErrMsg: string): Boolean;
 var
-  Auth, TokenEp, RegEp, Issuer: string;
+  Auth, TokenEp, RegEp, Issuer, Resource: string;
   NewTok: TOAuthTokens;
   ClientId, Verifier, Challenge, State, RedirectURI: string;
   VerBytes, ChalBytes, StateBytesB: TBytes;
@@ -712,7 +753,7 @@ begin
   Result := False;
   ErrMsg := '';
 
-  if not DiscoverEndpoints(ServerURL, Auth, TokenEp, RegEp, Issuer, ErrMsg) then
+  if not DiscoverEndpoints(ServerURL, Auth, TokenEp, RegEp, Issuer, Resource, ErrMsg) then
     Exit;
 
   Server := TLoopbackServer.Create;
@@ -748,6 +789,12 @@ begin
       '&state='         + FormEncode(State) +
       '&code_challenge=' + FormEncode(Challenge) +
       '&code_challenge_method=S256';
+    { RFC 8707 + MCP Authorization spec: pin the access token to
+      the MCP resource so the protected resource accepts it. Without
+      this Replicate's auth server hands back a token whose
+      /mcp endpoint rejects with "Invalid token format". }
+    if Resource <> '' then
+      AuthorizeURL := AuthorizeURL + '&resource=' + FormEncode(Resource);
 
     WriteLn('Opening browser to authorize PasClaw with ', ServerName, ':');
     WriteLn('  ', AuthorizeURL);
@@ -772,6 +819,8 @@ begin
       '&redirect_uri='  + FormEncode(RedirectURI) +
       '&client_id='     + FormEncode(ClientId) +
       '&code_verifier=' + FormEncode(Verifier);
+    if Resource <> '' then
+      Form := Form + '&resource=' + FormEncode(Resource);
 
     if not PostToken(TokenEp, Form, RespBody, Status, ErrMsg) then
     begin
@@ -786,6 +835,7 @@ begin
     NewTok.AuthEndpoint  := Auth;
     NewTok.TokenEndpoint := TokenEp;
     NewTok.RegEndpoint   := RegEp;
+    NewTok.Resource      := Resource;
     if not ParseTokenResponse(RespBody, NewTok, ErrMsg) then Exit;
 
     SaveTokens(ServerName, NewTok);
@@ -817,6 +867,10 @@ begin
     'grant_type=refresh_token' +
     '&refresh_token=' + FormEncode(Tok.RefreshToken) +
     '&client_id='     + FormEncode(Tok.ClientId);
+  { Keep the refreshed token scoped to the same resource as the
+    original — same RFC 8707 requirement applies. }
+  if Tok.Resource <> '' then
+    Form := Form + '&resource=' + FormEncode(Tok.Resource);
   if not PostToken(Tok.TokenEndpoint, Form, RespBody, Status, ErrMsg) then
   begin
     if ErrMsg = '' then
