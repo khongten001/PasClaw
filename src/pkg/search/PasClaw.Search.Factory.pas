@@ -91,17 +91,25 @@ begin
   ErrMsg := '';
   Kind := LowerCase(Trim(Cfg.WebSearch.Provider));
 
-  if (Kind = '') or (Kind = 'duckduckgo') or (Kind = 'ddg') then
+  if Kind = '' then
   begin
     { Auto-detect a real provider from env keys before falling all
-      the way back to DDG. The DDG-scrape fallback is only useful
-      when nothing else is configured. }
+      the way back to DDG. Only fires when the operator hasn't named
+      a provider — explicit "duckduckgo"/"ddg" below is respected
+      verbatim so a paid env key (left over from another tool's
+      config) can't silently hijack searches the operator meant to
+      send to DDG. Codex P2 on PR #143. }
     Kind := AutoDetectFromEnv;
     if Kind = '' then
     begin
       Result := NewDuckDuckGoProvider;
       Exit;
     end;
+  end
+  else if (Kind = 'duckduckgo') or (Kind = 'ddg') then
+  begin
+    Result := NewDuckDuckGoProvider;
+    Exit;
   end;
 
   if Kind = 'brave' then
@@ -223,11 +231,19 @@ begin
   if Kind = 'searxng' then
     Exit(Cfg.WebSearch.BaseURL <> '');
 
-  { Empty/DDG provider: fall back to "does the operator have any
+  { Empty provider: fall back to "does the operator have any
     auto-detectable env key set?". Without that, the only real
     option is the DDG scrape, which we've decided not to expose. }
-  if (Kind = '') or (Kind = 'duckduckgo') or (Kind = 'ddg') then
+  if Kind = '' then
     Exit(AutoDetectFromEnv <> '');
+
+  { Explicit 'duckduckgo'/'ddg': the operator chose the broken-
+    by-bot-wall scrape backend deliberately. Don't second-guess
+    them by sending requests to whatever paid key happens to be in
+    the env — and don't register the tool either, since DDG won't
+    deliver results. Codex P2 on PR #143. }
+  if (Kind = 'duckduckgo') or (Kind = 'ddg') then
+    Exit(False);
 
   { Unknown Kind — the factory logs a warning and falls back to DDG,
     so for the gate decision treat it as "not configured". }
