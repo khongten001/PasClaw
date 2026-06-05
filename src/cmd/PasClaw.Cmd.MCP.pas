@@ -16,11 +16,12 @@ uses
   PasClaw.MCP.StdioClient,
   PasClaw.MCP.HttpClient,
   PasClaw.MCP.Catalog,
-  PasClaw.MCP.Hub;
+  PasClaw.MCP.Hub,
+  PasClaw.MCP.OAuth;
 
 procedure Help;
 begin
-  WriteLn('Usage: pasclaw mcp <list|add|remove|test|edit|show|catalog|search|install> [args]');
+  WriteLn('Usage: pasclaw mcp <list|add|remove|test|edit|show|catalog|search|install|auth> [args]');
   WriteLn('  add <name> <cmd> [args]   register a new MCP server');
   WriteLn('  remove <name>             delete an MCP server entry');
   WriteLn('  list                      list configured servers');
@@ -31,6 +32,8 @@ begin
   WriteLn('                            falls back to built-in 5 when offline)');
   WriteLn('  search <query>            search pasclaw.dev MCP registry');
   WriteLn('  install <name>            add from hub or catalog (reads auth from env)');
+  WriteLn('  auth <name>               run the OAuth 2.1 + PKCE flow for an OAuth-only');
+  WriteLn('                            MCP server (opens browser, captures callback)');
 end;
 
 function DoList: Integer;
@@ -315,18 +318,35 @@ begin
   else
     WriteLn(Ansi.Dim, '  resolved from pasclaw.dev hub', Ansi.Reset);
 
-  AuthOk := ResolveAuthHeader(Entry, HeaderVal, EnvSet);
-  if (Entry.EnvVar <> '') and (not EnvSet) then
+  { OAuth-only servers (Replicate today) install with no header — the
+    HTTP client reads the on-disk token store at request time. Prompt
+    the user to run `mcp auth` so the next test/serve has a token. }
+  if Entry.RequiresOAuth then
   begin
-    WriteLn(Ansi.Yellow, '! ', Ansi.Reset, 'env var ', Entry.EnvVar,
-            ' is not set. Installing anyway with an empty Authorization');
-    WriteLn('  header — set ', Entry.EnvVar,
-            ' and re-run `pasclaw mcp install ', Entry.Name, '` to refresh it,');
-    WriteLn('  or run `pasclaw mcp edit` to drop in the token by hand.');
     HeaderVal := '';
+    if HasStoredTokens(Entry.Name) then
+      WriteLn(Ansi.Dim, '  using existing OAuth tokens at ',
+              OAuthTokenPath(Entry.Name), Ansi.Reset)
+    else
+      WriteLn(Ansi.Yellow, '! ', Ansi.Reset,
+              'OAuth required — run `pasclaw mcp auth ', Entry.Name,
+              '` to authorize.');
   end
-  else if AuthOk and (HeaderVal <> '') then
-    WriteLn(Ansi.Dim, '  using ', Entry.EnvVar, ' from environment', Ansi.Reset);
+  else
+  begin
+    AuthOk := ResolveAuthHeader(Entry, HeaderVal, EnvSet);
+    if (Entry.EnvVar <> '') and (not EnvSet) then
+    begin
+      WriteLn(Ansi.Yellow, '! ', Ansi.Reset, 'env var ', Entry.EnvVar,
+              ' is not set. Installing anyway with an empty Authorization');
+      WriteLn('  header — set ', Entry.EnvVar,
+              ' and re-run `pasclaw mcp install ', Entry.Name, '` to refresh it,');
+      WriteLn('  or run `pasclaw mcp edit` to drop in the token by hand.');
+      HeaderVal := '';
+    end
+    else if AuthOk and (HeaderVal <> '') then
+      WriteLn(Ansi.Dim, '  using ', Entry.EnvVar, ' from environment', Ansi.Reset);
+  end;
 
   Cfg := LoadConfig;
   try
@@ -360,6 +380,58 @@ begin
   end;
 end;
 
+function DoAuth(const Argv: array of string): Integer;
+{ pasclaw mcp auth <name>  — run OAuth 2.1 + PKCE against the
+  authorization server the configured MCP server advertises. The
+  resulting tokens land in <home>/oauth/<name>.json; the HTTP MCP
+  client picks them up automatically on the next request. }
+var
+  Cfg: TConfig;
+  i: Integer;
+  URL, ErrMsg: string;
+begin
+  if Length(Argv) < 2 then begin Help; Exit(1); end;
+  Cfg := LoadConfig;
+  try
+    URL := '';
+    for i := 0 to High(Cfg.MCPServers) do
+      if SameText(Cfg.MCPServers[i].Name, Argv[1]) then
+      begin
+        URL := Cfg.MCPServers[i].Cmd;
+        Break;
+      end;
+    if URL = '' then
+    begin
+      WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'no such MCP server: ', Argv[1]);
+      WriteLn(Ansi.Dim, '  install it first with: ', Ansi.Reset,
+              Ansi.Bold, 'pasclaw mcp install ', Argv[1], Ansi.Reset);
+      Exit(1);
+    end;
+    if not IsHttpUrl(URL) then
+    begin
+      WriteLn(Ansi.Red, '✗ ', Ansi.Reset,
+              'OAuth flow only applies to HTTP MCP servers; ', Argv[1],
+              ' is ', URL);
+      Exit(1);
+    end;
+  finally
+    Cfg.Free;
+  end;
+
+  if RunOAuthFlow(Argv[1], URL, ErrMsg) then
+  begin
+    WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'authorized ', Argv[1],
+            ' — tokens written to ', OAuthTokenPath(Argv[1]));
+    WriteLn('  Try it: ', Ansi.Bold, 'pasclaw mcp test ', Argv[1], Ansi.Reset);
+    Result := 0;
+  end
+  else
+  begin
+    WriteLn(Ansi.Red, '✗ ', Ansi.Reset, 'OAuth flow failed: ', ErrMsg);
+    Result := 1;
+  end;
+end;
+
 function Cmd_MCP_Run(const Argv: array of string): Integer;
 var
   Sub: string;
@@ -375,6 +447,7 @@ begin
   else if Sub = 'catalog' then Result := DoCatalog
   else if Sub = 'search'  then Result := DoSearch(Argv)
   else if Sub = 'install' then Result := DoInstall(Argv)
+  else if Sub = 'auth'    then Result := DoAuth(Argv)
   else begin Help; Result := 1; end;
 end;
 

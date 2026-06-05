@@ -39,16 +39,24 @@ interface
 
 type
   TMCPCatalogEntry = record
-    Name:    string;   { kebab-case identifier; what the user types }
-    URL:     string;   { remote MCP endpoint (http:// or https://) }
-    EnvVar:  string;   { env var holding the bearer token; '' if no auth }
-    AuthFmt: string;   { Authorization-header value template, e.g. "Bearer %s".
-                         Empty when no auth. Catalog install reads
-                         GetEnvironmentVariable(EnvVar) and substitutes
-                         it into AuthFmt to produce the literal header
-                         the HTTP MCP client stores in the args slot. }
-    Desc:    string;   { one-liner shown by `pasclaw mcp catalog` }
-    Docs:    string;   { url for the user to learn more }
+    Name:          string; { kebab-case identifier; what the user types }
+    URL:           string; { remote MCP endpoint (http:// or https://) }
+    EnvVar:        string; { env var holding the bearer token; '' if no auth
+                             and '' for OAuth servers — see RequiresOAuth }
+    AuthFmt:       string; { Authorization-header value template, e.g. "Bearer %s".
+                             Empty when no auth. Catalog install reads
+                             GetEnvironmentVariable(EnvVar) and substitutes
+                             it into AuthFmt to produce the literal header
+                             the HTTP MCP client stores in the args slot. }
+    RequiresOAuth: Boolean;{ True when the remote uses OAuth 2.1 (MCP
+                             Authorization spec — discovery + PKCE + dynamic
+                             client registration). `mcp install` writes the
+                             entry with no header and prints a hint to run
+                             `pasclaw mcp auth <name>`; the HTTP client
+                             reads the resulting access token from the
+                             on-disk token store. Replicate is the v1 case. }
+    Desc:          string; { one-liner shown by `pasclaw mcp catalog` }
+    Docs:          string; { url for the user to learn more }
   end;
   TMCPCatalogEntryArray = array of TMCPCatalogEntry;
 
@@ -87,12 +95,19 @@ function KnownMCPServers: TMCPCatalogEntryArray;
 begin
   SetLength(Result, 5);
 
-  Result[0].Name    := 'replicate';
-  Result[0].URL     := 'https://mcp.replicate.com/mcp';
-  Result[0].EnvVar  := 'REPLICATE_API_TOKEN';
-  Result[0].AuthFmt := 'Bearer %s';
-  Result[0].Desc    := 'Run AI models (text/image/video/audio) on Replicate — 5000+ models.';
-  Result[0].Docs    := 'https://replicate.com/docs/reference/mcp';
+  { Replicate's MCP server is OAuth-only — it advertises RFC 9728
+    protected-resource metadata and rejects raw REPLICATE_API_TOKEN
+    with "invalid_token". `mcp install replicate` writes a no-header
+    entry and prompts the user to run `mcp auth replicate`, which
+    runs the OAuth 2.1 + PKCE flow via PasClaw.MCP.OAuth. }
+  Result[0].Name          := 'replicate';
+  Result[0].URL           := 'https://mcp.replicate.com/mcp';
+  Result[0].EnvVar        := '';
+  Result[0].AuthFmt       := '';
+  Result[0].RequiresOAuth := True;
+  Result[0].Desc          := 'Run AI models (text/image/video/audio) on Replicate — 5000+ models. ' +
+                             'OAuth-only — run `pasclaw mcp auth replicate` after install.';
+  Result[0].Docs          := 'https://replicate.com/docs/reference/mcp';
 
   Result[1].Name    := 'digitalocean-apps';
   Result[1].URL     := 'https://apps.mcp.digitalocean.com/mcp';
