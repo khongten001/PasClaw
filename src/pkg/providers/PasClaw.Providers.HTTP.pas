@@ -187,10 +187,13 @@ begin
 end;
 
 type
-  { Bridges THTTPRedirectGuard to THTTPClient.OnRedirect. The TNetHTTPClient
-    redirect event can't raise — it cancels the follow by setting
-    AAllowRedirect := False — so we record the refusal here and the caller
-    promotes it to a THTTPResult.ErrorMsg after the request returns. }
+  { Bridges THTTPRedirectGuard to THTTPClient.OnRedirect (typed as
+    THTTPRedirectEvent). The event can't raise to abort — it cancels
+    the follow by setting AAllow := False — so we record the refusal
+    on this adapter and the caller promotes it to THTTPResult.ErrorMsg
+    after the request returns. ARequest.URL is mutable through the
+    interface even though ARequest itself is const, so the guard can
+    rewrite the redirect destination. }
   TNetRedirectAdapter = class
   private
     FGuard: THTTPRedirectGuard;
@@ -198,9 +201,11 @@ type
     Rejected:     Boolean;
     RejectReason: string;
     constructor Create(AGuard: THTTPRedirectGuard);
-    procedure OnRedirect(const Sender: TObject; var ARequest: IHTTPRequest;
+    procedure OnRedirect(const Sender: TObject;
+                          const ARequest: IHTTPRequest;
                           const AResponse: IHTTPResponse;
-                          var AAllowRedirect: Boolean);
+                          ARedirections: Integer;
+                          var AAllow: Boolean);
   end;
 
 constructor TNetRedirectAdapter.Create(AGuard: THTTPRedirectGuard);
@@ -212,24 +217,25 @@ begin
 end;
 
 procedure TNetRedirectAdapter.OnRedirect(const Sender: TObject;
-                                          var ARequest: IHTTPRequest;
+                                          const ARequest: IHTTPRequest;
                                           const AResponse: IHTTPResponse;
-                                          var AAllowRedirect: Boolean);
+                                          ARedirections: Integer;
+                                          var AAllow: Boolean);
 var
   Dest, LocalReason: string;
   Allow: Boolean;
 begin
   if not Assigned(FGuard) then
   begin
-    AAllowRedirect := True;
+    AAllow := True;
     Exit;
   end;
   Dest        := ARequest.URL.ToString;
   Allow       := True;
   LocalReason := '';
   FGuard(Dest, Allow, LocalReason);
-  ARequest.URL   := TURI.Create(Dest);
-  AAllowRedirect := Allow;
+  ARequest.URL := TURI.Create(Dest);
+  AAllow       := Allow;
   if not Allow then
   begin
     Rejected     := True;
@@ -244,6 +250,10 @@ function NetExecute(C: THTTPClient; const Method, URL: string;
                     out StatusCode: Integer;
                     out ContentType: string;
                     out ErrMsg: string): Boolean;
+{ Dispatch through THTTPClient's verb-specific helpers. The inherited
+  TURLClient.Execute(method, url, ...) overload returns IURLResponse,
+  not IHTTPResponse, so its result can't be assigned to an IHTTPResponse
+  local. Get/Post/Put each return IHTTPResponse natively. }
 var
   R: IHTTPResponse;
 begin
@@ -252,7 +262,17 @@ begin
   ContentType := '';
   ErrMsg      := '';
   try
-    R := C.Execute(Method, URL, Req, Resp, Hdrs);
+    if SameText(Method, 'GET') then
+      R := C.Get(URL, Resp, Hdrs)
+    else if SameText(Method, 'POST') then
+      R := C.Post(URL, Req, Resp, Hdrs)
+    else if SameText(Method, 'PUT') then
+      R := C.Put(URL, Req, Resp, Hdrs)
+    else
+    begin
+      ErrMsg := 'unsupported HTTP method: ' + Method;
+      Exit;
+    end;
     StatusCode  := R.StatusCode;
     ContentType := LowerCase(R.MimeType);
     Result      := True;
