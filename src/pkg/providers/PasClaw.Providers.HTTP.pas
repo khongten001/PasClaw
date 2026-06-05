@@ -35,6 +35,11 @@ uses
   SysUtils, Classes;
 
 type
+  THeaderPair = record
+    Name, Value: string;
+  end;
+  THeaderPairs = array of THeaderPair;
+
   THTTPResult = record
     StatusCode:  Integer;
     Body:        string;
@@ -43,10 +48,11 @@ type
       or for endpoints that do not set one. }
     ContentType: string;
     ErrorMsg:    string;
-  end;
-
-  THeaderPair = record
-    Name, Value: string;
+    { Full response header list, populated by both backends. Names
+      are case-preserved from the server; callers comparing should
+      use SameText. The MCP HTTP client reads "Mcp-Session-Id" off
+      this for the Streamable HTTP transport's session tracking. }
+    RespHeaders: THeaderPairs;
   end;
 
   { Redirect guard invoked before following each 3xx response. Set
@@ -249,6 +255,7 @@ function NetExecute(C: THTTPClient; const Method, URL: string;
                     const Hdrs: TNetHeaders;
                     out StatusCode: Integer;
                     out ContentType: string;
+                    out RespHeaders: THeaderPairs;
                     out ErrMsg: string): Boolean;
 { Dispatch through THTTPClient's verb-specific helpers. The inherited
   TURLClient.Execute(method, url, ...) overload returns IURLResponse,
@@ -256,11 +263,13 @@ function NetExecute(C: THTTPClient; const Method, URL: string;
   local. Get/Post/Put each return IHTTPResponse natively. }
 var
   R: IHTTPResponse;
+  i: Integer;
 begin
   Result := False;
   StatusCode  := 0;
   ContentType := '';
   ErrMsg      := '';
+  SetLength(RespHeaders, 0);
   try
     if SameText(Method, 'GET') then
       R := C.Get(URL, Resp, Hdrs)
@@ -275,7 +284,13 @@ begin
     end;
     StatusCode  := R.StatusCode;
     ContentType := LowerCase(R.MimeType);
-    Result      := True;
+    SetLength(RespHeaders, Length(R.Headers));
+    for i := 0 to High(R.Headers) do
+    begin
+      RespHeaders[i].Name  := R.Headers[i].Name;
+      RespHeaders[i].Value := R.Headers[i].Value;
+    end;
+    Result := True;
   except
     on E: Exception do
       ErrMsg := E.Message;
@@ -301,7 +316,8 @@ begin
     Hdrs := MakeNetHeaders(Headers);
     Hdrs := Hdrs + [TNetHeader.Create('Content-Type', 'application/json; charset=utf-8')];
     NetExecute(C, 'POST', URL, Req, Resp, Hdrs,
-               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+               Result.StatusCode, Result.ContentType,
+               Result.RespHeaders, Result.ErrorMsg);
     Result.Body := Resp.DataString;
   finally
     Resp.Free;
@@ -329,7 +345,8 @@ begin
     Hdrs := MakeNetHeaders(Headers);
     Hdrs := Hdrs + [TNetHeader.Create('Content-Type', 'application/json; charset=utf-8')];
     NetExecute(C, 'PUT', URL, Req, Resp, Hdrs,
-               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+               Result.StatusCode, Result.ContentType,
+               Result.RespHeaders, Result.ErrorMsg);
     Result.Body := Resp.DataString;
   finally
     Resp.Free;
@@ -355,7 +372,8 @@ begin
   try
     Hdrs := MakeNetHeaders(Headers);
     NetExecute(C, 'GET', URL, nil, Resp, Hdrs,
-               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+               Result.StatusCode, Result.ContentType,
+               Result.RespHeaders, Result.ErrorMsg);
     Result.Body := Resp.DataString;
   finally
     Resp.Free;
@@ -392,7 +410,8 @@ begin
     end;
     Hdrs := MakeNetHeaders(Headers);
     NetExecute(C, 'GET', URL, nil, Resp, Hdrs,
-               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+               Result.StatusCode, Result.ContentType,
+               Result.RespHeaders, Result.ErrorMsg);
     Result.Body := Resp.DataString;
     if (Adapter <> nil) and Adapter.Rejected then
     begin
@@ -429,7 +448,8 @@ begin
     Hdrs := MakeNetHeaders(Headers);
     Hdrs := Hdrs + [TNetHeader.Create('Content-Type', ContentType + '; charset=utf-8')];
     NetExecute(C, 'POST', URL, Req, Resp, Hdrs,
-               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+               Result.StatusCode, Result.ContentType,
+               Result.RespHeaders, Result.ErrorMsg);
     Result.Body := Resp.DataString;
   finally
     Resp.Free;
@@ -451,6 +471,7 @@ var
   Req: TStringStream;
   Hdrs: TNetHeaders;
   EffAccept, RespContentType: string;
+  DiscardHeaders: THeaderPairs;
 begin
   Result := False;
   if Accept <> '' then EffAccept := Accept else EffAccept := 'application/json';
@@ -460,7 +481,7 @@ begin
     Hdrs := MakeNetHeaders(Headers);
     Hdrs := Hdrs + [TNetHeader.Create('Content-Type', 'application/json; charset=utf-8')];
     NetExecute(C, 'POST', URL, Req, RespStream, Hdrs,
-               StatusCode, RespContentType, ErrMsg);
+               StatusCode, RespContentType, DiscardHeaders, ErrMsg);
     Result := (StatusCode >= 200) and (StatusCode < 300);
   finally
     Req.Free;
@@ -483,7 +504,8 @@ begin
   try
     Hdrs := MakeNetHeaders(Headers);
     NetExecute(C, 'GET', URL, nil, Stream, Hdrs,
-               Result.StatusCode, Result.ContentType, Result.ErrorMsg);
+               Result.StatusCode, Result.ContentType,
+               Result.RespHeaders, Result.ErrorMsg);
   finally
     C.Free;
   end;
@@ -502,6 +524,31 @@ begin
     Http.Request.CustomHeaders.AddValue(Headers[i].Name, Headers[i].Value);
 end;
 
+procedure CaptureIndyHeaders(Http: TIdHTTP; var Out_: THeaderPairs);
+{ Snapshot Http.Response.RawHeaders into the result record's
+  RespHeaders field. Indy's RawHeaders is a TStringList where
+  Strings[i] is "Name: Value" — split on the first colon so values
+  containing further colons (e.g. URLs in Location, timestamps)
+  survive intact. }
+var
+  i, P: Integer;
+  Line: string;
+begin
+  SetLength(Out_, Http.Response.RawHeaders.Count);
+  for i := 0 to Http.Response.RawHeaders.Count - 1 do
+  begin
+    Line := Http.Response.RawHeaders[i];
+    P := Pos(':', Line);
+    if P > 0 then
+    begin
+      Out_[i].Name  := Trim(Copy(Line, 1, P - 1));
+      Out_[i].Value := Trim(Copy(Line, P + 1, MaxInt));
+    end
+    else
+      Out_[i].Name  := Trim(Line);
+  end;
+end;
+
 function DoRequest(Http: TIdHTTP; const URL: string; const ReqBody: TStream;
                    IsPost: Boolean): THTTPResult;
 var
@@ -511,6 +558,7 @@ begin
   Result.Body := '';
   Result.ContentType := '';
   Result.ErrorMsg := '';
+  SetLength(Result.RespHeaders, 0);
   { Force UTF-8 on the response stream. Under Delphi modern, TStringStream
     defaults to TEncoding.Default (the system codepage), which mangles
     non-ASCII bytes in JSON responses. Under FPC the encoding arg is
@@ -525,6 +573,7 @@ begin
       Result.StatusCode := Http.ResponseCode;
       Result.Body := Resp.DataString;
       Result.ContentType := LowerCase(Http.Response.ContentType);
+      CaptureIndyHeaders(Http, Result.RespHeaders);
     except
       on E: EIdHTTPProtocolException do
       begin
@@ -532,6 +581,7 @@ begin
         Result.Body       := E.ErrorMessage;
         Result.ContentType := LowerCase(Http.Response.ContentType);
         Result.ErrorMsg   := E.Message;
+        CaptureIndyHeaders(Http, Result.RespHeaders);
       end;
       on E: Exception do
       begin
@@ -539,6 +589,7 @@ begin
         Result.Body       := Resp.DataString;
         Result.ContentType := LowerCase(Http.Response.ContentType);
         Result.ErrorMsg   := E.Message;
+        CaptureIndyHeaders(Http, Result.RespHeaders);
       end;
     end;
   finally
