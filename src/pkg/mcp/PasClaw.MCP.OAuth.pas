@@ -269,33 +269,75 @@ begin
     Result := S;
 end;
 
-function GuessResourceBase(const ServerURL: string): string;
-{ The protected-resource doc lives at <origin>/.well-known/...
-  Strip the path off the MCP URL to get the origin so we don't end
-  up GETting https://mcp.replicate.com/mcp/.well-known/... }
+procedure SplitOriginAndPath(const ServerURL: string;
+                              out Origin, ResourcePath: string);
+{ For "https://mcp.replicate.com/mcp" returns
+    Origin       = "https://mcp.replicate.com"
+    ResourcePath = "/mcp"
+  Origin is empty if ServerURL doesn't have a scheme. ResourcePath is
+  empty (not "/") when the URL had no path, so callers can distinguish
+  "resource is at the origin" from "resource is at /". }
 var
   i: Integer;
-  Scheme: string;
+  Scheme, Rest: string;
 begin
-  Result := ServerURL;
-  i := Pos('://', Result);
+  Origin       := '';
+  ResourcePath := '';
+  i := Pos('://', ServerURL);
   if i = 0 then Exit;
-  Scheme := Copy(Result, 1, i + 2);
-  Result := Copy(Result, i + 3, MaxInt);
-  i := Pos('/', Result);
-  if i > 0 then Result := Copy(Result, 1, i - 1);
-  Result := Scheme + Result;
+  Scheme := Copy(ServerURL, 1, i + 2);
+  Rest   := Copy(ServerURL, i + 3, MaxInt);
+  i := Pos('/', Rest);
+  if i > 0 then
+  begin
+    Origin := Scheme + Copy(Rest, 1, i - 1);
+    { Drop a lone "/" — RFC 9728 treats no path the same as path "/",
+      and the well-known URL omits the trailing slash in both cases. }
+    if (i < Length(Rest)) or False then
+      ResourcePath := Copy(Rest, i, MaxInt)
+    else
+      ResourcePath := '';
+  end
+  else
+    Origin := Scheme + Rest;
+  if ResourcePath = '/' then ResourcePath := '';
+end;
+
+function ProtectedResourceMetadataURLs(const ServerURL: string): TArray<string>;
+{ RFC 9728 §3.1: the well-known string is inserted between authority
+  and path, so for "https://host/p1/p2" the metadata lives at
+  "https://host/.well-known/oauth-protected-resource/p1/p2".
+  Some implementations (Replicate today) only publish at the origin
+  level, so we try the path-scoped URL first and fall back to the
+  origin-only URL on 404. }
+var
+  Origin, Path: string;
+begin
+  SplitOriginAndPath(ServerURL, Origin, Path);
+  if (Origin <> '') and (Path <> '') then
+  begin
+    SetLength(Result, 2);
+    Result[0] := Origin + '/.well-known/oauth-protected-resource' + Path;
+    Result[1] := Origin + '/.well-known/oauth-protected-resource';
+  end
+  else
+  begin
+    SetLength(Result, 1);
+    Result[0] := Origin + '/.well-known/oauth-protected-resource';
+  end;
 end;
 
 function DiscoverEndpoints(const ServerURL: string;
                            out AuthEndpoint, TokenEndpoint, RegEndpoint, Issuer: string;
                            out ErrMsg: string): Boolean;
 var
-  Base, AuthServer: string;
+  Urls: TArray<string>;
+  AuthServer: string;
   PrResult, AsResult: THTTPResult;
   Obj, AsObj: TJsonObject;
   AuthServers: TJsonArray;
   Empty: array of THeaderPair;
+  i: Integer;
 begin
   Result := False;
   ErrMsg := '';
@@ -305,18 +347,27 @@ begin
   Issuer        := '';
   SetLength(Empty, 0);
 
-  Base := StripTrailingSlash(GuessResourceBase(ServerURL));
-  PrResult := GetJSONURL(Base + '/.well-known/oauth-protected-resource', Empty, 15);
-  if PrResult.ErrorMsg <> '' then
+  Urls := ProtectedResourceMetadataURLs(ServerURL);
+  PrResult.StatusCode := 0;
+  PrResult.Body       := '';
+  PrResult.ErrorMsg   := '';
+  for i := 0 to High(Urls) do
   begin
-    ErrMsg := 'protected-resource discovery failed: ' + PrResult.ErrorMsg;
-    Exit;
-  end;
-  if (PrResult.StatusCode < 200) or (PrResult.StatusCode >= 300) then
-  begin
-    ErrMsg := Format('protected-resource discovery returned HTTP %d',
-                     [PrResult.StatusCode]);
-    Exit;
+    PrResult := GetJSONURL(Urls[i], Empty, 15);
+    if PrResult.ErrorMsg <> '' then
+    begin
+      ErrMsg := 'protected-resource discovery failed: ' + PrResult.ErrorMsg;
+      Exit;
+    end;
+    if (PrResult.StatusCode >= 200) and (PrResult.StatusCode < 300) then Break;
+    { Path-scoped URL didn't exist → try the origin-only fallback (next
+      iteration). Any non-404 server error is treated as fatal. }
+    if (PrResult.StatusCode <> 404) or (i = High(Urls)) then
+    begin
+      ErrMsg := Format('protected-resource discovery returned HTTP %d at %s',
+                       [PrResult.StatusCode, Urls[i]]);
+      Exit;
+    end;
   end;
   AuthServer := '';
   Obj := TJsonObject.Parse(PrResult.Body);
@@ -650,12 +701,12 @@ function RunOAuthFlow(const ServerName, ServerURL: string;
                       out ErrMsg: string): Boolean;
 var
   Auth, TokenEp, RegEp, Issuer: string;
-  ExistingTokens, NewTok: TOAuthTokens;
+  NewTok: TOAuthTokens;
   ClientId, Verifier, Challenge, State, RedirectURI: string;
   VerBytes, ChalBytes, StateBytesB: TBytes;
   Server: TLoopbackServer;
   Port: Integer;
-  AuthorizeURL, Form, RespBody, _Err: string;
+  AuthorizeURL, Form, RespBody: string;
   Status: Integer;
 begin
   Result := False;
@@ -664,27 +715,22 @@ begin
   if not DiscoverEndpoints(ServerURL, Auth, TokenEp, RegEp, Issuer, ErrMsg) then
     Exit;
 
-  { Reuse a registered client_id if we already have one for this server. }
-  if LoadTokens(ServerName, ExistingTokens, _Err) and
-     (ExistingTokens.ClientId <> '') and (ExistingTokens.RegEndpoint = RegEp) then
-    ClientId := ExistingTokens.ClientId
-  else
-    ClientId := '';
-
   Server := TLoopbackServer.Create;
   try
     Port := Server.StartOnFreePort;
     RedirectURI := Format('http://127.0.0.1:%d/cb', [Port]);
 
-    if (ClientId = '') and (RegEp <> '') then
-    begin
-      if not RegisterClient(RegEp, RedirectURI, ClientId, ErrMsg) then Exit;
-    end;
-    if ClientId = '' then
+    { Register a fresh public client on every auth run. The redirect_uri
+      is pinned at registration time; reusing a prior client_id with a
+      different ephemeral loopback port would fail server-side
+      redirect_uri-match validation. Re-registering is cheap for
+      RFC 7591 public clients (no secret, anonymous identity). }
+    if RegEp = '' then
     begin
       ErrMsg := 'no client_id available — auth server does not expose registration_endpoint';
       Exit;
     end;
+    if not RegisterClient(RegEp, RedirectURI, ClientId, ErrMsg) then Exit;
 
     VerBytes    := GetRandomBytes(PkceVerifierBytes);
     Verifier    := BytesToBase64URL(VerBytes);
