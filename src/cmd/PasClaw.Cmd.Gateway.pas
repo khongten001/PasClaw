@@ -29,6 +29,7 @@ uses
   PasClaw.Tools.Memory,
   PasClaw.Tools.WebSearch,
   PasClaw.Tools.WebFetch,
+  PasClaw.Tools.Vault,
   PasClaw.Tools.Sandbox,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
@@ -168,6 +169,11 @@ begin
       RegisterMemoryTools(Reg);
       RegisterWebSearchTool(Reg);
       RegisterWebFetchTool(Reg);
+      { Off by default — onboarding opt-in flips Cfg.VaultToolsEnabled.
+        Without this branch, `pasclaw onboard` could report
+        "vault_search / vault_get enabled" but the gateway / web UI
+        chat surface would still tell the user "no Code Vault tool". }
+      if Cfg.VaultToolsEnabled then RegisterVaultTools(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       if Length(Skills) > 0 then
