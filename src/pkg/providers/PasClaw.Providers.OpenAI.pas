@@ -24,6 +24,13 @@ uses
   PasClaw.Providers.Catalog;
 
 type
+  (* Opt-in OpenAI server-side tool toggles. Mirrors
+     PasClaw.Config.TOpenAIServerToolsConfig — kept here so the
+     provider unit doesn't have to USE the config unit. *)
+  TOpenAIServerTools = record
+    WebSearch: Boolean;
+  end;
+
   TOpenAIProvider = class(TInterfacedObject, ILLMProvider)
   private
     FAPIKey:       string;
@@ -31,16 +38,20 @@ type
     FDefaultModel: string;
     FAuth:         TAuthScheme;
     FDisplayName:  string;   { surface in GetName / log lines }
+    FServerTools:  TOpenAIServerTools;
     function BuildAuthHeaders: TArray<THeaderPair>;
   public
-    { Backwards-compatible constructor: assumes Bearer auth and the
-      'openai' display name. Existing call sites stay byte-identical. }
+    { Backwards-compatible constructor: assumes Bearer auth, the
+      'openai' display name, and no server-side tools. Existing call
+      sites stay byte-identical. }
     constructor Create(const APIKey, APIBase, DefaultModel: string); overload;
     { Catalog-aware constructor used by the factory. DisplayName surfaces
       in GetName (so 'groq' returns 'groq', not 'openai'); Auth controls
-      how the API key is sent (Bearer / none / custom header). }
+      how the API key is sent (Bearer / none / custom header).
+      ServerTools turns on web_search_options on the request body. }
     constructor Create(const APIKey, APIBase, DefaultModel, DisplayName: string;
-                       const Auth: TAuthScheme); overload;
+                       const Auth: TAuthScheme;
+                       const ServerTools: TOpenAIServerTools); overload;
     function Chat(const Messages: array of TMessage;
                   const Tools:    array of TToolDefinition;
                   const Model:    string;
@@ -57,13 +68,24 @@ type
     function SupportsStreaming: Boolean;
   end;
 
-{ Exposed for tests + audit / logging embedders that want to see the
-  wire body without hitting the network. Pure; same code path Chat
-  executes. }
+{ Default-initialised TOpenAIServerTools (everything off). Use in
+  tests / embedders that don't care about the server-tool surface. }
+function NoOpenAIServerTools: TOpenAIServerTools;
+
+(* Exposed for tests + audit / logging embedders that want to see the
+   wire body without hitting the network. Pure; same code path Chat
+   executes.
+
+   ServerTools.WebSearch emits an empty `web_search_options` object as
+   a top-level request field. Only OpenAI's search-capable models
+   (gpt-5-search-api, the deprecated gpt-4o-search-preview /
+   gpt-4o-mini-search-preview) act on it; on other models / non-OpenAI
+   endpoints the field is silently ignored. *)
 function BuildOAIRequest(const Messages: array of TMessage;
                          const Tools:    array of TToolDefinition;
                          const Model:    string;
-                         const Options:  TChatOptions): string;
+                         const Options:  TChatOptions;
+                         const ServerTools: TOpenAIServerTools): string;
 procedure ParseOAIResponse(const Body: string; var Resp: TLLMResponse);
 
 implementation
@@ -72,17 +94,23 @@ uses
   PasClaw.JSON,
   PasClaw.Logger;
 
+function NoOpenAIServerTools: TOpenAIServerTools;
+begin
+  Result.WebSearch := False;
+end;
+
 constructor TOpenAIProvider.Create(const APIKey, APIBase, DefaultModel: string);
 var
   Bearer: TAuthScheme;
 begin
   Bearer.Kind       := asBearer;
   Bearer.HeaderName := '';
-  Create(APIKey, APIBase, DefaultModel, 'openai', Bearer);
+  Create(APIKey, APIBase, DefaultModel, 'openai', Bearer, NoOpenAIServerTools);
 end;
 
 constructor TOpenAIProvider.Create(const APIKey, APIBase, DefaultModel, DisplayName: string;
-                                    const Auth: TAuthScheme);
+                                    const Auth: TAuthScheme;
+                                    const ServerTools: TOpenAIServerTools);
 begin
   inherited Create;
   FAPIKey := APIKey;
@@ -90,6 +118,7 @@ begin
   if DefaultModel <> '' then FDefaultModel := DefaultModel else FDefaultModel := 'gpt-4o-mini';
   if DisplayName <> '' then FDisplayName := DisplayName else FDisplayName := 'openai';
   FAuth := Auth;
+  FServerTools := ServerTools;
 end;
 
 function TOpenAIProvider.BuildAuthHeaders: TArray<THeaderPair>;
@@ -130,9 +159,10 @@ function TOpenAIProvider.SupportsStreaming: Boolean;  begin Result := False; end
 function BuildOAIRequest(const Messages: array of TMessage;
                          const Tools:    array of TToolDefinition;
                          const Model:    string;
-                         const Options:  TChatOptions): string;
+                         const Options:  TChatOptions;
+                         const ServerTools: TOpenAIServerTools): string;
 var
-  Root, M, ToolObj, FObj, TCObj, EmptyParams: TJsonObject;
+  Root, M, ToolObj, FObj, TCObj, EmptyParams, WSO: TJsonObject;
   MsgArr, ToolArr, TCArr: TJsonArray;
   i, j: Integer;
   Sys: string;
@@ -150,6 +180,20 @@ begin
       hash bucketing — slightly less stable but still functional. }
     if Options.CacheEnabled and (Options.CacheKey <> '') then
       Root.PutStr('prompt_cache_key', Options.CacheKey);
+
+    (* Server-side web search. Empty object is the documented
+       "enable with defaults" form; the user_location refinement and
+       Responses-API-only fields (search_context_size, domain filters,
+       etc.) aren't exposed yet — operators who need them can drop
+       to the Responses API directly. Field is a no-op on models that
+       don't recognise it (everything except OpenAI's *-search-api /
+       *-search-preview families).
+       Ref: https://developers.openai.com/api/docs/guides/tools-web-search *)
+    if ServerTools.WebSearch then
+    begin
+      WSO := TJsonObject.Create;
+      Root.PutObject('web_search_options', WSO);
+    end;
 
     Sys := Options.SystemPrompt;
 
@@ -335,7 +379,7 @@ var
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1/chat/completions';
-  Body := BuildOAIRequest(Messages, Tools, UseModel, Options);
+  Body := BuildOAIRequest(Messages, Tools, UseModel, Options, FServerTools);
 
   Headers := BuildAuthHeaders;
 

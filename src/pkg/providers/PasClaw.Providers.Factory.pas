@@ -32,6 +32,15 @@ function NewDefaultProvider(Cfg: TConfig; out Provider: ILLMProvider; out ErrMsg
    Cfg.Fallbacks is empty. *)
 function ResolveFallbacks(Cfg: TConfig): TLLMProviderArray;
 
+(* True iff RawKind/RawName identify the catalog's genuine OpenAI
+   entry — NOT "openai-compat" or any other catalog member of the
+   pfOpenAI family (Groq, OpenRouter, Ollama, vLLM, LiteLLM,
+   DeepSeek, Mistral, Together, ...). Gates OpenAI-only request
+   fields (web_search_options, future Responses-API knobs) at the
+   factory so they only reach the real OpenAI endpoint. Exposed for
+   direct test coverage. *)
+function IsGenuineOpenAI(const RawKind, RawName: string): Boolean;
+
 implementation
 
 uses
@@ -67,6 +76,25 @@ begin
     Result := 'openai';
 end;
 
+function IsGenuineOpenAI(const RawKind, RawName: string): Boolean;
+{ See interface doc. Mirrors the Kind/Name fallback in
+  NewProviderFromConfig but does NOT collapse "openai-compat" →
+  "openai" the way NormalizeProviderKind does — that collapse is
+  correct for catalog spec lookup (an openai-compat entry inherits
+  OpenAI's Bearer auth shape) but wrong for gating OpenAI-only
+  request fields, because openai-compat backends are intentionally
+  NOT OpenAI. }
+var
+  K, N: string;
+begin
+  K := LowerCase(Trim(RawKind));
+  N := LowerCase(Trim(RawName));
+  if K <> '' then
+    Result := K = 'openai'
+  else
+    Result := N = 'openai';
+end;
+
 function NewProviderFromConfig(Cfg: TConfig; const ProviderName: string;
                                out Provider: ILLMProvider; out ErrMsg: string): Boolean;
 var
@@ -76,6 +104,7 @@ var
   Base, Model, APIKey: string;
   RequiresKey: Boolean;
   ServerTools: TAnthropicServerTools;
+  OAIServerTools: TOpenAIServerTools;
 begin
   Provider := nil;
   ErrMsg := '';
@@ -120,7 +149,20 @@ begin
         Provider := TAnthropicProvider.Create(APIKey, Base, Model, ServerTools);
       end;
     pfOpenAI:
-      Provider := TOpenAIProvider.Create(APIKey, Base, Model, Kind, Spec.Auth);
+      begin
+        { web_search_options is OpenAI-only — gate on the operator's
+          raw config Kind/Name, not the normalised one (see
+          IsGenuineOpenAI for the why). Every other catalog entry in
+          the pfOpenAI family — Groq, OpenRouter, Ollama, vLLM,
+          LiteLLM, DeepSeek, Mistral, Together, Cerebras, ... — speaks
+          the OpenAI wire shape but does not implement server-side
+          web search; some reject unknown top-level fields outright. }
+        OAIServerTools.WebSearch := Cfg.OpenAIServerTools.WebSearch
+                                    and IsGenuineOpenAI(Cfg.Providers[Idx].Kind,
+                                                        Cfg.Providers[Idx].Name);
+        Provider := TOpenAIProvider.Create(APIKey, Base, Model, Kind, Spec.Auth,
+                                            OAIServerTools);
+      end;
     pfGemini:
       Provider := TGeminiProvider.Create(APIKey, Base, Model);
     pfPlaceholder:

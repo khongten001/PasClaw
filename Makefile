@@ -143,7 +143,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools print-version get-indy webui-res
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools print-version get-indy webui-res
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -220,4 +220,10 @@ test-anthropic-server-tools: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/anthropic_server_tools_tests.pas -o$(BUILDDIR)/anthropic_server_tools_tests
 	@$(BUILDDIR)/anthropic_server_tools_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools
+# OpenAI provider — server-side web_search_options wire shape.
+test-openai-server-tools: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/openai_server_tools_tests.pas -o$(BUILDDIR)/openai_server_tools_tests
+	@$(BUILDDIR)/openai_server_tools_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools
