@@ -131,10 +131,58 @@ begin
   AssertMissing(Body, 'should be dropped',           'colliding user tools dropped');
 end;
 
+procedure TestContinuePausedTurnAppendsAssistantBlock;
+const
+  ReqBody  =
+    '{"model":"claude-opus-4-7","max_tokens":8192,' +
+    '"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}';
+  RespBody =
+    '{"id":"msg_1","model":"claude-opus-4-7","stop_reason":"pause_turn",' +
+    '"content":[' +
+      '{"type":"text","text":"searching..."},' +
+      '{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"CVE.org"}}' +
+    ']}';
+var
+  Next: string;
+begin
+  Next := ContinuePausedTurn(ReqBody, RespBody);
+  if Next = '' then
+    Fail('ContinuePausedTurn returned empty for valid input', RespBody);
+
+  { Original user turn survives. }
+  AssertContains(Next, '"role" : "user"', 'user turn preserved');
+  AssertContains(Next, '"text" : "hi"',   'user text preserved');
+
+  { New assistant turn carries the response content verbatim — both the
+    text block and the server_tool_use block — so Anthropic's server-
+    side loop sees the trailing server_tool_use and resumes. }
+  AssertContains(Next, '"role" : "assistant"', 'assistant turn appended');
+  AssertContains(Next, '"server_tool_use"',    'server_tool_use preserved verbatim');
+  AssertContains(Next, '"srvtoolu_1"',         'server tool id preserved');
+  AssertContains(Next, 'searching',            'in-flight text preserved');
+
+  { Top-level model + max_tokens still present so the body is a valid
+    /v1/messages POST, not just a fragment. }
+  AssertContains(Next, '"max_tokens" : 8192', 'request scaffolding preserved');
+end;
+
+procedure TestContinuePausedTurnHandlesMalformedInput;
+var
+  Next: string;
+begin
+  Next := ContinuePausedTurn('not json',   '{"content":[]}');
+  if Next <> '' then Fail('expected empty result on malformed request body', Next);
+
+  Next := ContinuePausedTurn('{"messages":[]}', 'not json');
+  if Next <> '' then Fail('expected empty result on malformed response body', Next);
+end;
+
 begin
   TestNoServerTools;
   TestServerWebSearchOnly;
   TestServerToolsBoth;
   TestUserToolNameCollisionDropped;
+  TestContinuePausedTurnAppendsAssistantBlock;
+  TestContinuePausedTurnHandlesMalformedInput;
   Writeln('anthropic_server_tools_tests: OK');
 end.

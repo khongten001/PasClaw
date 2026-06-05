@@ -76,6 +76,18 @@ function BuildRequest(const Messages: array of TMessage;
                       const Options:  TChatOptions;
                       const ServerTools: TAnthropicServerTools): string;
 
+(* Build the follow-up request body for a stop_reason: "pause_turn"
+   continuation. Takes the prior request body and the response body
+   that returned pause_turn, appends a new assistant turn to the
+   request's messages[] carrying the response's content array
+   verbatim, and serialises the result. Anthropic detects the
+   trailing server_tool_use block and resumes the server-side
+   sampling loop where it paused. Returns '' on parse failure.
+
+   Exposed for tests; production callers reach it via Chat() which
+   runs the bounded continuation loop. *)
+function ContinuePausedTurn(const ReqBody, RespBody: string): string;
+
 implementation
 
 uses
@@ -477,14 +489,91 @@ begin
   end;
 end;
 
+const
+  { Cap on continuation rounds for stop_reason: "pause_turn". Server-side
+    web tools (web_search_20260209 / web_fetch_20260209) run inside an
+    Anthropic-side sampling loop with a default 10-iteration ceiling;
+    when that ceiling hits, the API returns pause_turn with the partial
+    assistant content and expects the client to re-POST with the prior
+    assistant turn appended verbatim. Five rounds is enough headroom for
+    multi-search agentic queries while still bounding spend if Anthropic
+    ever pause_turn'd unboundedly. }
+  PAUSE_TURN_MAX_CONTINUATIONS = 5;
+
+function SafeParseObject(const S: string): TJsonObject;
+{ TJsonObject.Parse raises EPasClawJSON on malformed input rather than
+  returning nil; ContinuePausedTurn needs nil-on-failure semantics so
+  a bad body short-circuits to "return original" instead of crashing. }
+begin
+  Result := nil;
+  try
+    Result := TJsonObject.Parse(S);
+  except
+    Result := nil;
+  end;
+end;
+
+function ContinuePausedTurn(const ReqBody, RespBody: string): string;
+{ Build the follow-up request body for a pause_turn continuation:
+  take the prior response's content array verbatim and append it to
+  the request's messages[] as a new assistant turn. Anthropic detects
+  the trailing server_tool_use block and resumes the server-side
+  loop from where it paused. Adding any user message in between (or
+  re-rendering the assistant content as text-only) would break the
+  resume detection.
+  Returns the new wire body, or '' on parse failure (caller surfaces
+  the prior response unchanged). }
+var
+  Req, Resp, AssistantMsg: TJsonObject;
+  MsgArr, ContentArr: TJsonArray;
+  ContentRaw: string;
+begin
+  Result := '';
+  Req := SafeParseObject(ReqBody);
+  if Req = nil then Exit;
+  try
+    Resp := SafeParseObject(RespBody);
+    if Resp = nil then Exit;
+    try
+      ContentArr := Resp.ChildArray('content');
+      if ContentArr = nil then Exit;
+      try
+        ContentRaw := ContentArr.ToJSON;
+      finally
+        ContentArr.Free;
+      end;
+      if ContentRaw = '' then Exit;
+
+      MsgArr := Req.ChildArray('messages');
+      if MsgArr = nil then Exit;
+      try
+        AssistantMsg := TJsonObject.Create;
+        AssistantMsg.PutStr('role', 'assistant');
+        AssistantMsg.PutRaw('content', ContentRaw);
+        MsgArr.AddObject(AssistantMsg);
+      finally
+        MsgArr.Free;
+      end;
+
+      Result := Req.ToJSON;
+    finally
+      Resp.Free;
+    end;
+  finally
+    Req.Free;
+  end;
+end;
+
 function TAnthropicProvider.Chat(const Messages: array of TMessage;
                                  const Tools:    array of TToolDefinition;
                                  const Model:    string;
                                  const Options:  TChatOptions): TLLMResponse;
 var
-  Body, URL, UseModel: string;
+  Body, NextBody, URL, UseModel: string;
   Resp: THTTPResult;
   Headers: array of THeaderPair;
+  RoundResp: TLLMResponse;
+  Continuations, i: Integer;
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1/messages';
@@ -494,23 +583,69 @@ begin
   Headers[0] := MakeHeader('x-api-key',          FAPIKey);
   Headers[1] := MakeHeader('anthropic-version', '2023-06-01');
 
-  LogDebug('anthropic POST %s (model=%s, body=%d bytes)', [URL, UseModel, Length(Body)]);
-  Resp := PostJSON(URL, Body, Headers, 120);
-
   Result.Content := '';
-  Result.StatusCode := Resp.StatusCode;
+  Result.StatusCode := 0;
   SetLength(Result.ToolCalls, 0);
-  if (Resp.StatusCode >= 200) and (Resp.StatusCode < 300) then
-  begin
-    ParseResponse(Resp.Body, Result);
-    Exit;
-  end;
 
-  if Resp.Body <> '' then
-    Result.Content := Format('anthropic error %d: %s', [Resp.StatusCode, Resp.Body])
-  else
-    Result.Content := Format('anthropic error: status=%d msg=%s', [Resp.StatusCode, Resp.ErrorMsg]);
-  Result.FinishReason := 'error';
+  Continuations := 0;
+  while True do
+  begin
+    LogDebug('anthropic POST %s (model=%s, body=%d bytes, continuation=%d)',
+             [URL, UseModel, Length(Body), Continuations]);
+    Resp := PostJSON(URL, Body, Headers, 120);
+    Result.StatusCode := Resp.StatusCode;
+
+    if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
+    begin
+      if Resp.Body <> '' then
+        Result.Content := Format('anthropic error %d: %s', [Resp.StatusCode, Resp.Body])
+      else
+        Result.Content := Format('anthropic error: status=%d msg=%s', [Resp.StatusCode, Resp.ErrorMsg]);
+      Result.FinishReason := 'error';
+      Exit;
+    end;
+
+    Finalize(RoundResp);
+    FillChar(RoundResp, SizeOf(RoundResp), 0);
+    ParseResponse(Resp.Body, RoundResp);
+
+    { Aggregate text across continuation rounds. Tool calls and usage
+      come from the FINAL round (the only round that returns control
+      to PasClaw); intermediate pause_turn rounds carry server-side
+      activity only and have no client ToolCalls to surface. }
+    if RoundResp.Content <> '' then
+    begin
+      if Result.Content <> '' then Result.Content := Result.Content + sLineBreak;
+      Result.Content := Result.Content + RoundResp.Content;
+    end;
+    Result.FinishReason := RoundResp.FinishReason;
+    Result.Model        := RoundResp.Model;
+    Result.Usage.InputTokens        := Result.Usage.InputTokens        + RoundResp.Usage.InputTokens;
+    Result.Usage.OutputTokens       := Result.Usage.OutputTokens       + RoundResp.Usage.OutputTokens;
+    Result.Usage.CacheReadTokens    := Result.Usage.CacheReadTokens    + RoundResp.Usage.CacheReadTokens;
+    Result.Usage.CacheCreatedTokens := Result.Usage.CacheCreatedTokens + RoundResp.Usage.CacheCreatedTokens;
+    SetLength(Result.ToolCalls, Length(RoundResp.ToolCalls));
+    for i := 0 to High(RoundResp.ToolCalls) do
+      Result.ToolCalls[i] := RoundResp.ToolCalls[i];
+
+    if RoundResp.FinishReason <> 'pause_turn' then Exit;
+
+    if Continuations >= PAUSE_TURN_MAX_CONTINUATIONS then
+    begin
+      LogWarn('anthropic pause_turn cap (%d) reached; returning partial answer',
+              [PAUSE_TURN_MAX_CONTINUATIONS]);
+      Exit;
+    end;
+
+    NextBody := ContinuePausedTurn(Body, Resp.Body);
+    if NextBody = '' then
+    begin
+      LogWarn('anthropic pause_turn: continuation body build failed; returning partial answer');
+      Exit;
+    end;
+    Body := NextBody;
+    Inc(Continuations);
+  end;
 end;
 
 var
