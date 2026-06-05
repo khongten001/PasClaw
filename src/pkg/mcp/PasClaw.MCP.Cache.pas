@@ -173,24 +173,58 @@ begin
   try
     Root.PutInt('cached_at', NowUnix);
     Root.PutStr('server',    ServerName);
+
+    { Build the array + each item to completion FIRST. PutArray and
+      AddObject both consume their `var` argument — they take ownership
+      of the backing and nil the local. Using the nilled local
+      afterwards crashes (Codex P1 on PR #141). Hence: build Item,
+      then add to Arr; build Arr fully, then PutArray onto Root. }
     Arr := TJsonArray.Create;
-    Root.PutArray('tools', Arr);
-    for i := 0 to High(Tools) do
-    begin
-      Item := TJsonObject.Create;
-      Arr.AddObject(Item);
-      Item.PutStr('name',        Tools[i].Name);
-      Item.PutStr('description', Tools[i].Description);
-      { Round-trip the schema as a nested JSON object when it parses
-        cleanly; otherwise fall back to a literal string so a malformed
-        schema doesn't drop the whole entry. }
-      Schema := TJsonObject.Parse(Tools[i].Schema);
-      if Schema <> nil then
-        Item.PutObject('schema', Schema)
-      else
-        Item.PutStr('schema', Tools[i].Schema);
-      Item.PutStr('server', Tools[i].Server);
+    try
+      for i := 0 to High(Tools) do
+      begin
+        Item := TJsonObject.Create;
+        try
+          Item.PutStr('name',        Tools[i].Name);
+          Item.PutStr('description', Tools[i].Description);
+          { Round-trip the schema as a nested JSON object when it
+            parses cleanly; otherwise fall back to a literal string so
+            a malformed schema doesn't drop the whole entry.
+            TJsonObject.Parse RAISES on bad JSON rather than returning
+            nil, so the fallback has to live in an except branch. }
+          Schema := nil;
+          try
+            Schema := TJsonObject.Parse(Tools[i].Schema);
+          except
+            on E: Exception do
+            begin
+              if Schema <> nil then Schema.Free;
+              Schema := nil;
+            end;
+          end;
+          if Schema <> nil then
+            Item.PutObject('schema', Schema)  { consumes Schema }
+          else
+            Item.PutStr('schema', Tools[i].Schema);
+          Item.PutStr('server', Tools[i].Server);
+        except
+          on E: Exception do
+          begin
+            Item.Free;
+            raise;
+          end;
+        end;
+        Arr.AddObject(Item);  { consumes Item — nils it }
+      end;
+    except
+      on E: Exception do
+      begin
+        Arr.Free;
+        raise;
+      end;
     end;
+    Root.PutArray('tools', Arr);  { consumes Arr — nils it }
+
     L := TStringList.Create;
     try
       L.Text := Root.ToJSON;

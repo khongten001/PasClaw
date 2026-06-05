@@ -107,7 +107,7 @@ type
     procedure SetFailed(const Err: string);
     function  CallTool(const ToolName, ArgsJSON: string;
                        out ErrMsg: string): string;
-    function  HasDispatchFor(const ToolName: string): Boolean;
+    function  FindDispatchFor(const ToolName: string): TMCPToolDispatch;
     function  AddDispatch(const ToolName: string): TMCPToolDispatch;
     property Name: string read FName;
   end;
@@ -222,16 +222,16 @@ begin
   if (not OK) and (ErrMsg = '') then ErrMsg := 'mcp call failed';
 end;
 
-function TMCPServerState.HasDispatchFor(const ToolName: string): Boolean;
+function TMCPServerState.FindDispatchFor(const ToolName: string): TMCPToolDispatch;
 var
   i: Integer;
 begin
-  Result := False;
+  Result := nil;
   FDispatchLock.Acquire;
   try
     for i := 0 to FDispatches.Count - 1 do
       if TMCPToolDispatch(FDispatches[i]).FToolName = ToolName then
-        Exit(True);
+        Exit(TMCPToolDispatch(FDispatches[i]));
   finally
     FDispatchLock.Release;
   end;
@@ -344,15 +344,23 @@ begin
     LogInfo('mcp[%s] live connect OK (%d tools)', [FCfg.Name, Length(Tools)]);
     SaveCachedTools(FCfg.Name, Tools);
 
-    { Register any tools we didn't already see in the cache pass.
-      HasDispatchFor is O(N) per lookup; for ~5000 tools that's
-      25M comparisons worst case — annoying but bounded, and only
-      happens once per boot. If that becomes a measurable problem,
+    { Always re-register every live tool. Reuse the existing
+      dispatch object (created in the cache pass) when one is
+      present so HandlerObj pointer stability holds — only the
+      description and schema on the TTool entry change. Skipping
+      re-registration when a cached entry exists would leave the
+      registry stuck on yesterday's (possibly stale) description
+      and inputSchema while the model continued to dispatch via
+      the (live, working) dispatch object. Codex P2 on PR #141.
+      FindDispatchFor + Register are both O(N); for several
+      thousand tools that's an O(N²) one-time cost in the loader
+      thread — acceptable, but if it ever becomes noticeable
       promote FDispatches to a sorted TStringList. }
     for i := 0 to High(Tools) do
     begin
-      if FState.HasDispatchFor(Tools[i].Name) then Continue;
-      Dispatch := FState.AddDispatch(Tools[i].Name);
+      Dispatch := FState.FindDispatchFor(Tools[i].Name);
+      if Dispatch = nil then
+        Dispatch := FState.AddDispatch(Tools[i].Name);
       RegisterToolViaDispatch(FReg, FCfg.Name, Tools[i], Dispatch);
     end;
 
