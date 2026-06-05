@@ -172,7 +172,7 @@ begin
         RegisterWebSearchTool(Reg)
       else
         LogWebSearchSkipOnce;
-      RegisterWebFetchTool(Reg);
+      if Cfg.WebFetchEnabled then RegisterWebFetchTool(Reg);
       { Off by default — onboarding opt-in flips Cfg.VaultToolsEnabled.
         Without this branch, `pasclaw onboard` could report
         "vault_search / vault_get enabled" but the gateway / web UI

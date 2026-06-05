@@ -482,7 +482,7 @@ begin
     RegisterWebSearchTool(FRegistry)
   else
     LogWebSearchSkipOnce;
-  RegisterWebFetchTool(FRegistry);
+  if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(FRegistry, Skills);
   if FUseMCP then
@@ -878,7 +878,7 @@ begin
       RegisterWebSearchTool(FRegistry)
     else
       LogWebSearchSkipOnce;
-    RegisterWebFetchTool(FRegistry);
+    if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
     Skills := LoadSkillManifests(GetHome);
     RegisterSkills(FRegistry, Skills);
   end;

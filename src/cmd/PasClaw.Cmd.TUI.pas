@@ -98,7 +98,7 @@ begin
         RegisterWebSearchTool(Reg)
       else
         LogWebSearchSkipOnce;
-      RegisterWebFetchTool(Reg);
+      if Cfg.WebFetchEnabled then RegisterWebFetchTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
     end;

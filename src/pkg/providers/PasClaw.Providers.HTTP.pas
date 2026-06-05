@@ -125,6 +125,20 @@ function GetURLToStream(const URL: string; Stream: TStream;
                         const Headers: array of THeaderPair;
                         TimeoutSeconds: Integer): THTTPResult;
 
+{ GetURL's redirect-guard + UA/Accept overrides combined with
+  GetURLToStream's raw-bytes output. For web_fetch's save_to path:
+  callers want SSRF-checked downloads of arbitrary content (PDFs,
+  images, tarballs) where the UTF-8 round-trip through THTTPResult.Body
+  would mangle non-text bytes. ContentType/StatusCode/RespHeaders are
+  populated as usual; Body stays empty. }
+function GetURLToStreamGuarded(const URL: string;
+                                RespStream: TStream;
+                                const Headers: array of THeaderPair;
+                                TimeoutSeconds: Integer;
+                                const UserAgent: string;
+                                const Accept: string;
+                                OnRedirect: THTTPRedirectGuard): THTTPResult;
+
 function MakeHeader(const Name, Value: string): THeaderPair;
 
 { Returns True if Indy can load OpenSSL; otherwise False and ErrMsg
@@ -507,6 +521,47 @@ begin
                Result.StatusCode, Result.ContentType,
                Result.RespHeaders, Result.ErrorMsg);
   finally
+    C.Free;
+  end;
+end;
+
+function GetURLToStreamGuarded(const URL: string;
+                                RespStream: TStream;
+                                const Headers: array of THeaderPair;
+                                TimeoutSeconds: Integer;
+                                const UserAgent: string;
+                                const Accept: string;
+                                OnRedirect: THTTPRedirectGuard): THTTPResult;
+var
+  C: THTTPClient;
+  Hdrs: TNetHeaders;
+  EffAccept: string;
+  Adapter: TNetRedirectAdapter;
+begin
+  Result.StatusCode  := 0;
+  Result.Body        := '';
+  Result.ContentType := '';
+  Result.ErrorMsg    := '';
+  if Accept <> '' then EffAccept := Accept else EffAccept := '*/*';
+  C       := NewNetClient(TimeoutSeconds, UserAgent, EffAccept);
+  Adapter := nil;
+  try
+    if Assigned(OnRedirect) then
+    begin
+      Adapter := TNetRedirectAdapter.Create(OnRedirect);
+      C.OnRedirect := Adapter.OnRedirect;
+    end;
+    Hdrs := MakeNetHeaders(Headers);
+    NetExecute(C, 'GET', URL, nil, RespStream, Hdrs,
+               Result.StatusCode, Result.ContentType,
+               Result.RespHeaders, Result.ErrorMsg);
+    if (Adapter <> nil) and Adapter.Rejected then
+    begin
+      Result.ErrorMsg    := Adapter.RejectReason;
+      Result.StatusCode  := -1;
+    end;
+  finally
+    Adapter.Free;
     C.Free;
   end;
 end;
@@ -976,6 +1031,68 @@ begin
       end;
     end;
   finally
+    Http.Free;
+  end;
+end;
+
+function GetURLToStreamGuarded(const URL: string;
+                                RespStream: TStream;
+                                const Headers: array of THeaderPair;
+                                TimeoutSeconds: Integer;
+                                const UserAgent: string;
+                                const Accept: string;
+                                OnRedirect: THTTPRedirectGuard): THTTPResult;
+var
+  Http: TIdHTTP;
+  SSLErr: string;
+  Adapter: TRedirectAdapter;
+begin
+  Result.StatusCode  := 0;
+  Result.Body        := '';
+  Result.ContentType := '';
+  Result.ErrorMsg    := '';
+  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  if SSLErr <> '' then
+  begin
+    Result.StatusCode := -1;
+    Result.ErrorMsg   := SSLErr;
+    Http.Free;
+    Exit;
+  end;
+  Adapter := nil;
+  try
+    if UserAgent <> '' then Http.Request.UserAgent := UserAgent;
+    if Accept    <> '' then Http.Request.Accept    := Accept
+    else                    Http.Request.Accept    := '*/*';
+    if Assigned(OnRedirect) then
+    begin
+      Adapter := TRedirectAdapter.Create(OnRedirect);
+      Http.OnRedirect := Adapter.OnRedirect;
+    end;
+    ApplyHeaders(Http, Headers);
+    try
+      Http.Get(URL, RespStream);
+      Result.StatusCode  := Http.ResponseCode;
+      Result.ContentType := LowerCase(Http.Response.ContentType);
+      CaptureIndyHeaders(Http, Result.RespHeaders);
+    except
+      on E: EIdHTTPProtocolException do
+      begin
+        Result.StatusCode  := E.ErrorCode;
+        Result.ContentType := LowerCase(Http.Response.ContentType);
+        Result.ErrorMsg    := E.Message;
+        CaptureIndyHeaders(Http, Result.RespHeaders);
+      end;
+      on E: Exception do
+      begin
+        Result.StatusCode  := Http.ResponseCode;
+        Result.ContentType := LowerCase(Http.Response.ContentType);
+        Result.ErrorMsg    := E.Message;
+        CaptureIndyHeaders(Http, Result.RespHeaders);
+      end;
+    end;
+  finally
+    Adapter.Free;
     Http.Free;
   end;
 end;

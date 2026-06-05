@@ -309,7 +309,7 @@ const
     plain literals — adequate because the patterns themselves are
     just punctuation runs ($(...), `...`, etc.) or fixed token
     sequences (apt install, npm install -g, etc.). }
-  ForbiddenSubstrings: array[0..45] of string = (
+  ForbiddenSubstrings: array[0..43] of string = (
     'dd if=',
     ':(){:|',         { fork bomb }
     '<<eof',
@@ -323,8 +323,12 @@ const
     '|bash',
     '|/bin/sh',
     '|/bin/bash',
-    'curl ',          { paired with denylist context below }
-    'wget ',
+    { curl and wget are intentionally NOT denied — they're the
+      conventional way the model fetches arbitrary URLs from the
+      shell, and we already provide web_fetch as the tracked-tool
+      alternative. Denying them put PasClaw strictly behind picoclaw
+      on URL access, and operators can still flip the whole
+      denylist off via sandbox.shell_deny_enabled = false. }
     'apt install',
     'apt remove',
     'apt purge',

@@ -175,13 +175,64 @@ begin
             SameText(Copy(S, 1, Length(Prefix)), Prefix);
 end;
 
+function EnsureParentDir(const Path: string; out ErrMsg: string): Boolean;
+var
+  Dir: string;
+begin
+  Result := True;
+  ErrMsg := '';
+  Dir := ExtractFilePath(Path);
+  if (Dir <> '') and not DirectoryExists(Dir) then
+    if not ForceDirectories(Dir) then
+    begin
+      ErrMsg := 'web_fetch: cannot create parent directory: ' + Dir;
+      Result := False;
+    end;
+end;
+
+function ReadPreviewBytes(const Path: string; MaxBytes: Integer): TBytes;
+{ Read up to MaxBytes from Path for the receipt preview. Used after a
+  binary-safe stream download where Resp.Body is empty. }
+var
+  FS: TFileStream;
+  N: Int64;
+begin
+  SetLength(Result, 0);
+  if not FileExists(Path) then Exit;
+  try
+    FS := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
+    try
+      N := FS.Size;
+      if N > MaxBytes then N := MaxBytes;
+      SetLength(Result, N);
+      if N > 0 then FS.ReadBuffer(Result[0], N);
+    finally
+      FS.Free;
+    end;
+  except
+    SetLength(Result, 0);
+  end;
+end;
+
+function LooksTextual(const ContentType: string): Boolean;
+begin
+  Result := (Pos('text/', ContentType) = 1) or
+            (Pos('application/json',       ContentType) > 0) or
+            (Pos('application/xml',        ContentType) > 0) or
+            (Pos('application/javascript', ContentType) > 0) or
+            (Pos('application/xhtml',      ContentType) > 0);
+end;
+
 function Tool_WebFetch(const ArgsJSON: string; out ErrMsg: string): string;
 var
-  URL: string;
+  URL, SaveTo, SandboxReason, Preview: string;
   MaxChars: Integer;
   RedirectGuard: TWebFetchRedirectGuard;
   Resp: THTTPResult;
   Headers: array of THeaderPair;
+  FS: TFileStream;
+  Bytes: TBytes;
+  WrittenBytes: Int64;
 begin
   ErrMsg := '';
   Result := '';
@@ -202,6 +253,22 @@ begin
   if MaxChars < 100           then MaxChars := 100;
   if MaxChars > HARD_MAX_CHARS then MaxChars := HARD_MAX_CHARS;
 
+  { Optional curl -o: when save_to is set, the full response body is
+    written to disk and the tool result becomes a small receipt
+    instead of the inlined content. The model then uses fs_read /
+    fs_grep on the saved file. This skips the max_chars cap entirely
+    so the model can pull down arbitrarily large pages / API dumps
+    without blowing the context window. }
+  ParseStringArg(ArgsJSON, 'save_to', SaveTo);
+  if SaveTo <> '' then
+  begin
+    if not CanWritePath(SaveTo, SandboxReason) then
+    begin
+      ErrMsg := 'web_fetch: save_to refused: ' + SandboxReason;
+      Exit;
+    end;
+  end;
+
   { SSRF pre-check on the initial URL. The redirect guard covers
     subsequent hops; both layers must pass for the request to land. }
   if NetworkBlockingActive then
@@ -213,6 +280,64 @@ begin
       Exit;
     end;
     ErrMsg := '';
+  end;
+
+  { save_to: stream bytes straight to disk via the binary-safe wrapper.
+    GetURL returns a UTF-8-decoded string, which mangles non-text
+    payloads (PDFs, images, archives) on the round trip back through
+    TEncoding.UTF8.GetBytes — losing precisely the use case save_to
+    advertises. The receipt + preview are reconstructed from the file
+    so the model still gets a sniffable hint. }
+  if SaveTo <> '' then
+  begin
+    if not EnsureParentDir(SaveTo, ErrMsg) then Exit;
+    RedirectGuard := TWebFetchRedirectGuard.Create;
+    FS := nil;
+    WrittenBytes := 0;
+    try
+      try
+        FS := TFileStream.Create(SaveTo, fmCreate);
+      except
+        on E: Exception do
+        begin
+          ErrMsg := 'web_fetch: write failed: ' + E.Message;
+          Exit;
+        end;
+      end;
+      try
+        Resp := GetURLToStreamGuarded(URL, FS, Headers, 30,
+                                       'Mozilla/5.0 (PasClaw web_fetch)',
+                                       '*/*',
+                                       RedirectGuard.OnRedirect);
+        WrittenBytes := FS.Size;
+      finally
+        FS.Free;
+      end;
+    finally
+      RedirectGuard.Free;
+    end;
+
+    if Resp.ErrorMsg <> '' then
+    begin
+      ErrMsg := 'web_fetch: HTTP error: ' + Resp.ErrorMsg;
+      Exit;
+    end;
+
+    Bytes := ReadPreviewBytes(SaveTo, 200);
+    if (Length(Bytes) > 0) and LooksTextual(Resp.ContentType) then
+      Preview := TEncoding.UTF8.GetString(Bytes)
+    else
+      Preview := '';
+
+    Result := Format('web_fetch: saved %d bytes to %s (status %d, content-type %s)',
+                     [WrittenBytes, SaveTo, Resp.StatusCode, Resp.ContentType]);
+    if Trim(Preview) <> '' then
+      Result := Result + sLineBreak + 'preview: ' + Preview
+    else if not LooksTextual(Resp.ContentType) then
+      Result := Result + sLineBreak + 'preview: (binary content)';
+    LogDebug('web_fetch url=%s bytes_in=%d saved_to=%s',
+             [URL, WrittenBytes, SaveTo]);
+    Exit;
   end;
 
   RedirectGuard := TWebFetchRedirectGuard.Create;
@@ -243,7 +368,8 @@ begin
   end
   else
   begin
-    ErrMsg := Format('web_fetch: unsupported content-type %s', [Resp.ContentType]);
+    ErrMsg := Format('web_fetch: unsupported content-type %s (try save_to to download as-is)',
+                     [Resp.ContentType]);
     Exit;
   end;
 
@@ -258,19 +384,28 @@ begin
   if R = nil then Exit;
   T.Name        := 'web_fetch';
   T.Description :=
-    'Fetch the contents of an HTTP/HTTPS URL and return readable plain text. ' +
-    'Strips HTML tags, decodes entities, collapses whitespace. Useful after ' +
-    'web_search to read a specific result page. Caps the output at 50 KB ' +
-    'by default; pass max_chars to override (range 100–200000).';
+    'Fetch the contents of an HTTP/HTTPS URL. By default returns ' +
+    'readable plain text (strips HTML tags, decodes entities) capped at ' +
+    'max_chars (default 50000). Pass save_to to write the full body to a ' +
+    'file under the workspace instead — useful for large pages, binary ' +
+    'downloads, or anything that would blow the model''s context. When ' +
+    'save_to is set, the tool result is a short receipt + preview, and ' +
+    'the model uses fs_read / fs_grep on the saved file.';
   T.Schema      :=
     '{"type":"object",' +
     '"properties":{' +
     '"url":{"type":"string","description":"http:// or https:// URL."},' +
-    '"max_chars":{"type":"integer","minimum":100,"maximum":200000,"description":"Output char cap (default 50000)."}' +
+    '"max_chars":{"type":"integer","minimum":100,"maximum":200000,"description":"Inline output char cap (default 50000). Ignored when save_to is set."},' +
+    '"save_to":{"type":"string","description":"Optional workspace-relative path. When set, the full response body is written there and the tool returns a receipt only."}' +
     '},"required":["url"]}';
   T.Handler     := Tool_WebFetch;
   T.IsCore      := True;
-  T.Category    := tcReadOnly;  { HTTP GET only, no shared state }
+  { Mutating because save_to writes to the workspace. Without this the
+    agent scheduler can run a follow-up fs_read in parallel with the
+    in-flight download and observe a half-written file. The plain
+    inlined-text path doesn't touch shared state, but tagging at the
+    tool level (not per-call) is the only signal the registry exposes. }
+  T.Category    := tcMutating;
   R.Register(T);
 end;
 
