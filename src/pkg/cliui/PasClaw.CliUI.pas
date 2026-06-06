@@ -6,6 +6,33 @@ unit PasClaw.CliUI;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{ Source-codepage directive. Tells the compiler the bytes in this .pas
+  file are UTF-8 — so non-ASCII string literals (banner box-drawing
+  glyphs ██╔═, panel chars ┌─┐, the ✓ in onboarding output) are
+  stored as UTF-8 bytes tagged CP_UTF8 in AnsiString constants.
+
+  Without this directive, FPC interprets the source as the system
+  codepage (UTF-8 on Linux, CP1252 on Windows). On Windows, each UTF-8
+  byte of `█` (E2 96 88) becomes a separate AnsiChar tagged CP1252;
+  at runtime the output path transcodes those bytes through CP1252 →
+  UTF-8 and double-encodes the glyph — classic banner mojibake.
+
+  Other source files don't (yet) get this directive because they only
+  use ASCII in their string literals; if more non-ASCII glyphs migrate
+  into onboarding / status / vault / etc. output, add the directive
+  there too. }
+{$CODEPAGE UTF8}
+{$IFDEF FPC}
+  { Silence the AnsiString↔UnicodeString implicit-conversion warnings
+    the directive introduces on PrintLn(Ansi.BoldBlue + L1 + ...) —
+    Ansi.* fields are AnsiString CP_0, the L1 literal becomes
+    AnsiString CP_UTF8, FPC promotes to UnicodeString to concat, then
+    back to AnsiString for the parameter. The byte content is correct
+    throughout (verified by the banner-bytes round-trip test); the
+    warnings are noise. }
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 
