@@ -110,6 +110,133 @@ begin
   end;
 end;
 
+procedure StripUnsupportedSchemaFields(Obj: TJsonObject); forward;
+
+procedure StripUnsupportedFromArray(Arr: TJsonArray); forward;
+
+procedure StripUnsupportedSchemaFields(Obj: TJsonObject);
+{ Recursively remove JSON-Schema fields that Gemini's
+  function-calling API rejects. Currently:
+
+    additionalProperties   — error: "Unknown name 'additionalProperties'
+                              at tools[0].function_declarations[N].
+                              parameters.properties[M].value: Cannot
+                              find field"
+    $schema, $id, $ref     — meta fields Gemini doesn't model
+    definitions, $defs     — JSON Schema 2019-09+ — Gemini takes
+                              OpenAPI 3.0 schema subset only
+    patternProperties      — not in OpenAPI 3.0
+    unevaluatedProperties  — JSON Schema 2019-09+
+    propertyNames          — JSON Schema 2019-09+
+
+  MCP servers and external skill manifests frequently emit
+  additionalProperties: false on their tool schemas (it's the JSON
+  Schema "strict" convention); these end up verbatim in PasClaw's
+  Tools[i].Schema via PutRaw. Anthropic and OpenAI tolerate the
+  extra fields silently; Gemini 400s. Strip them at the wire boundary
+  so all three back-ends see the same schema with no behavioural
+  change on the others. }
+var
+  Keys: TStringList;
+  i: Integer;
+  Key: string;
+  ChildObj: TJsonObject;
+  ChildArr: TJsonArray;
+begin
+  if Obj = nil then Exit;
+  Obj.Remove('additionalProperties');
+  Obj.Remove('$schema');
+  Obj.Remove('$id');
+  Obj.Remove('$ref');
+  Obj.Remove('definitions');
+  Obj.Remove('$defs');
+  Obj.Remove('patternProperties');
+  Obj.Remove('unevaluatedProperties');
+  Obj.Remove('propertyNames');
+
+  Keys := Obj.Keys;
+  if Keys = nil then Exit;
+  try
+    for i := 0 to Keys.Count - 1 do
+    begin
+      Key := Keys[i];
+      ChildObj := Obj.ChildObject(Key);
+      if ChildObj <> nil then
+      try
+        StripUnsupportedSchemaFields(ChildObj);
+      finally
+        ChildObj.Free;
+      end
+      else
+      begin
+        ChildArr := Obj.ChildArray(Key);
+        if ChildArr <> nil then
+        try
+          StripUnsupportedFromArray(ChildArr);
+        finally
+          ChildArr.Free;
+        end;
+      end;
+    end;
+  finally
+    Keys.Free;
+  end;
+end;
+
+procedure StripUnsupportedFromArray(Arr: TJsonArray);
+{ Walk array entries so nested schemas inside anyOf/oneOf/items get
+  their unsupported fields scrubbed too. }
+var
+  i: Integer;
+  ChildObj: TJsonObject;
+  ChildArr: TJsonArray;
+begin
+  if Arr = nil then Exit;
+  for i := 0 to Arr.Count - 1 do
+  begin
+    ChildObj := Arr.ItemObject(i);
+    if ChildObj <> nil then
+    try
+      StripUnsupportedSchemaFields(ChildObj);
+    finally
+      ChildObj.Free;
+    end
+    else
+    begin
+      ChildArr := Arr.ItemArray(i);
+      if ChildArr <> nil then
+      try
+        StripUnsupportedFromArray(ChildArr);
+      finally
+        ChildArr.Free;
+      end;
+    end;
+  end;
+end;
+
+function SanitizeSchemaForGemini(const RawSchema: string): string;
+{ Parse, scrub, re-serialise. Returns the original string verbatim on
+  parse failure so a malformed schema doesn't silently disappear —
+  the API will surface its own 400 with a clearer pointer. }
+var
+  Root: TJsonObject;
+begin
+  Result := RawSchema;
+  if Trim(RawSchema) = '' then Exit;
+  try
+    Root := TJsonObject.Parse(RawSchema);
+  except
+    Exit;
+  end;
+  if Root = nil then Exit;
+  try
+    StripUnsupportedSchemaFields(Root);
+    Result := Root.ToJSON;
+  finally
+    Root.Free;
+  end;
+end;
+
 { Builds the request body. Mirrors picoclaw's pkg/providers/httpapi
   gemini_provider.go buildRequestBody, trimmed to text + tool support. }
 function BuildRequest(const Messages: array of TMessage;
@@ -277,7 +404,11 @@ begin
         if Tools[i].Description <> '' then
           FuncDecl.PutStr('description', Tools[i].Description);
         if Tools[i].Schema <> '' then
-          FuncDecl.PutRaw('parameters', Tools[i].Schema)
+          { Strip JSON-Schema fields Gemini's function-calling API
+            doesn't accept (additionalProperties, $schema, etc.) —
+            see SanitizeSchemaForGemini for the full list and why
+            MCP / skill schemas trip into them. }
+          FuncDecl.PutRaw('parameters', SanitizeSchemaForGemini(Tools[i].Schema))
         else
         begin
           EmptyObj := TJsonObject.Create;
