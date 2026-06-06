@@ -59,6 +59,7 @@ type
     procedure PutObject(const Key: string; var Obj: TJsonObject);  { takes ownership; sets Obj := nil }
     procedure PutArray (const Key: string; var Arr: TJsonArray);   { takes ownership; sets Arr := nil }
     procedure PutRaw  (const Key, RawJSON: string);
+    procedure Remove  (const Key: string);
     function ToJSON: string;
     function Backing: TObject;  { for cross-unit interop when absolutely needed }
   end;
@@ -300,6 +301,11 @@ begin
   except
     fpjson.TJSONObject(FBacking).Add(Key, fpjson.TJSONObject.Create);
   end;
+end;
+
+procedure TJsonObject.Remove(const Key: string);
+begin
+  RemoveKey(fpjson.TJSONObject(FBacking), Key);
 end;
 
 function TJsonObject.ToJSON: string;
@@ -666,6 +672,11 @@ begin
   end;
   RemoveKey(System.JSON.TJSONObject(FBacking), Key);
   System.JSON.TJSONObject(FBacking).AddPair(Key, V);
+end;
+
+procedure TJsonObject.Remove(const Key: string);
+begin
+  RemoveKey(System.JSON.TJSONObject(FBacking), Key);
 end;
 
 function TJsonObject.ToJSON: string;

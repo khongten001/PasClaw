@@ -74,6 +74,17 @@ function BuildRequest(const Messages: array of TMessage;
                       const Model:    string;
                       const Options:  TChatOptions): string;
 
+(* Strip JSON-Schema fields Gemini's function-calling API doesn't
+   accept (additionalProperties, $schema, $id, $ref, definitions,
+   $defs, patternProperties, unevaluatedProperties, propertyNames)
+   from a tool parameter schema. Walker is schema-aware — only
+   strips on schema nodes, never on the user-property name map
+   under `properties`, so a tool parameter literally named
+   "additionalProperties" survives. Returns the input verbatim on
+   parse failure so a genuinely-malformed schema still surfaces
+   Gemini's own 400 with a useful pointer. Exposed for tests. *)
+function SanitizeSchemaForGemini(const RawSchema: string): string;
+
 implementation
 
 uses
@@ -107,6 +118,190 @@ begin
     mrAssistant: Result := 'model';
   else
     Result := 'user';
+  end;
+end;
+
+procedure StripUnsupportedSchemaFields(Obj: TJsonObject); forward;
+procedure StripUnsupportedFromArray(Arr: TJsonArray); forward;
+procedure WalkPropertyMap(Map: TJsonObject); forward;
+
+procedure StripUnsupportedSchemaFields(Obj: TJsonObject);
+{ Recursively remove JSON-Schema fields that Gemini's
+  function-calling API rejects. Currently:
+
+    additionalProperties   — error: "Unknown name 'additionalProperties'
+                              at tools[0].function_declarations[N].
+                              parameters.properties[M].value: Cannot
+                              find field"
+    $schema, $id, $ref     — meta fields Gemini doesn't model
+    definitions, $defs     — JSON Schema 2019-09+ — Gemini takes
+                              OpenAPI 3.0 schema subset only
+    patternProperties      — not in OpenAPI 3.0
+    unevaluatedProperties  — JSON Schema 2019-09+
+    propertyNames          — JSON Schema 2019-09+
+
+  MCP servers and external skill manifests frequently emit
+  additionalProperties: false on their tool schemas (it's the JSON
+  Schema "strict" convention); these end up verbatim in PasClaw's
+  Tools[i].Schema via PutRaw. Anthropic and OpenAI tolerate the
+  extra fields silently; Gemini 400s. Strip them at the wire boundary
+  so all three back-ends see the same schema with no behavioural
+  change on the others.
+
+  Walker is schema-aware: it only strips keywords on schema nodes,
+  and only recurses through schema-keyword fields that hold
+  subschemas (`items`, `anyOf`, `oneOf`, `allOf`, `not`) or maps of
+  subschemas (`properties`). Codex P2 on PR #153: the original
+  blind recursion treated the `properties` map as a schema node and
+  would drop a tool parameter literally named "additionalProperties"
+  (or any other stripped keyword). Rare but legitimately broken —
+  user property names share a namespace with schema keywords. }
+var
+  Sub: TJsonObject;
+  SubArr: TJsonArray;
+begin
+  if Obj = nil then Exit;
+
+  { Drop unsupported schema keywords on THIS schema node. }
+  Obj.Remove('additionalProperties');
+  Obj.Remove('$schema');
+  Obj.Remove('$id');
+  Obj.Remove('$ref');
+  Obj.Remove('definitions');
+  Obj.Remove('$defs');
+  Obj.Remove('patternProperties');
+  Obj.Remove('unevaluatedProperties');
+  Obj.Remove('propertyNames');
+
+  { Recurse into name->subschema maps. The map's KEYS are arbitrary
+    user-supplied names — never strip keywords on the map itself. }
+  Sub := Obj.ChildObject('properties');
+  if Sub <> nil then
+  try
+    WalkPropertyMap(Sub);
+  finally
+    Sub.Free;
+  end;
+
+  { Recurse into schema-keyword fields that hold a single subschema. }
+  Sub := Obj.ChildObject('items');
+  if Sub <> nil then
+  try
+    StripUnsupportedSchemaFields(Sub);
+  finally
+    Sub.Free;
+  end;
+  Sub := Obj.ChildObject('not');
+  if Sub <> nil then
+  try
+    StripUnsupportedSchemaFields(Sub);
+  finally
+    Sub.Free;
+  end;
+
+  { Recurse into schema-keyword fields that hold arrays of
+    subschemas. `items` can be array-shaped in tuple-validation
+    schemas; we already handle the object case above and fall
+    through to the array case here. }
+  SubArr := Obj.ChildArray('items');
+  if SubArr <> nil then
+  try
+    StripUnsupportedFromArray(SubArr);
+  finally
+    SubArr.Free;
+  end;
+  SubArr := Obj.ChildArray('anyOf');
+  if SubArr <> nil then
+  try
+    StripUnsupportedFromArray(SubArr);
+  finally
+    SubArr.Free;
+  end;
+  SubArr := Obj.ChildArray('oneOf');
+  if SubArr <> nil then
+  try
+    StripUnsupportedFromArray(SubArr);
+  finally
+    SubArr.Free;
+  end;
+  SubArr := Obj.ChildArray('allOf');
+  if SubArr <> nil then
+  try
+    StripUnsupportedFromArray(SubArr);
+  finally
+    SubArr.Free;
+  end;
+end;
+
+procedure WalkPropertyMap(Map: TJsonObject);
+{ The `properties` field is a map from arbitrary user property name
+  to subschema. Iterate the values (each IS a schema, recurse with
+  the full strip pass) but never strip on Map itself — Map's keys
+  are user data, not schema keywords. }
+var
+  Keys: TStringList;
+  i: Integer;
+  ChildObj: TJsonObject;
+begin
+  if Map = nil then Exit;
+  Keys := Map.Keys;
+  if Keys = nil then Exit;
+  try
+    for i := 0 to Keys.Count - 1 do
+    begin
+      ChildObj := Map.ChildObject(Keys[i]);
+      if ChildObj <> nil then
+      try
+        StripUnsupportedSchemaFields(ChildObj);
+      finally
+        ChildObj.Free;
+      end;
+    end;
+  finally
+    Keys.Free;
+  end;
+end;
+
+procedure StripUnsupportedFromArray(Arr: TJsonArray);
+{ Recurse into each element of an anyOf/oneOf/allOf/items array.
+  Every element is itself a schema, so the full strip pass applies. }
+var
+  i: Integer;
+  ChildObj: TJsonObject;
+begin
+  if Arr = nil then Exit;
+  for i := 0 to Arr.Count - 1 do
+  begin
+    ChildObj := Arr.ItemObject(i);
+    if ChildObj <> nil then
+    try
+      StripUnsupportedSchemaFields(ChildObj);
+    finally
+      ChildObj.Free;
+    end;
+  end;
+end;
+
+function SanitizeSchemaForGemini(const RawSchema: string): string;
+{ Parse, scrub, re-serialise. Returns the original string verbatim on
+  parse failure so a malformed schema doesn't silently disappear —
+  the API will surface its own 400 with a clearer pointer. }
+var
+  Root: TJsonObject;
+begin
+  Result := RawSchema;
+  if Trim(RawSchema) = '' then Exit;
+  try
+    Root := TJsonObject.Parse(RawSchema);
+  except
+    Exit;
+  end;
+  if Root = nil then Exit;
+  try
+    StripUnsupportedSchemaFields(Root);
+    Result := Root.ToJSON;
+  finally
+    Root.Free;
   end;
 end;
 
@@ -277,7 +472,11 @@ begin
         if Tools[i].Description <> '' then
           FuncDecl.PutStr('description', Tools[i].Description);
         if Tools[i].Schema <> '' then
-          FuncDecl.PutRaw('parameters', Tools[i].Schema)
+          { Strip JSON-Schema fields Gemini's function-calling API
+            doesn't accept (additionalProperties, $schema, etc.) —
+            see SanitizeSchemaForGemini for the full list and why
+            MCP / skill schemas trip into them. }
+          FuncDecl.PutRaw('parameters', SanitizeSchemaForGemini(Tools[i].Schema))
         else
         begin
           EmptyObj := TJsonObject.Create;

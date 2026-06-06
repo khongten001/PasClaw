@@ -199,7 +199,7 @@ begin
                        'Proxy for 100+ providers (set api_base)');
   Result[18] := MkSpec('gemini',     'Google Gemini',
                        pfGemini,     'https://generativelanguage.googleapis.com',
-                       'gemini-1.5-flash',
+                       'gemini-3.5-flash',
                        MkAuth(asHeader, 'x-goog-api-key'),
                        'Gemini 1.5 / 2.0 (generateContent REST)');
 end;
