@@ -74,6 +74,17 @@ function BuildRequest(const Messages: array of TMessage;
                       const Model:    string;
                       const Options:  TChatOptions): string;
 
+(* Strip JSON-Schema fields Gemini's function-calling API doesn't
+   accept (additionalProperties, $schema, $id, $ref, definitions,
+   $defs, patternProperties, unevaluatedProperties, propertyNames)
+   from a tool parameter schema. Walker is schema-aware — only
+   strips on schema nodes, never on the user-property name map
+   under `properties`, so a tool parameter literally named
+   "additionalProperties" survives. Returns the input verbatim on
+   parse failure so a genuinely-malformed schema still surfaces
+   Gemini's own 400 with a useful pointer. Exposed for tests. *)
+function SanitizeSchemaForGemini(const RawSchema: string): string;
+
 implementation
 
 uses
@@ -111,8 +122,8 @@ begin
 end;
 
 procedure StripUnsupportedSchemaFields(Obj: TJsonObject); forward;
-
 procedure StripUnsupportedFromArray(Arr: TJsonArray); forward;
+procedure WalkPropertyMap(Map: TJsonObject); forward;
 
 procedure StripUnsupportedSchemaFields(Obj: TJsonObject);
 { Recursively remove JSON-Schema fields that Gemini's
@@ -135,15 +146,23 @@ procedure StripUnsupportedSchemaFields(Obj: TJsonObject);
   Tools[i].Schema via PutRaw. Anthropic and OpenAI tolerate the
   extra fields silently; Gemini 400s. Strip them at the wire boundary
   so all three back-ends see the same schema with no behavioural
-  change on the others. }
+  change on the others.
+
+  Walker is schema-aware: it only strips keywords on schema nodes,
+  and only recurses through schema-keyword fields that hold
+  subschemas (`items`, `anyOf`, `oneOf`, `allOf`, `not`) or maps of
+  subschemas (`properties`). Codex P2 on PR #153: the original
+  blind recursion treated the `properties` map as a schema node and
+  would drop a tool parameter literally named "additionalProperties"
+  (or any other stripped keyword). Rare but legitimately broken —
+  user property names share a namespace with schema keywords. }
 var
-  Keys: TStringList;
-  i: Integer;
-  Key: string;
-  ChildObj: TJsonObject;
-  ChildArr: TJsonArray;
+  Sub: TJsonObject;
+  SubArr: TJsonArray;
 begin
   if Obj = nil then Exit;
+
+  { Drop unsupported schema keywords on THIS schema node. }
   Obj.Remove('additionalProperties');
   Obj.Remove('$schema');
   Obj.Remove('$id');
@@ -154,28 +173,88 @@ begin
   Obj.Remove('unevaluatedProperties');
   Obj.Remove('propertyNames');
 
-  Keys := Obj.Keys;
+  { Recurse into name->subschema maps. The map's KEYS are arbitrary
+    user-supplied names — never strip keywords on the map itself. }
+  Sub := Obj.ChildObject('properties');
+  if Sub <> nil then
+  try
+    WalkPropertyMap(Sub);
+  finally
+    Sub.Free;
+  end;
+
+  { Recurse into schema-keyword fields that hold a single subschema. }
+  Sub := Obj.ChildObject('items');
+  if Sub <> nil then
+  try
+    StripUnsupportedSchemaFields(Sub);
+  finally
+    Sub.Free;
+  end;
+  Sub := Obj.ChildObject('not');
+  if Sub <> nil then
+  try
+    StripUnsupportedSchemaFields(Sub);
+  finally
+    Sub.Free;
+  end;
+
+  { Recurse into schema-keyword fields that hold arrays of
+    subschemas. `items` can be array-shaped in tuple-validation
+    schemas; we already handle the object case above and fall
+    through to the array case here. }
+  SubArr := Obj.ChildArray('items');
+  if SubArr <> nil then
+  try
+    StripUnsupportedFromArray(SubArr);
+  finally
+    SubArr.Free;
+  end;
+  SubArr := Obj.ChildArray('anyOf');
+  if SubArr <> nil then
+  try
+    StripUnsupportedFromArray(SubArr);
+  finally
+    SubArr.Free;
+  end;
+  SubArr := Obj.ChildArray('oneOf');
+  if SubArr <> nil then
+  try
+    StripUnsupportedFromArray(SubArr);
+  finally
+    SubArr.Free;
+  end;
+  SubArr := Obj.ChildArray('allOf');
+  if SubArr <> nil then
+  try
+    StripUnsupportedFromArray(SubArr);
+  finally
+    SubArr.Free;
+  end;
+end;
+
+procedure WalkPropertyMap(Map: TJsonObject);
+{ The `properties` field is a map from arbitrary user property name
+  to subschema. Iterate the values (each IS a schema, recurse with
+  the full strip pass) but never strip on Map itself — Map's keys
+  are user data, not schema keywords. }
+var
+  Keys: TStringList;
+  i: Integer;
+  ChildObj: TJsonObject;
+begin
+  if Map = nil then Exit;
+  Keys := Map.Keys;
   if Keys = nil then Exit;
   try
     for i := 0 to Keys.Count - 1 do
     begin
-      Key := Keys[i];
-      ChildObj := Obj.ChildObject(Key);
+      ChildObj := Map.ChildObject(Keys[i]);
       if ChildObj <> nil then
       try
         StripUnsupportedSchemaFields(ChildObj);
       finally
         ChildObj.Free;
-      end
-      else
-      begin
-        ChildArr := Obj.ChildArray(Key);
-        if ChildArr <> nil then
-        try
-          StripUnsupportedFromArray(ChildArr);
-        finally
-          ChildArr.Free;
-        end;
       end;
     end;
   finally
@@ -184,12 +263,11 @@ begin
 end;
 
 procedure StripUnsupportedFromArray(Arr: TJsonArray);
-{ Walk array entries so nested schemas inside anyOf/oneOf/items get
-  their unsupported fields scrubbed too. }
+{ Recurse into each element of an anyOf/oneOf/allOf/items array.
+  Every element is itself a schema, so the full strip pass applies. }
 var
   i: Integer;
   ChildObj: TJsonObject;
-  ChildArr: TJsonArray;
 begin
   if Arr = nil then Exit;
   for i := 0 to Arr.Count - 1 do
@@ -200,16 +278,6 @@ begin
       StripUnsupportedSchemaFields(ChildObj);
     finally
       ChildObj.Free;
-    end
-    else
-    begin
-      ChildArr := Arr.ItemArray(i);
-      if ChildArr <> nil then
-      try
-        StripUnsupportedFromArray(ChildArr);
-      finally
-        ChildArr.Free;
-      end;
     end;
   end;
 end;

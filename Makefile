@@ -238,4 +238,10 @@ test-utf8-codepage-tag: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/utf8_codepage_tag_tests.pas -o$(BUILDDIR)/utf8_codepage_tag_tests
 	@$(BUILDDIR)/utf8_codepage_tag_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag
+# Gemini provider — JSON Schema scrub for additionalProperties etc.
+test-gemini-schema-strip: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/gemini_schema_strip_tests.pas -o$(BUILDDIR)/gemini_schema_strip_tests
+	@$(BUILDDIR)/gemini_schema_strip_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip
