@@ -1,4 +1,4 @@
-{
+﻿{
   PasClaw.CliUI - terminal colour handling, banner, help/error rendering.
   Mirrors cmd/picoclaw/internal/cliui in picoclaw.
 }
@@ -6,6 +6,19 @@ unit PasClaw.CliUI;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  { File has a UTF-8 BOM (Delphi auto-detects it). FPC also honours the
+    BOM, but additionally needs $CODEPAGE UTF8 so string literals are
+    stored as AnsiString CP_UTF8 — without it FPC stores them as
+    UnicodeString and the implicit conversions on PrintLn(Ansi.X + L +
+    Ansi.Reset) become 6 warnings per banner line. dcc64 has no
+    equivalent directive (E1030 "Invalid compiler directive: 'CODEPAGE'");
+    Delphi reads the source as UTF-8 from the BOM and the literals
+    become UnicodeString naturally. }
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 
