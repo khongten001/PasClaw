@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Tools.Memory - registers the memory_search tool.
 
   Workflow (openclaw-style):
@@ -21,6 +21,11 @@ unit PasClaw.Tools.Memory;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

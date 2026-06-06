@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Tools.Vault — registers the vault_search and vault_get
   tools, which let the agent discover Object Pascal source code
   (samples, components, libraries) in the pasclaw.dev Code Vault.
@@ -23,6 +23,11 @@ unit PasClaw.Tools.Vault;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

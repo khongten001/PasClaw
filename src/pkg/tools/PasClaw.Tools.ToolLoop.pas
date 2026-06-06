@@ -1,4 +1,4 @@
-{
+﻿{
   PasClaw.Tools.ToolLoop - the core agent loop. Repeatedly calls the LLM
   with the running message history; if the response contains tool_calls,
   dispatches each through the registry, appends the tool result as a tool
@@ -8,6 +8,11 @@ unit PasClaw.Tools.ToolLoop;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

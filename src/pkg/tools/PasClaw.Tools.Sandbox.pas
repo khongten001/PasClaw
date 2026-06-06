@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Tools.Sandbox - tool-side enforcement for the workspace
   boundary and shell denylist documented in TSandboxPolicy
   (PasClaw.Config).
@@ -67,6 +67,11 @@ unit PasClaw.Tools.Sandbox;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

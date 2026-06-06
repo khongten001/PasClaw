@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Channels.WhatsApp - WhatsApp Cloud API (Meta).
 
   Two surfaces, matching the LINE shape:
@@ -45,6 +45,11 @@ unit PasClaw.Channels.WhatsApp;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

@@ -1,7 +1,12 @@
-{ Auth — login/logout/status for configured providers. }
+﻿{ Auth — login/logout/status for configured providers. }
 unit PasClaw.Cmd.Auth;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

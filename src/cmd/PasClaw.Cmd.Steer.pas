@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Cmd.Steer — push a follow-up message into a running
   agent's mid-loop steering queue. Mirrors picoclaw's `steer`
   subcommand and nanobot's _inject_pending side-channel.
@@ -20,6 +20,11 @@ unit PasClaw.Cmd.Steer;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

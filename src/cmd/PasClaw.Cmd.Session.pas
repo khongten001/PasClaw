@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Cmd.Session — list / show / delete / export persistent
   conversation sessions stored under
   $PASCLAW_HOME/workspace/sessions/.
@@ -12,6 +12,11 @@ unit PasClaw.Cmd.Session;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 
