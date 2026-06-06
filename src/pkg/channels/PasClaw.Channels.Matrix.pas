@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Channels.Matrix - Matrix client/server bot.
 
   Federated, self-hostable, no token-vendor lock-in. The bot is a
@@ -41,6 +41,11 @@ unit PasClaw.Channels.Matrix;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

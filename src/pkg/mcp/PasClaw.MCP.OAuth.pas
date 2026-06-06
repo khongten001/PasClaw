@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.MCP.OAuth - OAuth 2.1 + PKCE flow for remote MCP servers
   that follow the MCP Authorization spec
   (https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization).
@@ -42,6 +42,11 @@ unit PasClaw.MCP.OAuth;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

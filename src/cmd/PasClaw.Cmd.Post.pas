@@ -1,4 +1,4 @@
-(*
+﻿(*
   Post - send a message to a configured channel from the command line.
   Useful for cron jobs and skills.
 
@@ -20,6 +20,11 @@ unit PasClaw.Cmd.Post;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

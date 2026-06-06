@@ -1,4 +1,4 @@
-{
+﻿{
   PasClaw.MCP.Bridge - register MCP tools into the PasClaw tool registry
   so the agent loop can invoke them transparently. Tools are namespaced
   "<server>__<tool>" to avoid clashes with built-ins or between servers.
@@ -40,6 +40,11 @@ unit PasClaw.MCP.Bridge;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

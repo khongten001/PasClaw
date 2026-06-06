@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Tools.WebFetch - registers the web_fetch tool.
 
   Fetches an arbitrary HTTP/HTTPS URL with TIdHTTP, follows redirects
@@ -30,6 +30,11 @@ unit PasClaw.Tools.WebFetch;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

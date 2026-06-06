@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Skills.PasClawHub — install / search skills from the
   pasclaw.dev hub, the first-party registry that PasClaw checks
   before falling through to clawhub.ai.
@@ -41,6 +41,11 @@ unit PasClaw.Skills.PasClawHub;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

@@ -1,4 +1,4 @@
-(*
+﻿(*
   Onboard — initialise config and workspace. Creates ~/.pasclaw, a
   starter config.json, and walks the user through picking a provider
   from the catalog (PasClaw.Providers.Catalog). Selection by number
@@ -10,6 +10,11 @@
 unit PasClaw.Cmd.Onboard;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

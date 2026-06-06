@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Skills.ClawHub - install / search skills from the public
   ClawHub registry (https://clawhub.ai), the slug-based hub that
   picoclaw and nanobot standardised on.
@@ -44,6 +44,11 @@ unit PasClaw.Skills.ClawHub;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

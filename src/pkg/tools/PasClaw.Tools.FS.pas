@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.Tools.FS - built-in filesystem tools: fs_read, fs_write, fs_list,
   fs_edit_hashline, fs_grep. Every path argument is fed through
   PasClaw.Tools.Sandbox before the underlying file operation runs;
@@ -17,6 +17,11 @@ unit PasClaw.Tools.FS;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

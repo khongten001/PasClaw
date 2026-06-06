@@ -1,4 +1,4 @@
-(*
+﻿(*
   Gateway - starts the HTTP gateway, and optionally the Telegram channel
   alongside it. Blocks until SIGINT / Ctrl-C, then shuts down cleanly.
 
@@ -11,6 +11,11 @@
 unit PasClaw.Cmd.Gateway;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

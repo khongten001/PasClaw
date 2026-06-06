@@ -1,4 +1,4 @@
-{
+﻿{
   PasClaw.Cmd.Root - root command dispatcher, equivalent to NewPicoclawCommand()
   in cmd/picoclaw/main.go. Each subcommand exposes a CmdSpec record and a
   Run() function; we route argv[1] to the matching command.
@@ -7,6 +7,11 @@ unit PasClaw.Cmd.Root;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

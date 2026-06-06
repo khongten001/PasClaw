@@ -1,4 +1,4 @@
-(*
+﻿(*
   PasClaw.MCP.Hub — pasclaw.dev MCP registry client + the resolver
   that prefers hub entries over the built-in 5-entry catalog with a
   fast offline fallback.
@@ -33,6 +33,11 @@ unit PasClaw.MCP.Hub;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 
